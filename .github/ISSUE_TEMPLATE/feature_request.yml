@@ -1,0 +1,44 @@
+name: Feature Request
+description: Suggest a product, simulation, analytics, or UI improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem or contributor pain does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: What should change?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any simpler or narrower approaches?
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Replay engine
+        - Broker simulation
+        - Portfolio/accounting
+        - Analytics/reporting
+        - Scenario authoring
+        - UI/UX
+        - Documentation
+        - Build/test/CI
+        - Other
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Links, sketches, examples, or constraints.

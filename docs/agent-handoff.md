@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 15:14 - Codex
+
+- Task: Polished the repository for a professional GitHub open source launch.
+- Changed: Rebuilt `README.md` into a setup/use/contribution entrypoint; added `LICENSE`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, `CHANGELOG.md`, CI workflow, Dependabot config, CODEOWNERS, issue templates, and PR template. Updated `package.json`/`package-lock.json` with MIT license, repository metadata, Node engine, keywords, and `npm run check`.
+- Verified: `npm run check` passed (`npm run lint`, 199/199 tests, and production build all succeeded).
+- Memory: none; no repo semantic memory directory is installed. Durable note: root license is MIT for code/docs, while scenario data/source terms remain declared per scenario metadata and restricted generated data remains gitignored/local-only.
+- Next: After GitHub Actions runs on remote, confirm the README CI badge resolves green.
+
 ## 2026-05-03 15:04 - Codex
 
 - Task: Added another sample scenario, `kre-banking-crisis-2023`, covering the U.S. regional-bank stress window around SVB, Signature, and First Republic.

@@ -1,0 +1,60 @@
+name: Scenario Proposal
+description: Propose or discuss a new historical market scenario.
+title: "[Scenario]: "
+labels:
+  - scenario
+body:
+  - type: input
+    id: title
+    attributes:
+      label: Scenario Title
+      placeholder: "Example: Gold During the 2020-2022 Inflation Shock"
+    validations:
+      required: true
+  - type: input
+    id: range
+    attributes:
+      label: Date Range
+      placeholder: "2020-01-01 to 2022-12-31"
+    validations:
+      required: true
+  - type: input
+    id: instruments
+    attributes:
+      label: Instruments
+      placeholder: "GLD, XAUUSD, DXY, etc."
+    validations:
+      required: true
+  - type: textarea
+    id: learning_goal
+    attributes:
+      label: Learning Goal
+      description: What decision pressure should the user experience?
+    validations:
+      required: true
+  - type: textarea
+    id: events
+    attributes:
+      label: Key Events
+      description: List historically knowable events and expected publication sources.
+      placeholder: |
+        - 2020-03-15: Fed emergency statement
+        - 2021-11-10: CPI release
+    validations:
+      required: true
+  - type: textarea
+    id: data_sources
+    attributes:
+      label: Data Sources And Licensing
+      description: Link price/event sources and describe redistribution rights or local-generation constraints.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Scenario Standards
+      options:
+        - label: I can separate `happenedAt` from `publishedAt` for events.
+        - label: I will avoid hindsight phrasing in event summaries.
+        - label: I will mark synthetic/sample data clearly.
+        - label: I will not commit restricted market data without redistribution rights.

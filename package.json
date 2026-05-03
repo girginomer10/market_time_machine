@@ -1,14 +1,35 @@
 {
   "name": "market-time-machine",
-  "private": true,
   "version": "0.1.0",
   "description": "Open source financial history lab for replaying past markets without seeing the future",
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/girginomer10/market_time_machine.git"
+  },
+  "bugs": {
+    "url": "https://github.com/girginomer10/market_time_machine/issues"
+  },
+  "homepage": "https://github.com/girginomer10/market_time_machine#readme",
+  "keywords": [
+    "market-replay",
+    "trading-simulator",
+    "financial-history",
+    "scenario-simulation",
+    "react",
+    "typescript",
+    "vite"
+  ],
+  "engines": {
+    "node": ">=18.18"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "import:fred-sp500": "node scripts/import-fred-sp500.mjs",
+    "check": "npm run lint && npm run test && npm run build",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"
