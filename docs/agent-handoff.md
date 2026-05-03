@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 15:18 - Codex
+
+- Task: Cleaned up GitHub repository hygiene after Dependabot opened too many early alpha update branches.
+- Changed: Removed `.github/dependabot.yml` so the public branch/PR list stays focused for the initial open source launch. Planned follow-up in this session: close/delete existing Dependabot PR branches and create/push `v0.1.0` tag.
+- Verified: `git ls-remote --heads origin` showed only `main` plus Dependabot branches; `gh pr list` showed 7 open Dependabot PRs. Full code checks were not rerun before this config-only cleanup because the previous `npm run check` passed minutes earlier and no app code changed.
+- Memory: none; no repo semantic memory directory is installed.
+- Next: Re-enable dependency automation later with grouped updates once the repo has settled.
+
 ## 2026-05-03 15:14 - Codex
 
 - Task: Polished the repository for a professional GitHub open source launch.
