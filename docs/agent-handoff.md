@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 15:35 - Codex
+
+- Task: Continued order workflow polish by adding edit/replace for working limit orders.
+- Changed: `src/store/sessionStore.ts` now validates and updates pending limit order price/quantity while preserving the original order id. `TradeHistory` adds an inline edit form beside cancel controls, with focused styling and regression tests. README, changelog, and roadmap were updated to describe edit/cancel working-order controls.
+- Verified: `npm run test -- TradeHistory sessionStore` passed 6/6 focused tests; `npm run check` passed lint, 203/203 tests, and production build.
+- Memory: none; no repo semantic memory directory is installed.
+- Next: Add stop-loss/take-profit order types or a compact order blotter filter once edit/cancel feels good in browser QA.
+
 ## 2026-05-03 15:30 - Codex
 
 - Task: Continued product polish by adding pending limit-order cancellation.

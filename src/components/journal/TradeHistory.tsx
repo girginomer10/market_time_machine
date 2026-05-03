@@ -1,11 +1,23 @@
+import { Fragment, useState } from "react";
 import type { Fill, JournalEntry, Order } from "../../types";
 import { formatCurrency, formatNumber } from "../../utils/format";
+
+type OrderUpdate = {
+  quantity: number;
+  limitPrice: number;
+};
+
+type OrderUpdateResult = { ok: boolean; message?: string };
 
 type Props = {
   fills: Fill[];
   orders: Order[];
   journal: JournalEntry[];
   onCancelOrder?: (orderId: string) => void;
+  onUpdateOrder?: (
+    orderId: string,
+    updates: OrderUpdate,
+  ) => OrderUpdateResult | void;
 };
 
 const STATUS_LABELS: Record<Order["status"], string> = {
@@ -33,7 +45,12 @@ export default function TradeHistory({
   orders,
   journal,
   onCancelOrder,
+  onUpdateOrder,
 }: Props) {
+  const [editingOrderId, setEditingOrderId] = useState<string | undefined>();
+  const [draftLimitPrice, setDraftLimitPrice] = useState("");
+  const [draftQuantity, setDraftQuantity] = useState("");
+  const [editError, setEditError] = useState<string | undefined>();
   const byFill = new Map(
     journal.filter((j) => j.fillId).map((j) => [j.fillId!, j]),
   );
@@ -42,7 +59,44 @@ export default function TradeHistory({
   const openOrders = orders
     .filter((order) => order.status !== "filled")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const hasActions = Boolean(onCancelOrder);
+  const hasActions = Boolean(onCancelOrder || onUpdateOrder);
+  const totalColumns = hasActions ? 7 : 6;
+
+  function startEditing(order: Order): void {
+    setEditingOrderId(order.id);
+    setDraftLimitPrice(String(order.limitPrice ?? ""));
+    setDraftQuantity(String(order.quantity));
+    setEditError(undefined);
+  }
+
+  function stopEditing(): void {
+    setEditingOrderId(undefined);
+    setDraftLimitPrice("");
+    setDraftQuantity("");
+    setEditError(undefined);
+  }
+
+  function saveEdit(order: Order): void {
+    if (!onUpdateOrder) return;
+    const quantity = Number(draftQuantity);
+    const limitPrice = Number(draftLimitPrice);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setEditError("Enter a positive quantity.");
+      return;
+    }
+    if (!Number.isFinite(limitPrice) || limitPrice <= 0) {
+      setEditError("Enter a positive limit price.");
+      return;
+    }
+
+    const result = onUpdateOrder(order.id, { quantity, limitPrice });
+    if (result && !result.ok) {
+      setEditError(result.message ?? "Order could not be updated.");
+      return;
+    }
+    stopEditing();
+  }
+
   if (sorted.length === 0 && openOrders.length === 0) {
     return (
       <div className="empty-state">
@@ -67,44 +121,119 @@ export default function TradeHistory({
         </thead>
         <tbody>
           {openOrders.map((order) => (
-            <tr
-              className={order.status === "pending" ? "pending" : undefined}
-              key={order.id}
-            >
-              <td>{dateLabel(order.createdAt)}</td>
-              <td className={order.side === "buy" ? "pos" : "neg"}>
-                {order.side}
-              </td>
-              <td>
-                {order.type}
-                {order.limitPrice
-                  ? ` @ ${formatCurrency(order.limitPrice)}`
-                  : ""}
-              </td>
-              <td className="right">{formatNumber(order.quantity, 6)}</td>
-              <td className="right muted">—</td>
-              <td>
-                <span className={`status-badge ${statusClass(order.status)}`}>
-                  {STATUS_LABELS[order.status]}
-                </span>
-              </td>
-              {hasActions ? (
-                <td>
-                  {order.status === "pending" ? (
-                    <button
-                      className="order-action-button"
-                      type="button"
-                      onClick={() => onCancelOrder?.(order.id)}
-                      aria-label={`Cancel order ${order.id}`}
-                    >
-                      Cancel
-                    </button>
-                  ) : (
-                    <span className="muted">—</span>
-                  )}
+            <Fragment key={order.id}>
+              <tr
+                className={order.status === "pending" ? "pending" : undefined}
+              >
+                <td>{dateLabel(order.createdAt)}</td>
+                <td className={order.side === "buy" ? "pos" : "neg"}>
+                  {order.side}
                 </td>
+                <td>
+                  {order.type}
+                  {order.limitPrice
+                    ? ` @ ${formatCurrency(order.limitPrice)}`
+                    : ""}
+                </td>
+                <td className="right">{formatNumber(order.quantity, 6)}</td>
+                <td className="right muted">—</td>
+                <td>
+                  <span className={`status-badge ${statusClass(order.status)}`}>
+                    {STATUS_LABELS[order.status]}
+                  </span>
+                </td>
+                {hasActions ? (
+                  <td>
+                    {order.status === "pending" ? (
+                      <div className="order-action-group">
+                        {onUpdateOrder && order.type === "limit" ? (
+                          <button
+                            className="order-action-button secondary"
+                            type="button"
+                            onClick={() => startEditing(order)}
+                            aria-label={`Edit order ${order.id}`}
+                          >
+                            Edit
+                          </button>
+                        ) : null}
+                        {onCancelOrder ? (
+                          <button
+                            className="order-action-button"
+                            type="button"
+                            onClick={() => onCancelOrder(order.id)}
+                            aria-label={`Cancel order ${order.id}`}
+                          >
+                            Cancel
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                ) : null}
+              </tr>
+              {editingOrderId === order.id ? (
+                <tr className="order-edit-row">
+                  <td colSpan={totalColumns}>
+                    <form
+                      className="order-edit-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        saveEdit(order);
+                      }}
+                    >
+                      <label htmlFor={`order-${order.id}-limit`}>
+                        <span>Limit price</span>
+                        <input
+                          id={`order-${order.id}-limit`}
+                          inputMode="decimal"
+                          min="0"
+                          step="any"
+                          type="number"
+                          value={draftLimitPrice}
+                          onChange={(event) =>
+                            setDraftLimitPrice(event.target.value)
+                          }
+                        />
+                      </label>
+                      <label htmlFor={`order-${order.id}-quantity`}>
+                        <span>Quantity</span>
+                        <input
+                          id={`order-${order.id}-quantity`}
+                          inputMode="decimal"
+                          min="0"
+                          step="any"
+                          type="number"
+                          value={draftQuantity}
+                          onChange={(event) =>
+                            setDraftQuantity(event.target.value)
+                          }
+                        />
+                      </label>
+                      <button
+                        className="order-action-button secondary"
+                        type="submit"
+                        aria-label={`Save order ${order.id}`}
+                      >
+                        Save
+                      </button>
+                      <button
+                        className="order-action-button ghost"
+                        type="button"
+                        onClick={stopEditing}
+                        aria-label={`Discard edits for order ${order.id}`}
+                      >
+                        Discard
+                      </button>
+                      {editError ? (
+                        <span className="order-edit-error">{editError}</span>
+                      ) : null}
+                    </form>
+                  </td>
+                </tr>
               ) : null}
-            </tr>
+            </Fragment>
           ))}
           {sorted.map((fill) => {
             const note = byFill.get(fill.id);

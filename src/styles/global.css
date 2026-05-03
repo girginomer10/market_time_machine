@@ -1273,6 +1273,66 @@ textarea:focus {
   color: var(--text);
 }
 
+.order-action-button.secondary {
+  border-color: rgba(123, 183, 224, 0.34);
+  background: rgba(123, 183, 224, 0.09);
+  color: var(--accent-2);
+}
+
+.order-action-button.secondary:hover {
+  border-color: rgba(123, 183, 224, 0.56);
+  background: rgba(123, 183, 224, 0.15);
+  color: var(--text);
+}
+
+.order-action-button.ghost {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.order-action-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.trade-table tr.order-edit-row td {
+  background: rgba(123, 183, 224, 0.035);
+}
+
+.order-edit-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.order-edit-form label {
+  display: grid;
+  gap: 4px;
+  min-width: 112px;
+  max-width: 148px;
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.order-edit-form input {
+  min-height: 28px;
+  border-radius: var(--radius-sm);
+  padding: 5px 7px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.order-edit-error {
+  color: var(--neg);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .journal-empty {
   font-family: var(--serif);
   color: var(--text-2);

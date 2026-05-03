@@ -74,4 +74,35 @@ describe("TradeHistory", () => {
 
     expect(onCancelOrder).toHaveBeenCalledWith("order-pending");
   });
+
+  it("calls back when a pending limit order is edited", () => {
+    const onUpdateOrder = vi.fn(() => ({ ok: true }));
+
+    render(
+      <TradeHistory
+        fills={[]}
+        orders={[pendingOrder]}
+        journal={[]}
+        onUpdateOrder={onUpdateOrder}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit order order-pending" }),
+    );
+    fireEvent.change(screen.getByLabelText("Limit price"), {
+      target: { value: "4800" },
+    });
+    fireEvent.change(screen.getByLabelText("Quantity"), {
+      target: { value: "0.25" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save order order-pending" }),
+    );
+
+    expect(onUpdateOrder).toHaveBeenCalledWith("order-pending", {
+      limitPrice: 4800,
+      quantity: 0.25,
+    });
+  });
 });

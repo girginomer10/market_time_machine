@@ -53,6 +53,7 @@ export default function App() {
   const reset = useSessionStore((s) => s.resetScenario);
   const selectScenario = useSessionStore((s) => s.selectScenario);
   const cancelOrder = useSessionStore((s) => s.cancelOrder);
+  const updateLimitOrder = useSessionStore((s) => s.updateLimitOrder);
   const snapshot = useSessionStore(selectSnapshot);
 
   const [reportOpen, setReportOpen] = useState(false);
@@ -304,6 +305,9 @@ export default function App() {
                 journal={journal}
                 onCancelOrder={
                   status === "finished" ? undefined : cancelOrder
+                }
+                onUpdateOrder={
+                  status === "finished" ? undefined : updateLimitOrder
                 }
               />
             </div>

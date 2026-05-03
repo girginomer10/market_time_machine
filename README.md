@@ -6,7 +6,7 @@
 
 Market Time Machine is an open source financial history lab for replaying past markets without seeing the future.
 
-The app lets you enter a historical market period, see only the prices and events that were knowable at that replay time, place simulated market and limit orders, cancel working orders, write decision notes, and review your performance after the scenario ends.
+The app lets you enter a historical market period, see only the prices and events that were knowable at that replay time, place simulated market and limit orders, edit or cancel working orders, write decision notes, and review your performance after the scenario ends.
 
 > Can you trade a famous market regime before knowing how history turns out?
 

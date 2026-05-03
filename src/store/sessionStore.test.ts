@@ -73,4 +73,48 @@ describe("sessionStore finish", () => {
     expect(finished.fills).toHaveLength(0);
     expect(finished.journal).toHaveLength(0);
   });
+
+  it("updates a pending limit order before replay processing", () => {
+    const state = useSessionStore.getState();
+    const symbol = state.primarySymbol;
+    const primaryCandles = state.scenario.candles.filter(
+      (candle) => candle.symbol === symbol,
+    );
+    const futureLimit = Math.min(
+      ...primaryCandles
+        .slice(state.currentIndex + 1)
+        .map((candle) => candle.low),
+    );
+
+    const placement = state.submitLimitOrder({
+      symbol,
+      side: "buy",
+      type: "limit",
+      quantity: 0.01,
+      limitPrice: futureLimit * 0.5,
+      note: "Edited order should fill at the replacement limit.",
+    });
+    expect(placement.ok).toBe(true);
+
+    const orderId = useSessionStore.getState().orders[0].id;
+    const update = useSessionStore.getState().updateLimitOrder(orderId, {
+      quantity: 0.02,
+      limitPrice: futureLimit,
+    });
+    expect(update.ok).toBe(true);
+
+    const working = useSessionStore.getState();
+    expect(working.orders[0].id).toBe(orderId);
+    expect(working.orders[0].status).toBe("pending");
+    expect(working.orders[0].quantity).toBe(0.02);
+    expect(working.orders[0].limitPrice).toBe(futureLimit);
+
+    useSessionStore.getState().finish();
+
+    const finished = useSessionStore.getState();
+    expect(finished.orders[0].status).toBe("filled");
+    expect(finished.fills).toHaveLength(1);
+    expect(finished.fills[0].quantity).toBe(0.02);
+    expect(finished.fills[0].price).toBe(futureLimit);
+  });
 });

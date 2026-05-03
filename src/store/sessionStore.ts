@@ -75,6 +75,10 @@ type SessionActions = {
   submitMarketOrder: (req: OrderRequest) => { ok: boolean; message?: string };
   submitLimitOrder: (req: LimitOrderRequest) => { ok: boolean; message?: string };
   cancelOrder: (orderId: string) => { ok: boolean; message?: string };
+  updateLimitOrder: (
+    orderId: string,
+    updates: Pick<LimitOrderRequest, "quantity" | "limitPrice">,
+  ) => { ok: boolean; message?: string };
   addJournalNote: (note: string) => void;
   getSnapshot: () => ReplaySnapshot;
   clearRejection: () => void;
@@ -428,6 +432,68 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       orders: state.orders.map((candidate) =>
         candidate.id === orderId
           ? { ...candidate, status: "cancelled" }
+          : candidate,
+      ),
+      rejectionMessage: undefined,
+    });
+    return { ok: true };
+  },
+
+  updateLimitOrder: (orderId, updates) => {
+    const state = get();
+    if (state.status === "finished") {
+      return { ok: false, message: "Scenario already finished." };
+    }
+    const order = state.orders.find((candidate) => candidate.id === orderId);
+    if (!order) {
+      const message = "Order not found.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+    if (order.status !== "pending" || order.type !== "limit") {
+      const message = "Only working limit orders can be updated.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+
+    const currentTime = currentTimeFor(state);
+    const tradablePrices = tradablePricesFor(
+      state.scenario,
+      currentTime,
+      state.broker,
+    );
+    const tradablePrice = tradablePrices.find((p) => p.symbol === order.symbol);
+    const result = createLimitOrder({
+      request: {
+        symbol: order.symbol,
+        side: order.side,
+        type: "limit",
+        quantity: updates.quantity,
+        limitPrice: updates.limitPrice,
+        note: order.note,
+      },
+      broker: state.broker,
+      cash: state.portfolio.cash,
+      position: state.portfolio.positions[order.symbol],
+      tradablePrice,
+      currentTime,
+      instrument: state.scenario.instruments.find(
+        (i) => i.symbol === order.symbol,
+      ),
+    });
+    if (!result.ok) {
+      set({ rejectionMessage: result.reason });
+      return { ok: false, message: result.reason };
+    }
+
+    set({
+      orders: state.orders.map((candidate) =>
+        candidate.id === orderId
+          ? {
+              ...candidate,
+              quantity: result.order.quantity,
+              limitPrice: result.order.limitPrice,
+            }
           : candidate,
       ),
       rejectionMessage: undefined,
