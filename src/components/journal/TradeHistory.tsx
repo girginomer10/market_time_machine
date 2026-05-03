@@ -9,6 +9,8 @@ type OrderUpdate = {
 
 type OrderUpdateResult = { ok: boolean; message?: string };
 
+type HistoryView = "all" | "working" | "closed";
+
 type Props = {
   fills: Fill[];
   orders: Order[];
@@ -28,6 +30,12 @@ const STATUS_LABELS: Record<Order["status"], string> = {
   rejected: "Rejected",
   expired: "Expired",
 };
+
+const HISTORY_VIEWS: Array<{ value: HistoryView; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "working", label: "Working" },
+  { value: "closed", label: "Closed" },
+];
 
 function statusClass(status: Order["status"]): string {
   if (status === "pending") return "working";
@@ -58,6 +66,7 @@ export default function TradeHistory({
   onCancelOrder,
   onUpdateOrder,
 }: Props) {
+  const [historyView, setHistoryView] = useState<HistoryView>("all");
   const [editingOrderId, setEditingOrderId] = useState<string | undefined>();
   const [draftLimitPrice, setDraftLimitPrice] = useState("");
   const [draftQuantity, setDraftQuantity] = useState("");
@@ -67,9 +76,25 @@ export default function TradeHistory({
   );
   const ordersById = new Map(orders.map((order) => [order.id, order]));
   const sorted = [...fills].sort((a, b) => b.time.localeCompare(a.time));
-  const openOrders = orders
-    .filter((order) => order.status !== "filled")
+  const workingOrders = orders
+    .filter((order) => order.status === "pending")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const closedOrders = orders
+    .filter((order) => order.status !== "pending" && order.status !== "filled")
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const visibleWorkingOrders =
+    historyView === "closed" ? [] : workingOrders;
+  const visibleClosedOrders =
+    historyView === "working" ? [] : closedOrders;
+  const visibleFills = historyView === "working" ? [] : sorted;
+  const totalRows = workingOrders.length + closedOrders.length + sorted.length;
+  const visibleRows =
+    visibleWorkingOrders.length + visibleClosedOrders.length + visibleFills.length;
+  const viewCounts: Record<HistoryView, number> = {
+    all: totalRows,
+    working: workingOrders.length,
+    closed: closedOrders.length + sorted.length,
+  };
   const hasActions = Boolean(onCancelOrder || onUpdateOrder);
   const totalColumns = hasActions ? 7 : 6;
 
@@ -116,7 +141,7 @@ export default function TradeHistory({
     stopEditing();
   }
 
-  if (sorted.length === 0 && openOrders.length === 0) {
+  if (totalRows === 0) {
     return (
       <div className="empty-state">
         No fills or orders yet. Market fills and triggered limit orders will
@@ -125,164 +150,223 @@ export default function TradeHistory({
     );
   }
   return (
-    <div className="trade-table-wrap" aria-label="Trade history">
-      <table className="trade-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Side</th>
-            <th>Type</th>
-            <th className="right">Qty</th>
-            <th className="right">Price</th>
-            <th>Status</th>
-            {hasActions ? <th>Action</th> : null}
-          </tr>
-        </thead>
-        <tbody>
-          {openOrders.map((order) => (
-            <Fragment key={order.id}>
-              <tr
-                className={order.status === "pending" ? "pending" : undefined}
-              >
-                <td>{dateLabel(order.createdAt)}</td>
-                <td className={order.side === "buy" ? "pos" : "neg"}>
-                  {order.side}
-                </td>
-                <td>
-                  {orderTypeLabel(order.type)}
-                  {orderPriceText(order)}
-                </td>
-                <td className="right">{formatNumber(order.quantity, 6)}</td>
-                <td className="right muted">—</td>
-                <td>
-                  <span className={`status-badge ${statusClass(order.status)}`}>
-                    {STATUS_LABELS[order.status]}
-                  </span>
-                </td>
-                {hasActions ? (
-                  <td>
-                    {order.status === "pending" ? (
-                      <div className="order-action-group">
-                        {onUpdateOrder && order.type !== "market" ? (
+    <div className="trade-history-shell">
+      <div className="history-filter" role="tablist" aria-label="Trade history view">
+        {HISTORY_VIEWS.map((view) => (
+          <button
+            key={view.value}
+            type="button"
+            className={historyView === view.value ? "active" : ""}
+            onClick={() => {
+              setHistoryView(view.value);
+              stopEditing();
+            }}
+            role="tab"
+            aria-selected={historyView === view.value}
+          >
+            <span>{view.label}</span>
+            <strong>{viewCounts[view.value]}</strong>
+          </button>
+        ))}
+      </div>
+      {visibleRows === 0 ? (
+        <div className="empty-state">
+          No {historyView} records in this replay yet.
+        </div>
+      ) : (
+        <div className="trade-table-wrap" aria-label="Trade history">
+          <table className="trade-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Side</th>
+                <th>Type</th>
+                <th className="right">Qty</th>
+                <th className="right">Price</th>
+                <th>Status</th>
+                {hasActions ? <th>Action</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleWorkingOrders.map((order) => (
+                <Fragment key={order.id}>
+                  <OrderRow
+                    order={order}
+                    hasActions={hasActions}
+                    onCancelOrder={onCancelOrder}
+                    onUpdateOrder={onUpdateOrder}
+                    onStartEditing={startEditing}
+                  />
+                  {editingOrderId === order.id ? (
+                    <tr className="order-edit-row">
+                      <td colSpan={totalColumns}>
+                        <form
+                          className="order-edit-form"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            saveEdit(order);
+                          }}
+                        >
+                          <label htmlFor={`order-${order.id}-limit`}>
+                            <span>{priceFieldLabel(order)}</span>
+                            <input
+                              id={`order-${order.id}-limit`}
+                              inputMode="decimal"
+                              min="0"
+                              step="any"
+                              type="number"
+                              value={draftLimitPrice}
+                              onChange={(event) =>
+                                setDraftLimitPrice(event.target.value)
+                              }
+                            />
+                          </label>
+                          <label htmlFor={`order-${order.id}-quantity`}>
+                            <span>Quantity</span>
+                            <input
+                              id={`order-${order.id}-quantity`}
+                              inputMode="decimal"
+                              min="0"
+                              step="any"
+                              type="number"
+                              value={draftQuantity}
+                              onChange={(event) =>
+                                setDraftQuantity(event.target.value)
+                              }
+                            />
+                          </label>
                           <button
                             className="order-action-button secondary"
-                            type="button"
-                            onClick={() => startEditing(order)}
-                            aria-label={`Edit order ${order.id}`}
+                            type="submit"
+                            aria-label={`Save order ${order.id}`}
                           >
-                            Edit
+                            Save
                           </button>
-                        ) : null}
-                        {onCancelOrder ? (
                           <button
-                            className="order-action-button"
+                            className="order-action-button ghost"
                             type="button"
-                            onClick={() => onCancelOrder(order.id)}
-                            aria-label={`Cancel order ${order.id}`}
+                            onClick={stopEditing}
+                            aria-label={`Discard edits for order ${order.id}`}
                           >
-                            Cancel
+                            Discard
                           </button>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                ) : null}
-              </tr>
-              {editingOrderId === order.id ? (
-                <tr className="order-edit-row">
-                  <td colSpan={totalColumns}>
-                    <form
-                      className="order-edit-form"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        saveEdit(order);
-                      }}
-                    >
-                      <label htmlFor={`order-${order.id}-limit`}>
-                        <span>{priceFieldLabel(order)}</span>
-                        <input
-                          id={`order-${order.id}-limit`}
-                          inputMode="decimal"
-                          min="0"
-                          step="any"
-                          type="number"
-                          value={draftLimitPrice}
-                          onChange={(event) =>
-                            setDraftLimitPrice(event.target.value)
-                          }
-                        />
-                      </label>
-                      <label htmlFor={`order-${order.id}-quantity`}>
-                        <span>Quantity</span>
-                        <input
-                          id={`order-${order.id}-quantity`}
-                          inputMode="decimal"
-                          min="0"
-                          step="any"
-                          type="number"
-                          value={draftQuantity}
-                          onChange={(event) =>
-                            setDraftQuantity(event.target.value)
-                          }
-                        />
-                      </label>
-                      <button
-                        className="order-action-button secondary"
-                        type="submit"
-                        aria-label={`Save order ${order.id}`}
-                      >
-                        Save
-                      </button>
-                      <button
-                        className="order-action-button ghost"
-                        type="button"
-                        onClick={stopEditing}
-                        aria-label={`Discard edits for order ${order.id}`}
-                      >
-                        Discard
-                      </button>
-                      {editError ? (
-                        <span className="order-edit-error">{editError}</span>
-                      ) : null}
-                    </form>
-                  </td>
-                </tr>
-              ) : null}
-            </Fragment>
-          ))}
-          {sorted.map((fill) => {
-            const note = byFill.get(fill.id);
-            const sourceOrder = ordersById.get(fill.orderId);
-            return (
-              <tr key={fill.id}>
-                <td>
-                  <span>{dateLabel(fill.time)}</span>
-                  {note ? <small>{note.note}</small> : null}
-                </td>
-                <td className={fill.side === "buy" ? "pos" : "neg"}>
-                  {fill.side}
-                </td>
-                <td>
-                  {sourceOrder?.type ?? "market"}
-                  {sourceOrder ? orderPriceText(sourceOrder) : ""}
-                </td>
-                <td className="right">{formatNumber(fill.quantity, 6)}</td>
-                <td className="right">{formatCurrency(fill.price)}</td>
-                <td>
-                  <span className="status-badge filled">Filled</span>
-                </td>
-                {hasActions ? (
-                  <td>
-                    <span className="muted">—</span>
-                  </td>
-                ) : null}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                          {editError ? (
+                            <span className="order-edit-error">{editError}</span>
+                          ) : null}
+                        </form>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              ))}
+              {visibleClosedOrders.map((order) => (
+                <OrderRow
+                  key={order.id}
+                  order={order}
+                  hasActions={hasActions}
+                  onCancelOrder={onCancelOrder}
+                  onUpdateOrder={onUpdateOrder}
+                  onStartEditing={startEditing}
+                />
+              ))}
+              {visibleFills.map((fill) => {
+                const note = byFill.get(fill.id);
+                const sourceOrder = ordersById.get(fill.orderId);
+                return (
+                  <tr key={fill.id}>
+                    <td>
+                      <span>{dateLabel(fill.time)}</span>
+                      {note ? <small>{note.note}</small> : null}
+                    </td>
+                    <td className={fill.side === "buy" ? "pos" : "neg"}>
+                      {fill.side}
+                    </td>
+                    <td>
+                      {sourceOrder?.type ?? "market"}
+                      {sourceOrder ? orderPriceText(sourceOrder) : ""}
+                    </td>
+                    <td className="right">{formatNumber(fill.quantity, 6)}</td>
+                    <td className="right">{formatCurrency(fill.price)}</td>
+                    <td>
+                      <span className="status-badge filled">Filled</span>
+                    </td>
+                    {hasActions ? (
+                      <td>
+                        <span className="muted">—</span>
+                      </td>
+                    ) : null}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
+  );
+}
+
+function OrderRow({
+  order,
+  hasActions,
+  onCancelOrder,
+  onUpdateOrder,
+  onStartEditing,
+}: {
+  order: Order;
+  hasActions: boolean;
+  onCancelOrder?: (orderId: string) => void;
+  onUpdateOrder?: (
+    orderId: string,
+    updates: OrderUpdate,
+  ) => OrderUpdateResult | void;
+  onStartEditing: (order: Order) => void;
+}) {
+  return (
+    <tr className={order.status === "pending" ? "pending" : undefined}>
+      <td>{dateLabel(order.createdAt)}</td>
+      <td className={order.side === "buy" ? "pos" : "neg"}>{order.side}</td>
+      <td>
+        {orderTypeLabel(order.type)}
+        {orderPriceText(order)}
+      </td>
+      <td className="right">{formatNumber(order.quantity, 6)}</td>
+      <td className="right muted">—</td>
+      <td>
+        <span className={`status-badge ${statusClass(order.status)}`}>
+          {STATUS_LABELS[order.status]}
+        </span>
+      </td>
+      {hasActions ? (
+        <td>
+          {order.status === "pending" ? (
+            <div className="order-action-group">
+              {onUpdateOrder && order.type !== "market" ? (
+                <button
+                  className="order-action-button secondary"
+                  type="button"
+                  onClick={() => onStartEditing(order)}
+                  aria-label={`Edit order ${order.id}`}
+                >
+                  Edit
+                </button>
+              ) : null}
+              {onCancelOrder ? (
+                <button
+                  className="order-action-button"
+                  type="button"
+                  onClick={() => onCancelOrder(order.id)}
+                  aria-label={`Cancel order ${order.id}`}
+                >
+                  Cancel
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <span className="muted">—</span>
+          )}
+        </td>
+      ) : null}
+    </tr>
   );
 }

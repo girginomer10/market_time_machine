@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 16:34 - Codex
+
+- Task: Added trade history filters for faster order/fill review.
+- Changed: `src/components/journal/TradeHistory.tsx` now has All/Working/Closed tabs with row counts, keeps edit rows adjacent to working orders, and scopes visible rows by filter. Added CSS for the filter control and regression coverage in `TradeHistory.test.tsx`.
+- Verified: `npm run test -- TradeHistory` passed 5/5 focused tests; `npm run check` passed lint, 209/209 tests, and production build.
+- Memory: none; no repo semantic memory directory is installed.
+- Next: Consider browser QA for the full order workflow, then add bracket/OCO behavior for paired stop/target exits.
+
 ## 2026-05-03 15:51 - Codex
 
 - Task: Extended working-order edits to stop-loss and take-profit orders.

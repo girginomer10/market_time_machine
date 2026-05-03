@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import TradeHistory from "./TradeHistory";
 import type { Fill, Order } from "../../types";
@@ -36,6 +36,17 @@ const stopLossOrder: Order = {
   status: "pending",
 };
 
+const cancelledOrder: Order = {
+  id: "order-cancelled",
+  createdAt: "2020-03-11T00:00:00.000Z",
+  symbol: "BTCUSD",
+  side: "sell",
+  type: "limit",
+  quantity: 0.2,
+  limitPrice: 5200,
+  status: "cancelled",
+};
+
 const fill: Fill = {
   id: "fill-1",
   orderId: "order-filled",
@@ -61,10 +72,33 @@ describe("TradeHistory", () => {
       />,
     );
 
-    expect(screen.getByText("Working")).toBeInTheDocument();
-    expect(screen.getByText("Filled")).toBeInTheDocument();
-    expect(screen.getByText("limit @ $4,900.00")).toBeInTheDocument();
-    expect(screen.getByText("limit @ $5,100.00")).toBeInTheDocument();
+    const table = within(screen.getByLabelText("Trade history"));
+    expect(table.getByText("Working")).toBeInTheDocument();
+    expect(table.getByText("Filled")).toBeInTheDocument();
+    expect(table.getByText("limit @ $4,900.00")).toBeInTheDocument();
+    expect(table.getByText("limit @ $5,100.00")).toBeInTheDocument();
+  });
+
+  it("filters working and closed records", () => {
+    render(
+      <TradeHistory
+        fills={[fill]}
+        orders={[pendingOrder, filledLimitOrder, cancelledOrder]}
+        journal={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: /working 1/i }));
+    let table = within(screen.getByLabelText("Trade history"));
+    expect(table.getByText("limit @ $4,900.00")).toBeInTheDocument();
+    expect(table.queryByText("Filled")).not.toBeInTheDocument();
+    expect(table.queryByText("Cancelled")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /closed 2/i }));
+    table = within(screen.getByLabelText("Trade history"));
+    expect(table.getByText("Filled")).toBeInTheDocument();
+    expect(table.getByText("Cancelled")).toBeInTheDocument();
+    expect(table.queryByText("limit @ $4,900.00")).not.toBeInTheDocument();
   });
 
   it("calls back when a pending order is cancelled", () => {
