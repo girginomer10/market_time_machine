@@ -5,6 +5,9 @@ import {
 } from "../../store/sessionStore";
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
 import type { TradablePrice } from "../../types";
+import { estimateOneWaySpreadCost } from "./costEstimates";
+
+const ZERO_EPSILON = 0.0000001;
 
 const BROKER_MODES: Array<{
   value: BrokerMode;
@@ -19,17 +22,17 @@ const BROKER_MODES: Array<{
   {
     value: "ideal",
     label: "Ideal",
-    description: "No spread, fees, or slippage. Useful for learning timing.",
+    description: "No spread, fees, or slippage.",
   },
   {
     value: "realistic",
     label: "Realistic",
-    description: "Broker-like fees, spread, fixed slippage, and shorting.",
+    description: "Broker-like costs and shorting.",
   },
   {
     value: "harsh",
     label: "Harsh",
-    description: "Stricter fills, higher costs, no fractional lots.",
+    description: "Stress-test fills and lot rules.",
   },
 ];
 
@@ -42,6 +45,18 @@ type Props = {
   unrealizedPnl: number;
   initialCash: number;
 };
+
+function toneFor(value: number): "pos" | "neg" | "neutral" {
+  if (value > ZERO_EPSILON) return "pos";
+  if (value < -ZERO_EPSILON) return "neg";
+  return "neutral";
+}
+
+function signedPct(value: number): string {
+  const formatted = formatPct(value);
+  if (Math.abs(value) <= ZERO_EPSILON || formatted === "—") return formatted;
+  return value > 0 ? `+${formatted}` : formatted;
+}
 
 export default function TradePanel({
   tradablePrice,
@@ -67,6 +82,7 @@ export default function TradePanel({
   );
 
   const [quantity, setQuantity] = useState<string>("0.05");
+  const [side, setSide] = useState<"buy" | "sell">("buy");
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
   const [limitPrice, setLimitPrice] = useState<string>("");
   const [note, setNote] = useState<string>("");
@@ -75,8 +91,39 @@ export default function TradePanel({
     () => (initialCash > 0 ? totalValue / initialCash - 1 : 0),
     [initialCash, totalValue],
   );
+  const totalPnl = totalValue - initialCash;
+  const exposure =
+    totalValue > 0 ? Math.max(0, Math.min(1, positionsValue / totalValue)) : 0;
+  const heldQty = position?.quantity ?? 0;
+  const marketPrice = tradablePrice?.price ?? position?.marketPrice;
+  const notionalPrice =
+    orderType === "limit" && Number.isFinite(Number(limitPrice))
+      ? Number(limitPrice)
+      : marketPrice;
+  const numericQuantity = Number(quantity);
+  const expectedNotional =
+    notionalPrice && Number.isFinite(numericQuantity)
+      ? numericQuantity * notionalPrice
+      : undefined;
+  const commission =
+    expectedNotional !== undefined
+      ? expectedNotional * (broker.commissionRateBps / 10000) + broker.fixedFee
+      : undefined;
+  const estimatedSpread =
+    expectedNotional !== undefined
+      ? estimateOneWaySpreadCost(expectedNotional, broker.spreadBps)
+      : undefined;
+  const estimatedSlippage =
+    expectedNotional !== undefined && broker.slippageModel !== "none"
+      ? expectedNotional * ((broker.slippageBps ?? 0) / 10000)
+      : 0;
 
-  const placeOrder = (side: "buy" | "sell") => {
+  const isFinished = status === "finished";
+  const brokerLocked = fills.length > 0;
+  const canSell = broker.allowShort || heldQty > 0;
+  const canSubmit = side === "buy" || canSell;
+
+  const placeOrder = () => {
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
       clearRejection();
@@ -104,116 +151,102 @@ export default function TradePanel({
     }
   };
 
-  const isFinished = status === "finished";
-  const heldQty = position?.quantity ?? 0;
-  const brokerLocked = fills.length > 0;
-  const canSell = broker.allowShort || heldQty > 0;
-  const notionalPrice =
-    orderType === "limit" && Number.isFinite(Number(limitPrice))
-      ? Number(limitPrice)
-      : tradablePrice?.price;
-
   return (
-    <div className="panel">
-      <div className="panel-head">
-        <span className="panel-title">Trade {symbol}</span>
-        <span className="panel-sub">
-          {tradablePrice
-            ? `${formatCurrency(tradablePrice.price)} · spread ${formatCurrency(
-                tradablePrice.ask - tradablePrice.bid,
-              )}`
-            : "no quote yet"}
-        </span>
-      </div>
-      <div className="metric-row">
-        <div className="metric">
-          <span className="metric-label">Cash</span>
-          <span className="metric-value">{formatCurrency(cash)}</span>
+    <div className="trade-stack">
+      <section className="panel panel-portfolio">
+        <div className="panel-head">
+          <span className="panel-title">Portfolio</span>
+          <span className="panel-meta">USD</span>
         </div>
-        <div className="metric">
-          <span className="metric-label">Positions value</span>
-          <span className="metric-value">{formatCurrency(positionsValue)}</span>
+        <div className="portfolio-hero">
+          <span className="hero-label">Total value</span>
+          <span className={`hero-value ${toneFor(totalReturn)}`}>
+            {formatCurrency(totalValue)}
+          </span>
+          <span className={`hero-sub ${toneFor(totalReturn)}`}>
+            {signedPct(totalReturn)} · {formatCurrency(totalPnl)}
+          </span>
+          <span className="hero-from">
+            from {formatCurrency(initialCash)}
+          </span>
         </div>
-        <div className="metric">
-          <span className="metric-label">Total value</span>
-          <span className="metric-value">{formatCurrency(totalValue)}</span>
+        <div className="portfolio-split">
+          <Metric label="Cash" value={formatCurrency(cash)} />
+          <Metric label="Position value" value={formatCurrency(positionsValue)} />
+          <Metric
+            label="Realized P/L"
+            value={formatCurrency(realizedPnl)}
+            tone={toneFor(realizedPnl)}
+          />
         </div>
-        <div className="metric">
-          <span className="metric-label">Total return</span>
+        <div className="exposure-bar" aria-label="Portfolio exposure">
           <span
-            className={`metric-value ${
-              totalReturn >= 0 ? "pos" : "neg"
-            }`}
-          >
-            {formatPct(totalReturn)}
-          </span>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Realized P/L</span>
+            className="exposure-cash"
+            style={{ width: `${(1 - exposure) * 100}%` }}
+          />
           <span
-            className={`metric-value ${
-              realizedPnl >= 0 ? "pos" : "neg"
-            }`}
+            className="exposure-position"
+            style={{ width: `${exposure * 100}%` }}
+          />
+        </div>
+        <div className="position-card">
+          <div className="position-card-head">
+            <strong>{symbol}</strong>
+            <span>{heldQty === 0 ? "Flat" : heldQty > 0 ? "Long" : "Short"}</span>
+          </div>
+          {heldQty === 0 ? (
+            <div className="position-empty">No open position.</div>
+          ) : (
+            <div className="position-grid">
+              <Metric label="Qty" value={formatNumber(heldQty, 6)} />
+              <Metric
+                label="Avg"
+                value={formatCurrency(position?.averagePrice ?? 0)}
+              />
+              <Metric
+                label="Mark"
+                value={marketPrice ? formatCurrency(marketPrice) : "—"}
+              />
+              <Metric
+                label="Unrealized"
+                value={formatCurrency(unrealizedPnl)}
+                tone={toneFor(unrealizedPnl)}
+              />
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="panel panel-order">
+        <div className="panel-head">
+          <span className="panel-title">Order ticket</span>
+          <span className="panel-meta">
+            {tradablePrice
+              ? `${formatCurrency(tradablePrice.price)} mark`
+              : "No quote yet"}
+          </span>
+        </div>
+        <div className="seg buy-sell" role="radiogroup" aria-label="Side">
+          <button
+            className={side === "buy" ? "active buy" : ""}
+            onClick={() => setSide("buy")}
+            role="radio"
+            aria-checked={side === "buy"}
+            disabled={isFinished}
           >
-            {formatCurrency(realizedPnl)}
-          </span>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Unrealized P/L</span>
-          <span
-            className={`metric-value ${
-              unrealizedPnl >= 0 ? "pos" : "neg"
-            }`}
+            Buy
+          </button>
+          <button
+            className={side === "sell" ? "active sell" : ""}
+            onClick={() => setSide("sell")}
+            role="radio"
+            aria-checked={side === "sell"}
+            disabled={isFinished}
           >
-            {formatCurrency(unrealizedPnl)}
-          </span>
+            {heldQty <= 0 && broker.allowShort ? "Short" : "Sell"}
+          </button>
         </div>
-        <div className="metric">
-          <span className="metric-label">Position</span>
-          <span className="metric-value">
-            {formatNumber(heldQty, 6)} {symbol.replace("USD", "")}
-          </span>
-        </div>
-        <div className="metric">
-          <span className="metric-label">Avg entry</span>
-          <span className="metric-value">
-            {position && Math.abs(position.quantity) > 0
-              ? formatCurrency(position.averagePrice)
-              : "—"}
-          </span>
-        </div>
-      </div>
-      <div className="trade-form">
-        <div className="broker-box">
-          <div className="broker-head">
-            <span className="metric-label">Broker model</span>
-            <span className="panel-sub">
-              {brokerLocked ? "locked after first fill" : "select before trading"}
-            </span>
-          </div>
-          <div className="broker-modes" role="radiogroup" aria-label="Broker model">
-            {BROKER_MODES.map((mode) => (
-              <button
-                key={mode.value}
-                className={brokerMode === mode.value ? "active" : ""}
-                onClick={() => setBrokerMode(mode.value)}
-                disabled={isFinished || brokerLocked}
-                role="radio"
-                aria-checked={brokerMode === mode.value}
-                title={mode.description}
-              >
-                {mode.label}
-              </button>
-            ))}
-          </div>
-          <div className="broker-summary">
-            <span>{broker.commissionRateBps} bps commission</span>
-            <span>{broker.spreadBps} bps spread</span>
-            <span>{broker.slippageModel.replace("_", " ")}</span>
-            <span>{broker.allowShort ? "shorting on" : "long only"}</span>
-          </div>
-        </div>
-        <div className="order-type-row" role="radiogroup" aria-label="Order type">
+        <div className="seg order-type-row" role="radiogroup" aria-label="Order type">
           <button
             className={orderType === "market" ? "active" : ""}
             onClick={() => setOrderType("market")}
@@ -238,7 +271,7 @@ export default function TradePanel({
             Limit
           </button>
         </div>
-        <div className="qty-row">
+        <div className="field-row">
           <label htmlFor="qty">Qty</label>
           <input
             id="qty"
@@ -248,14 +281,9 @@ export default function TradePanel({
             placeholder="0.05"
             disabled={isFinished}
           />
-          <span className="panel-sub">
-            {notionalPrice && Number.isFinite(Number(quantity))
-              ? formatCurrency(Number(quantity) * notionalPrice)
-              : ""}
-          </span>
         </div>
         {orderType === "limit" ? (
-          <div className="qty-row">
+          <div className="field-row">
             <label htmlFor="limit-price">Limit</label>
             <input
               id="limit-price"
@@ -265,39 +293,87 @@ export default function TradePanel({
               placeholder={tradablePrice ? String(Math.round(tradablePrice.price)) : "0"}
               disabled={isFinished}
             />
-            <span className="panel-sub">fills when touched</span>
           </div>
         ) : null}
+        <div className="ticket-summary">
+          <Row label="Expected notional" value={expectedNotional} />
+          <Row label={`${broker.commissionRateBps} bps commission`} value={commission} />
+          <Row label={`${broker.spreadBps} bps spread`} value={estimatedSpread} />
+          <Row label={`${broker.slippageModel.replace("_", " ")} slippage`} value={estimatedSlippage} />
+        </div>
         <textarea
           className="note-input"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="Decision note: why are you entering, what would invalidate this trade?"
+          placeholder="Decision note: why this trade, and what would invalidate it?"
           disabled={isFinished}
         />
-        <div className="action-row">
-          <button
-            className="btn success"
-            onClick={() => placeOrder("buy")}
-            disabled={isFinished || !tradablePrice}
-          >
-            Buy
-          </button>
-          <button
-            className="btn danger"
-            onClick={() => placeOrder("sell")}
-            disabled={isFinished || !tradablePrice || !canSell}
-          >
-            {heldQty <= 0 && broker.allowShort ? "Short" : "Sell"}
-          </button>
-        </div>
+        <button
+          className={`place ${side === "buy" ? "place-buy" : "place-sell"}`}
+          onClick={placeOrder}
+          disabled={isFinished || !tradablePrice || !canSubmit}
+        >
+          {!canSubmit
+            ? "Insufficient position"
+            : `Place ${orderType} ${side === "buy" ? "buy" : heldQty <= 0 && broker.allowShort ? "short" : "sell"}`}
+        </button>
         {rejectionMessage ? (
           <div className="rejection" role="alert">
             <span>Order rejected: {rejectionMessage}</span>
-            <button onClick={clearRejection}>dismiss</button>
+            <button onClick={clearRejection}>Dismiss</button>
           </div>
         ) : null}
-      </div>
+        <div className="broker-block">
+          <div className="broker-head">
+            <span>Broker model</span>
+            <small>
+              {brokerLocked ? "Locked after first fill" : "Select before trading"}
+            </small>
+          </div>
+          <div className="broker-grid" role="radiogroup" aria-label="Broker model">
+            {BROKER_MODES.map((mode) => (
+              <button
+                key={mode.value}
+                className={brokerMode === mode.value ? "broker-pill active" : "broker-pill"}
+                onClick={() => setBrokerMode(mode.value)}
+                disabled={isFinished || brokerLocked}
+                role="radio"
+                aria-checked={brokerMode === mode.value}
+                title={mode.description}
+              >
+                <span>{mode.label}</span>
+                <small>{mode.description}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: "pos" | "neg" | "neutral";
+}) {
+  return (
+    <div className="mini-metric">
+      <span>{label}</span>
+      <strong className={tone ?? ""}>{value}</strong>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value?: number }) {
+  return (
+    <div className="kv-row">
+      <span>{label}</span>
+      <strong>{value === undefined ? "—" : formatCurrency(value)}</strong>
     </div>
   );
 }

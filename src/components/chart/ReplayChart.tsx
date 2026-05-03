@@ -6,13 +6,28 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { Candle } from "../../types";
+import type { Candle, MarketEvent } from "../../types";
+import {
+  buildOverlayMarkers,
+  firstChartWindowIndex,
+  type OverlayMarker,
+} from "./eventOverlay";
 
 type Props = {
   candles: Candle[];
+  events: MarketEvent[];
+  eventNumbers: Map<string, number>;
+  hoveredEventId?: string;
+  onHoverEvent: (id?: string) => void;
 };
 
-export default function ReplayChart({ candles }: Props) {
+export default function ReplayChart({
+  candles,
+  events,
+  eventNumbers,
+  hoveredEventId,
+  onHoverEvent,
+}: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -36,10 +51,16 @@ export default function ReplayChart({ candles }: Props) {
         time: Math.floor(Date.parse(c.openTime) / 1000) as UTCTimestamp,
         value: c.volume,
         color:
-          c.close >= c.open ? "rgba(46, 204, 113, 0.3)" : "rgba(239, 68, 68, 0.3)",
+          c.close >= c.open
+            ? "rgba(79, 197, 138, 0.28)"
+            : "rgba(242, 106, 111, 0.28)",
       })),
     [candles],
   );
+
+  const overlayMarkers = useMemo<OverlayMarker[]>(() => {
+    return buildOverlayMarkers(candles, events, eventNumbers);
+  }, [candles, events, eventNumbers]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -47,19 +68,19 @@ export default function ReplayChart({ candles }: Props) {
       autoSize: true,
       layout: {
         background: { color: "transparent" },
-        textColor: "#aab3c5",
+        textColor: "#b6c0ce",
         fontFamily:
-          'ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace',
+          'ui-monospace, "IBM Plex Mono", "SF Mono", Consolas, monospace',
       },
       grid: {
         horzLines: { color: "rgba(255,255,255,0.04)" },
-        vertLines: { color: "rgba(255,255,255,0.03)" },
+        vertLines: { color: "rgba(255,255,255,0.025)" },
       },
       rightPriceScale: {
-        borderColor: "rgba(255,255,255,0.08)",
+        borderColor: "rgba(255,255,255,0.14)",
       },
       timeScale: {
-        borderColor: "rgba(255,255,255,0.08)",
+        borderColor: "rgba(255,255,255,0.14)",
         timeVisible: true,
         secondsVisible: false,
       },
@@ -67,10 +88,10 @@ export default function ReplayChart({ candles }: Props) {
     });
 
     const series = chart.addCandlestickSeries({
-      upColor: "#2ecc71",
-      downColor: "#ef4444",
-      wickUpColor: "rgba(46, 204, 113, 0.7)",
-      wickDownColor: "rgba(239, 68, 68, 0.7)",
+      upColor: "#4fc58a",
+      downColor: "#f26a6f",
+      wickUpColor: "rgba(79, 197, 138, 0.75)",
+      wickDownColor: "rgba(242, 106, 111, 0.75)",
       borderVisible: false,
     });
 
@@ -79,7 +100,7 @@ export default function ReplayChart({ candles }: Props) {
       priceScaleId: "volume",
     });
     chart.priceScale("volume").applyOptions({
-      scaleMargins: { top: 0.82, bottom: 0 },
+      scaleMargins: { top: 0.84, bottom: 0 },
     });
 
     chartRef.current = chart;
@@ -102,7 +123,7 @@ export default function ReplayChart({ candles }: Props) {
       const last = chartData[chartData.length - 1];
       chartRef.current?.timeScale().scrollToPosition(2, false);
       chartRef.current?.timeScale().setVisibleRange({
-        from: chartData[Math.max(0, chartData.length - 90)].time,
+        from: chartData[firstChartWindowIndex(chartData.length)].time,
         to: last.time,
       });
     }
@@ -110,6 +131,31 @@ export default function ReplayChart({ candles }: Props) {
 
   return (
     <div className="chart-wrap">
+      <div className="chart-event-layer" aria-label="Visible event markers">
+        {overlayMarkers.map(({ event, number, leftPct }) => (
+          <button
+            key={event.id}
+            className={
+              hoveredEventId === event.id
+                ? "chart-event-marker active"
+                : "chart-event-marker"
+            }
+            style={{ left: `${leftPct}%` }}
+            onMouseEnter={() => onHoverEvent(event.id)}
+            onMouseLeave={() => onHoverEvent(undefined)}
+            title={event.title}
+            aria-label={`Event ${number}: ${event.title}`}
+          >
+            {number}
+          </button>
+        ))}
+      </div>
+      <div className="now-line" aria-hidden>
+        <span>Now</span>
+      </div>
+      <div className="future-note" aria-hidden>
+        Future hidden until replay advances
+      </div>
       <div className="chart-host" ref={containerRef} />
     </div>
   );

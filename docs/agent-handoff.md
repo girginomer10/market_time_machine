@@ -1,5 +1,37 @@
 # Agent Handoff
 
+## 2026-05-03 14:08 - Codex
+
+- Task: Added a repo-safe FRED SP500 local import path for the COVID scenario.
+- Changed: `scripts/import-fred-sp500.mjs` fetches FRED `SP500` closes and generates a gitignored local scenario at `src/data/scenarios/sp500-covid-2020-fred/`. `src/data/scenarios/index.ts` now auto-discovers scenario modules via `import.meta.glob`, so generated local scenarios appear in the switcher without editing registry code. Added `npm run import:fred-sp500`, Vite import-meta typing, gitignore rules, and scenario-authoring docs for the FRED workflow.
+- Verified: `npm run import:fred-sp500` generated 253 observations; `npm run test -- scenarios` passed 12/12 before and after generation; `npm run test` passed 191/191 across 18 suites; `npm run lint` clean; `npm run build` succeeded with generated scenario included; `curl -I http://127.0.0.1:5173/` returned HTTP 200.
+- Memory: none; no repo semantic memory directory is installed. Durable note: FRED `SP500` output must remain local/gitignored because FRED exposes S&P DJI copyrighted data; the generated scenario uses source closes only, derives OHLC from adjacent closes, and sets volume to 0.
+- Next: If a licensed OHLCV source is added later, replace this close-only local importer with a source-true package or keep both as distinct scenario variants.
+
+## 2026-05-03 13:22 - Codex
+
+- Task: Researched and added a second sample scenario, `sp500-covid-2020`, for the S&P 500/SPY COVID crash and recovery training flow.
+- Changed: Added `src/data/scenarios/sp500-covid-2020/index.ts` with deterministic synthetic SPY-proxy candles, official-source event timeline, indicators, benchmarks, and broker assumptions. Registered it in `src/data/scenarios/index.ts` and added scenario coverage in `src/data/scenarios/scenarios.test.ts`.
+- Verified: `npm run test -- scenarios` passed 12/12; `npm run test` passed 191/191 across 18 suites; `npm run lint` clean; `npm run build` succeeded; `curl -I http://127.0.0.1:5173/` returned HTTP 200.
+- Memory: none; no repo semantic memory directory is installed. Durable note: raw S&P DJI/ETF price data was intentionally not redistributed; this scenario uses clearly labeled synthetic sample prices plus official event source URLs.
+- Next: Replace sample prices with a properly licensed market-data pipeline when available, and consider adding scenario README/source notes once external package layout exists.
+
+## 2026-05-03 12:57 - Codex
+
+- Task: Fixed four review findings from the UI/UX port.
+- Changed: `src/store/sessionStore.ts` now processes pending limit orders before `finish` builds the final report. `TradeHistory` maps fills back to their source orders so filled limits render as limit fills. `ReplayChart` now uses a shared event-overlay helper that only renders chart markers inside the same last-90-candle window as the visible chart. `TradePanel` uses the broker's one-way half-spread estimate. Added regression tests in `src/store/sessionStore.test.ts`, `src/components/chart/ReplayChart.test.ts`, `src/components/trade/TradePanel.test.ts`, and strengthened `TradeHistory.test.tsx`.
+- Verified: `npm run test` passed 187/187 tests across 18 suites, `npm run lint` clean, `npm run build` succeeded, `git diff --check` clean, `curl -I http://127.0.0.1:5173/` returned HTTP 200, and in-app browser QA confirmed pending limit + skip-to-end fills and history shows the filled limit order.
+- Memory: none; no repo semantic memory directory is installed. Durable fix details are in this handoff entry.
+- Next: Add cancel/modify pending orders and a visual screenshot QA pass when the browser screenshot path is healthy.
+
+## 2026-05-03 12:40 - Codex
+
+- Task: Implemented the `finance time machine-2` UI/UX port plan on the existing React/Vite app without replacing replay, broker, portfolio, order, journal, or report domain logic.
+- Changed: `src/app/App.tsx` rebuilt the three-zone header, scenario switcher, replay/firewall metadata, derived portfolio/date/day display, and shared chart/timeline event hover state. `src/styles/global.css` now defines the obsidian/amber IBM Plex visual system, responsive dashboard layout, chart overlays, trade ticket, timeline, history, journal, and report styling. `ReplayChart`, `EventTimeline`, `TradePanel`, `TradeHistory`, and `PostGameReport` were redesigned around visible-only data, broker-model clarity, pending/fill state, and the newer narrative report structure. Added focused UI tests for visible event rendering, pending order history, and neutral zero report values.
+- Verified: `npm run test` passed 184/184 tests across 15 suites, `npm run lint` clean, `npm run build` succeeded, `git diff --check` clean, `curl -I http://127.0.0.1:5173/` returned HTTP 200. Browser smoke via the in-app browser covered play/pause/step, market buy, pending limit order, limit fill, finish report, and reset to clean start; screenshot capture timed out in the browser tool, so verification used DOM and interaction state.
+- Memory: none; no repo semantic memory directory is installed. Durable implementation note is in this handoff entry.
+- Next: Add true visual screenshot QA when the browser screenshot path is healthy, then polish mobile breakpoint screenshots, cancel/modify pending orders, and richer scenario packs.
+
 ## 2026-05-02 23:38 - Codex
 
 - Task: Continued quality/product pass by adding broker model selection and first pending order workflow.

@@ -2,24 +2,30 @@ import type { MarketEvent } from "../../types";
 
 type Props = {
   events: MarketEvent[];
+  eventNumbers: Map<string, number>;
+  hoveredEventId?: string;
+  onHoverEvent: (id?: string) => void;
 };
 
-function dotClassFor(sentiment: MarketEvent["sentiment"]): string {
-  switch (sentiment) {
-    case "positive":
-      return "dot pos";
-    case "negative":
-      return "dot neg";
-    case "mixed":
-      return "dot warn";
-    case "neutral":
-      return "dot mixed";
-    default:
-      return "dot";
-  }
+function eventTone(event: MarketEvent): string {
+  if (event.sentiment === "positive") return "positive";
+  if (event.sentiment === "negative") return "negative";
+  if (event.sentiment === "mixed") return "mixed";
+  return "neutral";
 }
 
-export default function EventTimeline({ events }: Props) {
+function eventDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toISOString().slice(0, 10);
+}
+
+export default function EventTimeline({
+  events,
+  eventNumbers,
+  hoveredEventId,
+  onHoverEvent,
+}: Props) {
   const sorted = [...events].sort((a, b) =>
     b.publishedAt.localeCompare(a.publishedAt),
   );
@@ -33,27 +39,33 @@ export default function EventTimeline({ events }: Props) {
   }
 
   return (
-    <div className="list" aria-label="Event timeline">
-      {sorted.map((event) => (
-        <div className="list-item" key={event.id}>
-          <div className="row">
-            <div className="timeline-event-importance">
-              <span className={dotClassFor(event.sentiment)} />
+    <div className="event-list" aria-label="Event timeline">
+      {sorted.map((event) => {
+        const number = eventNumbers.get(event.id) ?? 0;
+        return (
+          <article
+            className={
+              hoveredEventId === event.id ? "event-row active" : "event-row"
+            }
+            key={event.id}
+            onMouseEnter={() => onHoverEvent(event.id)}
+            onMouseLeave={() => onHoverEvent(undefined)}
+          >
+            <div className={`event-num ${eventTone(event)}`}>{number}</div>
+            <div className="event-body">
+              <div className="event-meta">
+                <span>{eventDate(event.publishedAt)}</span>
+                <span className={`event-tag ${eventTone(event)}`}>
+                  {event.type.replace(/_/g, " ")}
+                </span>
+                <span>importance {event.importance}/5</span>
+              </div>
               <strong>{event.title}</strong>
+              <p>{event.summary}</p>
             </div>
-            <span className="panel-sub">
-              {new Date(event.publishedAt).toISOString().slice(0, 10)}
-            </span>
-          </div>
-          <div className="row subtle">
-            <span>{event.summary}</span>
-          </div>
-          <div className="row subtle">
-            <span>{event.type.replace(/_/g, " ")}</span>
-            <span>importance {event.importance}/5</span>
-          </div>
-        </div>
-      ))}
+          </article>
+        );
+      })}
     </div>
   );
 }

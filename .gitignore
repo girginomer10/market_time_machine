@@ -11,6 +11,11 @@ coverage
 .env.*
 !.env.example
 
+# Locally generated market data. These files may be subject to upstream
+# provider terms and should not be committed unless explicitly licensed.
+local-data/
+src/data/scenarios/sp500-covid-2020-fred/
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

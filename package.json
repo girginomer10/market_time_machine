@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "import:fred-sp500": "node scripts/import-fred-sp500.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"

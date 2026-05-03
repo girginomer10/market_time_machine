@@ -78,6 +78,29 @@ Events outside the scenario range get a warning, not an error. Use this intentio
 
 If your scenario uses synthetic, smoothed, or otherwise non-source-true prices (for example, the demo BTC scenario), set `meta.isSampleData = true` and explain the construction in `dataSources`. The product surface uses this flag to add a clear sample-data badge.
 
+## Local FRED S&P 500 Import
+
+The repo includes a local importer for users who want to replay the 2020 COVID scenario with FRED's `SP500` close series without committing upstream-restricted data:
+
+```sh
+npm run import:fred-sp500
+```
+
+This writes a generated scenario to `src/data/scenarios/sp500-covid-2020-fred/`, which is intentionally gitignored. Restart the dev server and the scenario switcher will include **S&P 500 COVID Crash & Recovery (FRED Local)** automatically.
+
+Important licensing notes:
+
+- FRED can provide access to `SP500`, but the series is marked as S&P Dow Jones Indices content with reproduction restrictions.
+- Generated files should stay local unless you have separate redistribution permission from the data owner.
+- A production bundle built while the generated scenario exists will include the generated data, so do not publish that bundle unless your use complies with the upstream terms.
+- The importer uses source close values only. Open/high/low are derived from adjacent closes and volume is set to `0`, so the generated scenario is useful for broad timing practice, not intraday execution realism.
+
+Optional date range:
+
+```sh
+npm run import:fred-sp500 -- --start=2020-01-02 --end=2020-12-31
+```
+
 ## Running the Validator Locally
 
 ```sh

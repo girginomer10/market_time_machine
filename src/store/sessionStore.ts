@@ -311,8 +311,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   finish: () => {
+    const state = get();
+    if (state.status === "finished") return;
+    const finalIndex = Math.max(0, state.primaryCandlesLength - 1);
+    const triggered = processTriggeredLimitOrders(
+      state,
+      state.currentIndex + 1,
+      finalIndex,
+    );
     set({
-      currentIndex: get().primaryCandlesLength - 1,
+      ...triggered,
+      currentIndex: finalIndex,
       status: "finished",
     });
     finalizeReport();
