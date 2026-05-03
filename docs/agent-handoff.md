@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 15:23 - Codex
+
+- Task: Completed GitHub repository metadata hygiene for the open source launch.
+- Changed: Added GitHub repository topics, created GitHub Release `v0.1.0`, verified remote only has `main` plus the `v0.1.0` tag, and cleaned issue labels into a focused taxonomy. Updated issue templates to apply `status:needs-triage` and `type:scenario` consistently.
+- Verified: `gh repo view` shows topics and latest release; `gh release list` shows `v0.1.0`; `git ls-remote --heads origin` shows only `main`; `git ls-remote --tags origin` shows `v0.1.0`.
+- Memory: none; no repo semantic memory directory is installed.
+- Next: If dependency automation is re-enabled later, use grouped, low-noise updates and avoid flooding the public branch/PR list.
+
 ## 2026-05-03 15:18 - Codex
 
 - Task: Cleaned up GitHub repository hygiene after Dependabot opened too many early alpha update branches.

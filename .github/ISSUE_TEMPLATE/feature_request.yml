@@ -3,6 +3,7 @@ description: Suggest a product, simulation, analytics, or UI improvement.
 title: "[Feature]: "
 labels:
   - enhancement
+  - status:needs-triage
 body:
   - type: textarea
     id: problem

@@ -2,7 +2,8 @@ name: Scenario Proposal
 description: Propose or discuss a new historical market scenario.
 title: "[Scenario]: "
 labels:
-  - scenario
+  - type:scenario
+  - status:needs-triage
 body:
   - type: input
     id: title
