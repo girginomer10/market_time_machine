@@ -82,6 +82,10 @@ type SessionActions = {
     orderId: string,
     updates: Pick<LimitOrderRequest, "quantity" | "limitPrice">,
   ) => { ok: boolean; message?: string };
+  updatePendingOrder: (
+    orderId: string,
+    updates: { quantity: number; price: number },
+  ) => { ok: boolean; message?: string };
   addJournalNote: (note: string) => void;
   getSnapshot: () => ReplaySnapshot;
   clearRejection: () => void;
@@ -477,6 +481,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   updateLimitOrder: (orderId, updates) => {
+    const order = get().orders.find((candidate) => candidate.id === orderId);
+    if (order && order.type !== "limit") {
+      const message = "Only working limit orders can be updated here.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+    return get().updatePendingOrder(orderId, {
+      quantity: updates.quantity,
+      price: updates.limitPrice,
+    });
+  },
+
+  updatePendingOrder: (orderId, updates) => {
     const state = get();
     if (state.status === "finished") {
       return { ok: false, message: "Scenario already finished." };
@@ -487,8 +504,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       set({ rejectionMessage: message });
       return { ok: false, message };
     }
-    if (order.status !== "pending" || order.type !== "limit") {
-      const message = "Only working limit orders can be updated.";
+    if (
+      order.status !== "pending" ||
+      (order.type !== "limit" &&
+        order.type !== "stop_loss" &&
+        order.type !== "take_profit")
+    ) {
+      const message = "Only working orders can be updated.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+    if (!Number.isFinite(updates.price) || updates.price <= 0) {
+      const message = "Invalid order price";
       set({ rejectionMessage: message });
       return { ok: false, message };
     }
@@ -500,15 +527,26 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       state.broker,
     );
     const tradablePrice = tradablePrices.find((p) => p.symbol === order.symbol);
-    const result = createLimitOrder({
-      request: {
-        symbol: order.symbol,
-        side: order.side,
-        type: "limit",
-        quantity: updates.quantity,
-        limitPrice: updates.limitPrice,
-        note: order.note,
-      },
+    const request: PendingOrderRequest =
+      order.type === "limit"
+        ? {
+            symbol: order.symbol,
+            side: order.side,
+            type: "limit",
+            quantity: updates.quantity,
+            limitPrice: updates.price,
+            note: order.note,
+          }
+        : {
+            symbol: order.symbol,
+            side: order.side,
+            type: order.type,
+            quantity: updates.quantity,
+            triggerPrice: updates.price,
+            note: order.note,
+          };
+    const result = createPendingOrder({
+      request,
       broker: state.broker,
       cash: state.portfolio.cash,
       position: state.portfolio.positions[order.symbol],
@@ -530,6 +568,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
               ...candidate,
               quantity: result.order.quantity,
               limitPrice: result.order.limitPrice,
+              triggerPrice: result.order.triggerPrice,
             }
           : candidate,
       ),

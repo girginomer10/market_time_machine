@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 15:51 - Codex
+
+- Task: Extended working-order edits to stop-loss and take-profit orders.
+- Changed: `src/store/sessionStore.ts` now exposes `updatePendingOrder` for limit/stop-loss/take-profit orders while keeping `updateLimitOrder` as a compatibility wrapper. `TradeHistory` can edit either limit prices or trigger prices, and `App` now wires the generalized update action. Added UI/store regression tests for trigger-price editing.
+- Verified: `npm run test -- TradeHistory sessionStore` passed 9/9 focused tests; `npm run check` passed lint, 208/208 tests, and production build.
+- Memory: none; no repo semantic memory directory is installed.
+- Next: Run full check, then browser QA for editing stop/target exits in the table.
+
 ## 2026-05-03 15:42 - Codex
 
 - Task: Added stop-loss and take-profit pending order support.

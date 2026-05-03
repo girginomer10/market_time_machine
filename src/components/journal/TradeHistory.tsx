@@ -4,7 +4,7 @@ import { formatCurrency, formatNumber } from "../../utils/format";
 
 type OrderUpdate = {
   quantity: number;
-  limitPrice: number;
+  price: number;
 };
 
 type OrderUpdateResult = { ok: boolean; message?: string };
@@ -73,9 +73,17 @@ export default function TradeHistory({
   const hasActions = Boolean(onCancelOrder || onUpdateOrder);
   const totalColumns = hasActions ? 7 : 6;
 
+  function editablePriceFor(order: Order): number | undefined {
+    return order.limitPrice ?? order.triggerPrice;
+  }
+
+  function priceFieldLabel(order: Order): string {
+    return order.type === "limit" ? "Limit price" : "Trigger price";
+  }
+
   function startEditing(order: Order): void {
     setEditingOrderId(order.id);
-    setDraftLimitPrice(String(order.limitPrice ?? ""));
+    setDraftLimitPrice(String(editablePriceFor(order) ?? ""));
     setDraftQuantity(String(order.quantity));
     setEditError(undefined);
   }
@@ -90,17 +98,17 @@ export default function TradeHistory({
   function saveEdit(order: Order): void {
     if (!onUpdateOrder) return;
     const quantity = Number(draftQuantity);
-    const limitPrice = Number(draftLimitPrice);
+    const price = Number(draftLimitPrice);
     if (!Number.isFinite(quantity) || quantity <= 0) {
       setEditError("Enter a positive quantity.");
       return;
     }
-    if (!Number.isFinite(limitPrice) || limitPrice <= 0) {
-      setEditError("Enter a positive limit price.");
+    if (!Number.isFinite(price) || price <= 0) {
+      setEditError("Enter a positive price.");
       return;
     }
 
-    const result = onUpdateOrder(order.id, { quantity, limitPrice });
+    const result = onUpdateOrder(order.id, { quantity, price });
     if (result && !result.ok) {
       setEditError(result.message ?? "Order could not be updated.");
       return;
@@ -155,7 +163,7 @@ export default function TradeHistory({
                   <td>
                     {order.status === "pending" ? (
                       <div className="order-action-group">
-                        {onUpdateOrder && order.type === "limit" ? (
+                        {onUpdateOrder && order.type !== "market" ? (
                           <button
                             className="order-action-button secondary"
                             type="button"
@@ -193,7 +201,7 @@ export default function TradeHistory({
                       }}
                     >
                       <label htmlFor={`order-${order.id}-limit`}>
-                        <span>Limit price</span>
+                        <span>{priceFieldLabel(order)}</span>
                         <input
                           id={`order-${order.id}-limit`}
                           inputMode="decimal"

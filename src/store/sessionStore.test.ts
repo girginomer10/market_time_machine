@@ -157,4 +157,56 @@ describe("sessionStore finish", () => {
     expect(finished.fills[1].side).toBe("sell");
     expect(finished.fills[1].price).toBe(futureStop);
   });
+
+  it("updates stop-loss trigger prices before replay processing", () => {
+    const state = useSessionStore.getState();
+    const symbol = state.primarySymbol;
+    const primaryCandles = state.scenario.candles.filter(
+      (candle) => candle.symbol === symbol,
+    );
+    const futureStop = Math.min(
+      ...primaryCandles
+        .slice(state.currentIndex + 1)
+        .map((candle) => candle.low),
+    );
+
+    const entry = state.submitMarketOrder({
+      symbol,
+      side: "buy",
+      type: "market",
+      quantity: 0.02,
+    });
+    expect(entry.ok).toBe(true);
+
+    const placement = useSessionStore.getState().submitPendingOrder({
+      symbol,
+      side: "sell",
+      type: "stop_loss",
+      quantity: 0.01,
+      triggerPrice: futureStop * 0.5,
+      note: "Edited stop should use the replacement trigger.",
+    });
+    expect(placement.ok).toBe(true);
+
+    const orderId = useSessionStore.getState().orders[1].id;
+    const update = useSessionStore.getState().updatePendingOrder(orderId, {
+      quantity: 0.02,
+      price: futureStop,
+    });
+    expect(update.ok).toBe(true);
+
+    const working = useSessionStore.getState();
+    expect(working.orders[1].id).toBe(orderId);
+    expect(working.orders[1].status).toBe("pending");
+    expect(working.orders[1].quantity).toBe(0.02);
+    expect(working.orders[1].triggerPrice).toBe(futureStop);
+
+    useSessionStore.getState().finish();
+
+    const finished = useSessionStore.getState();
+    expect(finished.orders[1].status).toBe("filled");
+    expect(finished.fills).toHaveLength(2);
+    expect(finished.fills[1].quantity).toBe(0.02);
+    expect(finished.fills[1].price).toBe(futureStop);
+  });
 });

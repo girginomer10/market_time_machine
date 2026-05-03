@@ -25,6 +25,17 @@ const filledLimitOrder: Order = {
   status: "filled",
 };
 
+const stopLossOrder: Order = {
+  id: "order-stop",
+  createdAt: "2020-03-12T00:00:00.000Z",
+  symbol: "BTCUSD",
+  side: "sell",
+  type: "stop_loss",
+  quantity: 0.5,
+  triggerPrice: 4600,
+  status: "pending",
+};
+
 const fill: Fill = {
   id: "fill-1",
   orderId: "order-filled",
@@ -101,8 +112,39 @@ describe("TradeHistory", () => {
     );
 
     expect(onUpdateOrder).toHaveBeenCalledWith("order-pending", {
-      limitPrice: 4800,
+      price: 4800,
       quantity: 0.25,
+    });
+  });
+
+  it("edits trigger prices for stop and target orders", () => {
+    const onUpdateOrder = vi.fn(() => ({ ok: true }));
+
+    render(
+      <TradeHistory
+        fills={[]}
+        orders={[stopLossOrder]}
+        journal={[]}
+        onUpdateOrder={onUpdateOrder}
+      />,
+    );
+
+    expect(
+      screen.getByText(/stop loss trigger @ \$4,600\.00/),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit order order-stop" }),
+    );
+    fireEvent.change(screen.getByLabelText("Trigger price"), {
+      target: { value: "4550" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save order order-stop" }),
+    );
+
+    expect(onUpdateOrder).toHaveBeenCalledWith("order-stop", {
+      price: 4550,
+      quantity: 0.5,
     });
   });
 });
