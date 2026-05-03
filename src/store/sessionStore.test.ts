@@ -37,4 +37,40 @@ describe("sessionStore finish", () => {
     expect(finished.fills).toHaveLength(1);
     expect(finished.journal[0]?.note).toBe("Finish should still process this limit.");
   });
+
+  it("keeps cancelled limit orders from filling later", () => {
+    const state = useSessionStore.getState();
+    const symbol = state.primarySymbol;
+    const primaryCandles = state.scenario.candles.filter(
+      (candle) => candle.symbol === symbol,
+    );
+    const futureLimit = Math.min(
+      ...primaryCandles
+        .slice(state.currentIndex + 1)
+        .map((candle) => candle.low),
+    );
+
+    const placement = state.submitLimitOrder({
+      symbol,
+      side: "buy",
+      type: "limit",
+      quantity: 0.01,
+      limitPrice: futureLimit,
+      note: "Cancelled orders should stay out of fills.",
+    });
+    expect(placement.ok).toBe(true);
+
+    const orderId = useSessionStore.getState().orders[0].id;
+    const cancellation = useSessionStore.getState().cancelOrder(orderId);
+    expect(cancellation.ok).toBe(true);
+
+    useSessionStore.getState().finish();
+
+    const finished = useSessionStore.getState();
+    expect(finished.status).toBe("finished");
+    expect(finished.orders).toHaveLength(1);
+    expect(finished.orders[0].status).toBe("cancelled");
+    expect(finished.fills).toHaveLength(0);
+    expect(finished.journal).toHaveLength(0);
+  });
 });

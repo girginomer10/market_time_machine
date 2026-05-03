@@ -4,6 +4,10 @@ All notable changes to Market Time Machine will be tracked here.
 
 The project currently follows a lightweight changelog while it is in open source alpha.
 
+## Unreleased
+
+- Added working limit-order cancellation, with cancelled/rejected/expired order status badges in trade history.
+
 ## 0.1.0 - Open Source Alpha
 
 - Built the local-first React/Vite replay app.

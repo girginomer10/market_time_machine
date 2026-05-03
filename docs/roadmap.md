@@ -39,7 +39,7 @@ Deliverables:
 - Scenario loader
 - Candlestick replay
 - Play, pause, speed, and step controls
-- Market and limit orders
+- Market and limit orders with working-order cancellation
 - Cash, positions, and portfolio value
 - Trade journal
 - Basic post-game report
@@ -203,4 +203,3 @@ Success criteria:
 - Users can test how rule changes affect outcomes
 - The same historical regime can be studied from multiple angles
 - Advanced users can turn replay into structured research
-

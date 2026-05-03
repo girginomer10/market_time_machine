@@ -74,6 +74,7 @@ type SessionActions = {
   finish: () => void;
   submitMarketOrder: (req: OrderRequest) => { ok: boolean; message?: string };
   submitLimitOrder: (req: LimitOrderRequest) => { ok: boolean; message?: string };
+  cancelOrder: (orderId: string) => { ok: boolean; message?: string };
   addJournalNote: (note: string) => void;
   getSnapshot: () => ReplaySnapshot;
   clearRejection: () => void;
@@ -405,6 +406,33 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       rejectionMessage: result.ok ? undefined : result.reason,
     });
     return result.ok ? { ok: true } : { ok: false, message: result.reason };
+  },
+
+  cancelOrder: (orderId) => {
+    const state = get();
+    if (state.status === "finished") {
+      return { ok: false, message: "Scenario already finished." };
+    }
+    const order = state.orders.find((candidate) => candidate.id === orderId);
+    if (!order) {
+      const message = "Order not found.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+    if (order.status !== "pending") {
+      const message = "Only working orders can be cancelled.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+    set({
+      orders: state.orders.map((candidate) =>
+        candidate.id === orderId
+          ? { ...candidate, status: "cancelled" }
+          : candidate,
+      ),
+      rejectionMessage: undefined,
+    });
+    return { ok: true };
   },
 
   addJournalNote: (note) => {

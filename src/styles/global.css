@@ -1237,6 +1237,42 @@ textarea:focus {
   background: var(--pos-soft);
 }
 
+.status-badge.cancelled,
+.status-badge.expired {
+  color: var(--text-dim);
+  border-color: rgba(133, 146, 166, 0.34);
+  background: rgba(133, 146, 166, 0.1);
+}
+
+.status-badge.rejected {
+  color: var(--neg);
+  border-color: rgba(242, 106, 111, 0.34);
+  background: var(--neg-soft);
+}
+
+.status-badge.partially-filled {
+  color: var(--accent);
+  border-color: rgba(123, 183, 224, 0.34);
+  background: rgba(123, 183, 224, 0.1);
+}
+
+.order-action-button {
+  min-height: 24px;
+  border: 1px solid rgba(242, 106, 111, 0.32);
+  border-radius: 999px;
+  background: rgba(242, 106, 111, 0.08);
+  color: var(--neg);
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.order-action-button:hover {
+  border-color: rgba(242, 106, 111, 0.54);
+  background: rgba(242, 106, 111, 0.14);
+  color: var(--text);
+}
+
 .journal-empty {
   font-family: var(--serif);
   color: var(--text-2);

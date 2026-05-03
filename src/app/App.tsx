@@ -52,6 +52,7 @@ export default function App() {
   const pause = useSessionStore((s) => s.pause);
   const reset = useSessionStore((s) => s.resetScenario);
   const selectScenario = useSessionStore((s) => s.selectScenario);
+  const cancelOrder = useSessionStore((s) => s.cancelOrder);
   const snapshot = useSessionStore(selectSnapshot);
 
   const [reportOpen, setReportOpen] = useState(false);
@@ -297,7 +298,14 @@ export default function App() {
               </span>
             </div>
             <div className="panel-body scrollable">
-              <TradeHistory fills={fills} orders={orders} journal={journal} />
+              <TradeHistory
+                fills={fills}
+                orders={orders}
+                journal={journal}
+                onCancelOrder={
+                  status === "finished" ? undefined : cancelOrder
+                }
+              />
             </div>
           </div>
           <div className="panel panel-flex">

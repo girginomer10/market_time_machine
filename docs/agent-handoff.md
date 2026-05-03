@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 15:30 - Codex
+
+- Task: Continued product polish by adding pending limit-order cancellation.
+- Changed: `src/store/sessionStore.ts` now cancels working orders and prevents cancelled limits from filling during replay/finish. `TradeHistory` shows all non-filled order statuses and exposes a cancel action while replay is active. `App`, CSS, README, changelog, and roadmap were updated for the visible behavior.
+- Verified: `npm run test -- TradeHistory sessionStore` passed 4/4 focused tests; `npm run check` passed lint, 201/201 tests, and production build.
+- Memory: none; no repo semantic memory directory is installed.
+- Next: Add modify/replace for working limit orders, then consider stop-loss/take-profit order flows.
+
 ## 2026-05-03 15:23 - Codex
 
 - Task: Completed GitHub repository metadata hygiene for the open source launch.
