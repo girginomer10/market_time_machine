@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateScenarioPackage } from "../../domain/validation/scenario";
 import { listScenarios } from "./index";
 import { btc20202021Scenario } from "./btc-2020-2021";
+import { kreBankingCrisis2023Scenario } from "./kre-banking-crisis-2023";
 import { qqqRateHike2022Scenario } from "./qqq-rate-hike-2022";
 import { sp500Covid2020Scenario } from "./sp500-covid-2020";
 
@@ -150,6 +151,51 @@ describe("qqq-rate-hike-2022 scenario", () => {
       qqqRateHike2022Scenario.candles.map((c) => c.closeTime),
     );
     for (const point of qqqRateHike2022Scenario.benchmarks) {
+      expect(candleTimes.has(point.time)).toBe(true);
+    }
+  });
+});
+
+describe("kre-banking-crisis-2023 scenario", () => {
+  it("declares the expected metadata", () => {
+    expect(kreBankingCrisis2023Scenario.meta.id).toBe(
+      "kre-banking-crisis-2023",
+    );
+    expect(kreBankingCrisis2023Scenario.meta.symbols).toContain("KRE");
+    expect(kreBankingCrisis2023Scenario.meta.defaultGranularity).toBe("1d");
+    expect(kreBankingCrisis2023Scenario.meta.assetClass).toBe("etf");
+    expect(kreBankingCrisis2023Scenario.meta.isSampleData).toBe(true);
+  });
+
+  it("contains a trading-day candle path through the bank stress window", () => {
+    const candles = kreBankingCrisis2023Scenario.candles;
+    expect(candles.length).toBeGreaterThan(80);
+    expect(candles[0].symbol).toBe("KRE");
+    expect(Date.parse(candles[0].closeTime)).toBeLessThan(
+      Date.parse("2023-03-02T00:00:00.000Z"),
+    );
+    expect(
+      Date.parse(candles[candles.length - 1].closeTime),
+    ).toBeGreaterThan(Date.parse("2023-06-29T00:00:00.000Z"));
+  });
+
+  it("includes official-source bank failure and policy response events", () => {
+    const types = new Set(
+      kreBankingCrisis2023Scenario.events.map((e) => e.type),
+    );
+    expect(types.has("regulation")).toBe(true);
+    expect(types.has("central_bank")).toBe(true);
+    expect(types.has("corporate_action")).toBe(true);
+    expect(
+      kreBankingCrisis2023Scenario.events.every((event) => event.sourceUrl),
+    ).toBe(true);
+  });
+
+  it("ships benchmarks aligned with candle close times", () => {
+    const candleTimes = new Set(
+      kreBankingCrisis2023Scenario.candles.map((c) => c.closeTime),
+    );
+    for (const point of kreBankingCrisis2023Scenario.benchmarks) {
       expect(candleTimes.has(point.time)).toBe(true);
     }
   });

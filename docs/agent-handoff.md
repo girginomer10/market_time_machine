@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 15:04 - Codex
+
+- Task: Added another sample scenario, `kre-banking-crisis-2023`, covering the U.S. regional-bank stress window around SVB, Signature, and First Republic.
+- Changed: Added `src/data/scenarios/kre-banking-crisis-2023/index.ts` with deterministic synthetic KRE-proxy candles, FDIC/Fed/OCC/DFPI-sourced event timeline, indicators, benchmarks, and stressed regional-bank broker assumptions. Extended `src/data/scenarios/scenarios.test.ts` with scenario-specific checks.
+- Verified: `npm run test -- scenarios` passed 20/20; `npm run test` passed 199/199 across 18 suites; `npm run lint` clean; `npm run build` succeeded.
+- Memory: none; no repo semantic memory directory is installed. Durable note: this scenario keeps ETF prices synthetic while event timing/source URLs are anchored to official bank-regulator and central-bank releases.
+- Next: Good next additions are `gme-2021-meme-mania` for FOMO/short-squeeze behavior or `gold-2020-2022-inflation` for cross-asset inflation practice.
+
 ## 2026-05-03 14:58 - Codex
 
 - Task: Added another sample scenario, `qqq-rate-hike-2022`, covering the Nasdaq/QQQ 2022 inflation and Fed tightening regime.
