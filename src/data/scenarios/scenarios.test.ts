@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateScenarioPackage } from "../../domain/validation/scenario";
 import { listScenarios } from "./index";
 import { btc20202021Scenario } from "./btc-2020-2021";
+import { qqqRateHike2022Scenario } from "./qqq-rate-hike-2022";
 import { sp500Covid2020Scenario } from "./sp500-covid-2020";
 
 describe("scenario registry", () => {
@@ -109,6 +110,46 @@ describe("sp500-covid-2020 scenario", () => {
       sp500Covid2020Scenario.candles.map((c) => c.closeTime),
     );
     for (const point of sp500Covid2020Scenario.benchmarks) {
+      expect(candleTimes.has(point.time)).toBe(true);
+    }
+  });
+});
+
+describe("qqq-rate-hike-2022 scenario", () => {
+  it("declares the expected metadata", () => {
+    expect(qqqRateHike2022Scenario.meta.id).toBe("qqq-rate-hike-2022");
+    expect(qqqRateHike2022Scenario.meta.symbols).toContain("QQQ");
+    expect(qqqRateHike2022Scenario.meta.defaultGranularity).toBe("1d");
+    expect(qqqRateHike2022Scenario.meta.assetClass).toBe("etf");
+    expect(qqqRateHike2022Scenario.meta.isSampleData).toBe(true);
+  });
+
+  it("contains a trading-day candle path through 2022", () => {
+    const candles = qqqRateHike2022Scenario.candles;
+    expect(candles.length).toBeGreaterThan(240);
+    expect(candles[0].symbol).toBe("QQQ");
+    expect(Date.parse(candles[0].closeTime)).toBeLessThan(
+      Date.parse("2022-01-04T00:00:00.000Z"),
+    );
+    expect(
+      Date.parse(candles[candles.length - 1].closeTime),
+    ).toBeGreaterThan(Date.parse("2022-12-29T00:00:00.000Z"));
+  });
+
+  it("includes official-source inflation and central-bank events", () => {
+    const types = new Set(qqqRateHike2022Scenario.events.map((e) => e.type));
+    expect(types.has("macro")).toBe(true);
+    expect(types.has("central_bank")).toBe(true);
+    expect(
+      qqqRateHike2022Scenario.events.every((event) => event.sourceUrl),
+    ).toBe(true);
+  });
+
+  it("ships benchmarks aligned with candle close times", () => {
+    const candleTimes = new Set(
+      qqqRateHike2022Scenario.candles.map((c) => c.closeTime),
+    );
+    for (const point of qqqRateHike2022Scenario.benchmarks) {
       expect(candleTimes.has(point.time)).toBe(true);
     }
   });

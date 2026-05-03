@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 14:58 - Codex
+
+- Task: Added another sample scenario, `qqq-rate-hike-2022`, covering the Nasdaq/QQQ 2022 inflation and Fed tightening regime.
+- Changed: Added `src/data/scenarios/qqq-rate-hike-2022/index.ts` with deterministic synthetic QQQ-proxy candles, official-source Fed/BLS event timeline, indicators, benchmarks, and broker assumptions. Extended `src/data/scenarios/scenarios.test.ts` with scenario-specific checks.
+- Verified: `npm run test` passed 195/195 across 18 suites; `npm run lint` clean; `npm run build` succeeded.
+- Memory: none; no repo semantic memory directory is installed. Durable note: this scenario intentionally uses synthetic sample ETF prices while event timestamps and summaries are anchored to official Fed/BLS publication times.
+- Next: Good next additions are `gme-2021-meme-mania` for FOMO/short-squeeze behavior or `gold-2020-2022-inflation` for cross-asset inflation practice.
+
 ## 2026-05-03 14:08 - Codex
 
 - Task: Added a repo-safe FRED SP500 local import path for the COVID scenario.
