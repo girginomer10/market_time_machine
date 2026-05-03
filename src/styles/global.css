@@ -907,6 +907,10 @@ textarea:focus {
   grid-template-columns: repeat(2, 1fr);
 }
 
+.order-type-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .seg button.active.buy {
   color: var(--pos);
   background: var(--pos-soft);

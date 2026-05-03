@@ -66,6 +66,12 @@ Minimum viable professional set:
 - Stop loss
 - Take profit
 
+Current alpha support:
+
+- Market orders fill immediately at the visible tradable price with configured spread, fees, and slippage.
+- Limit, stop-loss, and take-profit orders remain working until a future visible candle range triggers them.
+- Stop-loss and take-profit orders currently fill at their trigger price; stop-market slippage is a future broker-realism enhancement.
+
 ## Core Types
 
 ```ts
@@ -238,4 +244,3 @@ Orders should be rejected with explicit reasons:
 Broker realism should be configurable, not hidden.
 
 Users should know whether they are playing with idealized fills or professional-grade execution constraints.
-

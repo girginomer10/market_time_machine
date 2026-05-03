@@ -4,7 +4,7 @@ import {
   useSessionStore,
 } from "../../store/sessionStore";
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
-import type { TradablePrice } from "../../types";
+import type { OrderType, TradablePrice } from "../../types";
 import { estimateOneWaySpreadCost } from "./costEstimates";
 
 const ZERO_EPSILON = 0.0000001;
@@ -69,6 +69,7 @@ export default function TradePanel({
 }: Props) {
   const submitMarketOrder = useSessionStore((s) => s.submitMarketOrder);
   const submitLimitOrder = useSessionStore((s) => s.submitLimitOrder);
+  const submitPendingOrder = useSessionStore((s) => s.submitPendingOrder);
   const rejectionMessage = useSessionStore((s) => s.rejectionMessage);
   const clearRejection = useSessionStore((s) => s.clearRejection);
   const status = useSessionStore((s) => s.status);
@@ -83,7 +84,7 @@ export default function TradePanel({
 
   const [quantity, setQuantity] = useState<string>("0.05");
   const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [orderType, setOrderType] = useState<"market" | "limit">("market");
+  const [orderType, setOrderType] = useState<OrderType>("market");
   const [limitPrice, setLimitPrice] = useState<string>("");
   const [note, setNote] = useState<string>("");
 
@@ -96,8 +97,9 @@ export default function TradePanel({
     totalValue > 0 ? Math.max(0, Math.min(1, positionsValue / totalValue)) : 0;
   const heldQty = position?.quantity ?? 0;
   const marketPrice = tradablePrice?.price ?? position?.marketPrice;
+  const hasTriggerPrice = orderType !== "market";
   const notionalPrice =
-    orderType === "limit" && Number.isFinite(Number(limitPrice))
+    hasTriggerPrice && Number.isFinite(Number(limitPrice))
       ? Number(limitPrice)
       : marketPrice;
   const numericQuantity = Number(quantity);
@@ -110,11 +112,13 @@ export default function TradePanel({
       ? expectedNotional * (broker.commissionRateBps / 10000) + broker.fixedFee
       : undefined;
   const estimatedSpread =
-    expectedNotional !== undefined
+    expectedNotional !== undefined && orderType === "market"
       ? estimateOneWaySpreadCost(expectedNotional, broker.spreadBps)
       : undefined;
   const estimatedSlippage =
-    expectedNotional !== undefined && broker.slippageModel !== "none"
+    expectedNotional !== undefined &&
+    orderType === "market" &&
+    broker.slippageModel !== "none"
       ? expectedNotional * ((broker.slippageBps ?? 0) / 10000)
       : 0;
 
@@ -123,29 +127,82 @@ export default function TradePanel({
   const canSell = broker.allowShort || heldQty > 0;
   const canSubmit = side === "buy" || canSell;
 
+  const pendingPriceLabel =
+    orderType === "limit"
+      ? "Limit"
+      : orderType === "stop_loss"
+        ? "Stop"
+        : "Target";
+  const orderLabel = orderType.replace("_", " ");
+
+  function defaultPriceFor(
+    nextType: OrderType,
+    nextSide: "buy" | "sell",
+  ): string {
+    if (!tradablePrice) return "";
+    const price = tradablePrice.price;
+    const multiplier =
+      nextType === "stop_loss"
+        ? nextSide === "sell"
+          ? 0.95
+          : 1.05
+        : nextType === "take_profit"
+          ? nextSide === "sell"
+            ? 1.05
+            : 0.95
+          : 1;
+    return String(Math.round(price * multiplier * 100) / 100);
+  }
+
+  function selectOrderType(nextType: OrderType): void {
+    const nextSide =
+      nextType !== "limit" && heldQty > 0
+        ? "sell"
+        : nextType !== "limit" && heldQty < 0
+          ? "buy"
+          : side;
+    setOrderType(nextType);
+    setSide(nextSide);
+    if (nextType !== "market") {
+      setLimitPrice(defaultPriceFor(nextType, nextSide));
+    }
+  }
+
   const placeOrder = () => {
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
       clearRejection();
       return;
     }
-    const result =
-      orderType === "market"
-        ? submitMarketOrder({
-            symbol,
-            side,
-            type: "market",
-            quantity: qty,
-            note: note.trim() || undefined,
-          })
-        : submitLimitOrder({
-            symbol,
-            side,
-            type: "limit",
-            quantity: qty,
-            limitPrice: Number(limitPrice),
-            note: note.trim() || undefined,
-          });
+    const result = (() => {
+      if (orderType === "market") {
+        return submitMarketOrder({
+          symbol,
+          side,
+          type: "market",
+          quantity: qty,
+          note: note.trim() || undefined,
+        });
+      }
+      if (orderType === "limit") {
+        return submitLimitOrder({
+          symbol,
+          side,
+          type: "limit",
+          quantity: qty,
+          limitPrice: Number(limitPrice),
+          note: note.trim() || undefined,
+        });
+      }
+      return submitPendingOrder({
+        symbol,
+        side,
+        type: orderType,
+        quantity: qty,
+        triggerPrice: Number(limitPrice),
+        note: note.trim() || undefined,
+      });
+    })();
     if (result.ok) {
       setNote("");
     }
@@ -249,7 +306,7 @@ export default function TradePanel({
         <div className="seg order-type-row" role="radiogroup" aria-label="Order type">
           <button
             className={orderType === "market" ? "active" : ""}
-            onClick={() => setOrderType("market")}
+            onClick={() => selectOrderType("market")}
             role="radio"
             aria-checked={orderType === "market"}
             disabled={isFinished}
@@ -258,17 +315,30 @@ export default function TradePanel({
           </button>
           <button
             className={orderType === "limit" ? "active" : ""}
-            onClick={() => {
-              setOrderType("limit");
-              if (!limitPrice && tradablePrice) {
-                setLimitPrice(String(Math.round(tradablePrice.price)));
-              }
-            }}
+            onClick={() => selectOrderType("limit")}
             role="radio"
             aria-checked={orderType === "limit"}
             disabled={isFinished}
           >
             Limit
+          </button>
+          <button
+            className={orderType === "stop_loss" ? "active" : ""}
+            onClick={() => selectOrderType("stop_loss")}
+            role="radio"
+            aria-checked={orderType === "stop_loss"}
+            disabled={isFinished}
+          >
+            Stop
+          </button>
+          <button
+            className={orderType === "take_profit" ? "active" : ""}
+            onClick={() => selectOrderType("take_profit")}
+            role="radio"
+            aria-checked={orderType === "take_profit"}
+            disabled={isFinished}
+          >
+            Target
           </button>
         </div>
         <div className="field-row">
@@ -282,9 +352,9 @@ export default function TradePanel({
             disabled={isFinished}
           />
         </div>
-        {orderType === "limit" ? (
+        {hasTriggerPrice ? (
           <div className="field-row">
-            <label htmlFor="limit-price">Limit</label>
+            <label htmlFor="limit-price">{pendingPriceLabel}</label>
             <input
               id="limit-price"
               inputMode="decimal"
@@ -315,7 +385,7 @@ export default function TradePanel({
         >
           {!canSubmit
             ? "Insufficient position"
-            : `Place ${orderType} ${side === "buy" ? "buy" : heldQty <= 0 && broker.allowShort ? "short" : "sell"}`}
+            : `Place ${orderLabel} ${side === "buy" ? "buy" : heldQty <= 0 && broker.allowShort ? "short" : "sell"}`}
         </button>
         {rejectionMessage ? (
           <div className="rejection" role="alert">

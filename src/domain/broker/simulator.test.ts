@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   commissionFor,
   createLimitOrder,
+  createPendingOrder,
   executeLimitOrderFill,
   executeMarketOrder,
   isLimitOrderTriggered,
@@ -179,6 +180,68 @@ describe("broker simulator", () => {
     expect(isLimitOrderTriggered({ order: buy, high: 101, low: 96 })).toBe(false);
     expect(isLimitOrderTriggered({ order: sell, high: 106, low: 99 })).toBe(true);
     expect(isLimitOrderTriggered({ order: sell, high: 104, low: 99 })).toBe(false);
+  });
+
+  it("detects stop-loss and take-profit triggers from candle ranges", () => {
+    const stopLoss = {
+      id: "o3",
+      createdAt: TIME,
+      symbol: "TEST",
+      side: "sell" as const,
+      type: "stop_loss" as const,
+      quantity: 1,
+      triggerPrice: 95,
+      status: "pending" as const,
+    };
+    const takeProfit = {
+      ...stopLoss,
+      id: "o4",
+      type: "take_profit" as const,
+      triggerPrice: 110,
+    };
+    expect(
+      isLimitOrderTriggered({ order: stopLoss, high: 101, low: 94 }),
+    ).toBe(true);
+    expect(
+      isLimitOrderTriggered({ order: stopLoss, high: 101, low: 96 }),
+    ).toBe(false);
+    expect(
+      isLimitOrderTriggered({ order: takeProfit, high: 111, low: 99 }),
+    ).toBe(true);
+    expect(
+      isLimitOrderTriggered({ order: takeProfit, high: 109, low: 99 }),
+    ).toBe(false);
+  });
+
+  it("creates triggered stop-loss orders with trigger prices", () => {
+    const result = createPendingOrder({
+      request: {
+        symbol: "TEST",
+        side: "sell",
+        type: "stop_loss",
+        quantity: 1,
+        triggerPrice: 92,
+      },
+      broker: makeBroker(),
+      cash: 0,
+      position: {
+        symbol: "TEST",
+        quantity: 1,
+        averagePrice: 100,
+        marketPrice: 100,
+        marketValue: 100,
+        unrealizedPnl: 0,
+        realizedPnl: 0,
+      },
+      tradablePrice: { symbol: "TEST", time: TIME, price: 100, bid: 100, ask: 100 },
+      currentTime: TIME,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.order.type).toBe("stop_loss");
+      expect(result.order.triggerPrice).toBe(92);
+      expect(result.order.status).toBe("pending");
+    }
   });
 
   it("fills triggered limit orders at the limit price with commission", () => {

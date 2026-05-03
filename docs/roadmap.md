@@ -39,7 +39,7 @@ Deliverables:
 - Scenario loader
 - Candlestick replay
 - Play, pause, speed, and step controls
-- Market and limit orders with working-order edit/cancel controls
+- Market, limit, stop-loss, and take-profit orders with working-order edit/cancel controls
 - Cash, positions, and portfolio value
 - Trade journal
 - Basic post-game report

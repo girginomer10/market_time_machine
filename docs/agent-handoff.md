@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 15:42 - Codex
+
+- Task: Added stop-loss and take-profit pending order support.
+- Changed: `src/types/trading.ts` now includes `stop_loss` and `take_profit` order types with `triggerPrice`. `src/domain/broker/simulator.ts` can place, trigger, and fill limit/stop-loss/take-profit pending orders; old limit-specific helpers remain as compatibility wrappers. `src/store/sessionStore.ts` processes all pending triggerable orders during replay/finish. `TradePanel` exposes Stop and Target order controls. Trade history, docs, changelog, and roadmap were updated for the new order types.
+- Verified: `npm run test -- simulator sessionStore TradeHistory` passed 21/21 focused tests; `npm run check` passed lint, 206/206 tests, and production build.
+- Memory: none; no repo semantic memory directory is installed. Durable note: stop-loss/take-profit orders currently fill at their trigger price; stop-market slippage is intentionally deferred.
+- Next: Add browser QA around opening a position, placing stop/target exits, and finishing the replay; then consider editable trigger prices for stop/target orders.
+
 ## 2026-05-03 15:35 - Codex
 
 - Task: Continued order workflow polish by adding edit/replace for working limit orders.

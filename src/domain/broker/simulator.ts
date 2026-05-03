@@ -34,8 +34,17 @@ export type LimitOrderRequest = {
   note?: string;
 };
 
+export type TriggerOrderRequest = {
+  symbol: string;
+  side: OrderSide;
+  type: "stop_loss" | "take_profit";
+  quantity: number;
+  triggerPrice: number;
+  note?: string;
+};
+
 export type OrderRequest = MarketOrderRequest;
-export type PendingOrderRequest = LimitOrderRequest;
+export type PendingOrderRequest = LimitOrderRequest | TriggerOrderRequest;
 
 export type FillResult =
   | { ok: true; fill: Fill; order: Order }
@@ -195,6 +204,20 @@ export type LimitOrderInputs = {
   marketOpen?: boolean;
 };
 
+export type TriggerOrderInputs = Omit<LimitOrderInputs, "request"> & {
+  request: TriggerOrderRequest;
+};
+
+export type PendingOrderInputs = Omit<LimitOrderInputs, "request"> & {
+  request: PendingOrderRequest;
+};
+
+function isLimitOrderRequest(
+  request: PendingOrderRequest,
+): request is LimitOrderRequest {
+  return request.type === "limit";
+}
+
 export function createLimitOrder(
   inputs: LimitOrderInputs,
 ): OrderPlacementResult {
@@ -266,6 +289,87 @@ export function createLimitOrder(
   };
 }
 
+export function createTriggerOrder(
+  inputs: TriggerOrderInputs,
+): OrderPlacementResult {
+  const { request, broker, cash, position, tradablePrice, currentTime } =
+    inputs;
+  const order: Order = {
+    id: generateId("ord"),
+    createdAt: currentTime,
+    symbol: request.symbol,
+    side: request.side,
+    type: request.type,
+    quantity: request.quantity,
+    triggerPrice: request.triggerPrice,
+    status: "pending",
+    note: request.note,
+  };
+
+  if (!Number.isFinite(request.triggerPrice) || request.triggerPrice <= 0) {
+    return {
+      ok: false,
+      order: {
+        ...order,
+        status: "rejected",
+        rejectionReason: "Invalid trigger price",
+      },
+      reason: "Invalid trigger price",
+    };
+  }
+
+  const normalizedQuantity = normalizeQuantity(
+    request.quantity,
+    broker,
+    inputs.instrument,
+  );
+  const notional = request.triggerPrice * normalizedQuantity;
+  const commission = commissionFor(notional, broker);
+  const validation = validateMarketOrder({
+    side: request.side,
+    rawQuantity: request.quantity,
+    normalizedQuantity,
+    referencePrice: tradablePrice?.price ?? request.triggerPrice,
+    executionPrice: request.triggerPrice,
+    cash,
+    fees: commission,
+    position,
+    broker,
+    hasPrice: Boolean(tradablePrice),
+    marketOpen: inputs.marketOpen,
+  });
+
+  if (!validation.ok) {
+    return {
+      ok: false,
+      order: {
+        ...order,
+        status: "rejected",
+        rejectionReason: validation.message,
+      },
+      reason: validation.message,
+    };
+  }
+
+  return {
+    ok: true,
+    order: {
+      ...order,
+      quantity: normalizedQuantity,
+    },
+  };
+}
+
+export function createPendingOrder(
+  inputs: PendingOrderInputs,
+): OrderPlacementResult {
+  const { request, ...context } = inputs;
+  if (isLimitOrderRequest(request)) {
+    return createLimitOrder({ ...context, request });
+  }
+  return createTriggerOrder({ ...context, request });
+}
+
 export type LimitFillInputs = {
   order: Order;
   broker: BrokerConfig;
@@ -276,18 +380,23 @@ export type LimitFillInputs = {
   marketOpen?: boolean;
 };
 
-export function executeLimitOrderFill(inputs: LimitFillInputs): FillResult {
+export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
   const { order, broker, cash, position, currentTime } = inputs;
-  const limitPrice = order.limitPrice ?? 0;
-  if (order.type !== "limit" || !Number.isFinite(limitPrice) || limitPrice <= 0) {
+  const fillPrice =
+    order.type === "limit" ? order.limitPrice ?? 0 : order.triggerPrice ?? 0;
+  if (
+    !["limit", "stop_loss", "take_profit"].includes(order.type) ||
+    !Number.isFinite(fillPrice) ||
+    fillPrice <= 0
+  ) {
     return {
       ok: false,
       order: {
         ...order,
         status: "rejected",
-        rejectionReason: "Invalid limit price",
+        rejectionReason: "Invalid fill price",
       },
-      reason: "Invalid limit price",
+      reason: "Invalid fill price",
     };
   }
   const normalizedQuantity = normalizeQuantity(
@@ -295,14 +404,14 @@ export function executeLimitOrderFill(inputs: LimitFillInputs): FillResult {
     broker,
     inputs.instrument,
   );
-  const notional = limitPrice * normalizedQuantity;
+  const notional = fillPrice * normalizedQuantity;
   const commission = commissionFor(notional, broker);
   const validation = validateMarketOrder({
     side: order.side,
     rawQuantity: order.quantity,
     normalizedQuantity,
-    referencePrice: limitPrice,
-    executionPrice: limitPrice,
+    referencePrice: fillPrice,
+    executionPrice: fillPrice,
     cash,
     fees: commission,
     position,
@@ -329,8 +438,8 @@ export function executeLimitOrderFill(inputs: LimitFillInputs): FillResult {
     symbol: order.symbol,
     side: order.side,
     quantity: normalizedQuantity,
-    price: limitPrice,
-    referencePrice: limitPrice,
+    price: fillPrice,
+    referencePrice: fillPrice,
     commission,
     spreadCost: 0,
     slippage: 0,
@@ -349,16 +458,37 @@ export function executeLimitOrderFill(inputs: LimitFillInputs): FillResult {
   };
 }
 
+export function executeLimitOrderFill(inputs: LimitFillInputs): FillResult {
+  return executePendingOrderFill(inputs);
+}
+
 export type LimitTriggerInput = {
   order: Order;
   high: number;
   low: number;
 };
 
-export function isLimitOrderTriggered(input: LimitTriggerInput): boolean {
+export function isPendingOrderTriggered(input: LimitTriggerInput): boolean {
   const { order, high, low } = input;
-  if (order.status !== "pending" || order.type !== "limit") return false;
-  const limit = order.limitPrice;
-  if (!limit) return false;
-  return order.side === "buy" ? low <= limit : high >= limit;
+  if (order.status !== "pending") return false;
+  if (order.type === "limit") {
+    const limit = order.limitPrice;
+    if (!limit) return false;
+    return order.side === "buy" ? low <= limit : high >= limit;
+  }
+  if (order.type === "stop_loss") {
+    const trigger = order.triggerPrice;
+    if (!trigger) return false;
+    return order.side === "buy" ? high >= trigger : low <= trigger;
+  }
+  if (order.type === "take_profit") {
+    const trigger = order.triggerPrice;
+    if (!trigger) return false;
+    return order.side === "buy" ? low <= trigger : high >= trigger;
+  }
+  return false;
+}
+
+export function isLimitOrderTriggered(input: LimitTriggerInput): boolean {
+  return isPendingOrderTriggered(input);
 }

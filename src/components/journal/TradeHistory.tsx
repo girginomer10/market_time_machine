@@ -34,6 +34,17 @@ function statusClass(status: Order["status"]): string {
   return status.replace("_", "-");
 }
 
+function orderTypeLabel(type: Order["type"]): string {
+  return type.replace("_", " ");
+}
+
+function orderPriceText(order: Order): string {
+  const price = order.limitPrice ?? order.triggerPrice;
+  if (!price) return "";
+  const label = order.type === "limit" ? "" : " trigger";
+  return `${label} @ ${formatCurrency(price)}`;
+}
+
 function dateLabel(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -130,10 +141,8 @@ export default function TradeHistory({
                   {order.side}
                 </td>
                 <td>
-                  {order.type}
-                  {order.limitPrice
-                    ? ` @ ${formatCurrency(order.limitPrice)}`
-                    : ""}
+                  {orderTypeLabel(order.type)}
+                  {orderPriceText(order)}
                 </td>
                 <td className="right">{formatNumber(order.quantity, 6)}</td>
                 <td className="right muted">—</td>
@@ -249,9 +258,7 @@ export default function TradeHistory({
                 </td>
                 <td>
                   {sourceOrder?.type ?? "market"}
-                  {sourceOrder?.type === "limit" && sourceOrder.limitPrice
-                    ? ` @ ${formatCurrency(sourceOrder.limitPrice)}`
-                    : ""}
+                  {sourceOrder ? orderPriceText(sourceOrder) : ""}
                 </td>
                 <td className="right">{formatNumber(fill.quantity, 6)}</td>
                 <td className="right">{formatCurrency(fill.price)}</td>

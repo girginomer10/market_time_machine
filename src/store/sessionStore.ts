@@ -34,11 +34,13 @@ import {
 } from "../domain/portfolio/portfolio";
 import {
   createLimitOrder,
-  executeLimitOrderFill,
+  createPendingOrder,
+  executePendingOrderFill,
   executeMarketOrder,
-  isLimitOrderTriggered,
+  isPendingOrderTriggered,
   type LimitOrderRequest,
   type OrderRequest,
+  type PendingOrderRequest,
 } from "../domain/broker/simulator";
 import { buildReport } from "../domain/report/report";
 import type { ReportPayload } from "../types/reporting";
@@ -74,6 +76,7 @@ type SessionActions = {
   finish: () => void;
   submitMarketOrder: (req: OrderRequest) => { ok: boolean; message?: string };
   submitLimitOrder: (req: LimitOrderRequest) => { ok: boolean; message?: string };
+  submitPendingOrder: (req: PendingOrderRequest) => { ok: boolean; message?: string };
   cancelOrder: (orderId: string) => { ok: boolean; message?: string };
   updateLimitOrder: (
     orderId: string,
@@ -189,18 +192,24 @@ function processTriggeredLimitOrders(
     );
     for (let orderIndex = 0; orderIndex < orders.length; orderIndex++) {
       const order = orders[orderIndex];
-      if (order.status !== "pending" || order.type !== "limit") continue;
+      if (order.status !== "pending") continue;
       const symbolCandles = state.scenario.candles.filter(
         (c) => c.symbol === order.symbol,
       );
       const candleIndex = lastVisibleCandleIndex(symbolCandles, currentTime);
       const candle = candleIndex >= 0 ? symbolCandles[candleIndex] : undefined;
       if (!candle || candle.closeTime !== currentTime) continue;
-      if (!isLimitOrderTriggered({ order, high: candle.high, low: candle.low })) {
+      if (
+        !isPendingOrderTriggered({
+          order,
+          high: candle.high,
+          low: candle.low,
+        })
+      ) {
         continue;
       }
 
-      const result = executeLimitOrderFill({
+      const result = executePendingOrderFill({
         order,
         broker: state.broker,
         cash: portfolio.cash,
@@ -405,6 +414,34 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       currentTime,
       instrument: state.scenario.instruments.find((i) => i.symbol === req.symbol),
     });
+    set({
+      orders: [...state.orders, result.order],
+      rejectionMessage: result.ok ? undefined : result.reason,
+    });
+    return result.ok ? { ok: true } : { ok: false, message: result.reason };
+  },
+
+  submitPendingOrder: (req) => {
+    const state = get();
+    if (state.status === "finished") {
+      return { ok: false, message: "Scenario already finished." };
+    }
+    const currentTime = currentTimeFor(state);
+    const tradablePrices = tradablePricesFor(
+      state.scenario,
+      currentTime,
+      state.broker,
+    );
+    const tradablePrice = tradablePrices.find((p) => p.symbol === req.symbol);
+    const pendingOrderContext = {
+      broker: state.broker,
+      cash: state.portfolio.cash,
+      position: state.portfolio.positions[req.symbol],
+      tradablePrice,
+      currentTime,
+      instrument: state.scenario.instruments.find((i) => i.symbol === req.symbol),
+    };
+    const result = createPendingOrder({ ...pendingOrderContext, request: req });
     set({
       orders: [...state.orders, result.order],
       rejectionMessage: result.ok ? undefined : result.reason,

@@ -1,6 +1,6 @@
 export type OrderSide = "buy" | "sell";
 
-export type OrderType = "market" | "limit";
+export type OrderType = "market" | "limit" | "stop_loss" | "take_profit";
 
 export type OrderStatus =
   | "pending"
@@ -18,6 +18,7 @@ export type Order = {
   type: OrderType;
   quantity: number;
   limitPrice?: number;
+  triggerPrice?: number;
   status: OrderStatus;
   rejectionReason?: string;
   note?: string;

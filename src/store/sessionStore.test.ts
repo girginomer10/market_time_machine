@@ -117,4 +117,44 @@ describe("sessionStore finish", () => {
     expect(finished.fills[0].quantity).toBe(0.02);
     expect(finished.fills[0].price).toBe(futureLimit);
   });
+
+  it("triggers stop-loss orders during replay processing", () => {
+    const state = useSessionStore.getState();
+    const symbol = state.primarySymbol;
+    const primaryCandles = state.scenario.candles.filter(
+      (candle) => candle.symbol === symbol,
+    );
+    const futureStop = Math.min(
+      ...primaryCandles
+        .slice(state.currentIndex + 1)
+        .map((candle) => candle.low),
+    );
+
+    const entry = state.submitMarketOrder({
+      symbol,
+      side: "buy",
+      type: "market",
+      quantity: 0.01,
+    });
+    expect(entry.ok).toBe(true);
+
+    const placement = useSessionStore.getState().submitPendingOrder({
+      symbol,
+      side: "sell",
+      type: "stop_loss",
+      quantity: 0.01,
+      triggerPrice: futureStop,
+      note: "Protect the opened position.",
+    });
+    expect(placement.ok).toBe(true);
+
+    useSessionStore.getState().finish();
+
+    const finished = useSessionStore.getState();
+    expect(finished.orders).toHaveLength(2);
+    expect(finished.orders[1].status).toBe("filled");
+    expect(finished.fills).toHaveLength(2);
+    expect(finished.fills[1].side).toBe("sell");
+    expect(finished.fills[1].price).toBe(futureStop);
+  });
 });

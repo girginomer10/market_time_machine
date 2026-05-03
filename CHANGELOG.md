@@ -7,6 +7,7 @@ The project currently follows a lightweight changelog while it is in open source
 ## Unreleased
 
 - Added working limit-order edit and cancellation controls, with cancelled/rejected/expired order status badges in trade history.
+- Added stop-loss and take-profit pending orders with replay-time trigger processing.
 
 ## 0.1.0 - Open Source Alpha
 
