@@ -10,6 +10,7 @@ The project currently follows a lightweight changelog while it is in open source
 - Added stop-loss and take-profit pending orders with replay-time trigger processing.
 - Extended working-order edits to stop-loss and take-profit trigger prices.
 - Added All/Working/Closed filters to the trade history table.
+- Added bracket/OCO exits so paired stop-loss and take-profit orders cancel the sibling leg after one fills.
 
 ## 0.1.0 - Open Source Alpha
 

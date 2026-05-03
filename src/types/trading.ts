@@ -19,6 +19,7 @@ export type Order = {
   quantity: number;
   limitPrice?: number;
   triggerPrice?: number;
+  ocoGroupId?: string;
   status: OrderStatus;
   rejectionReason?: string;
   note?: string;

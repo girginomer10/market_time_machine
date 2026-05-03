@@ -4,6 +4,7 @@ import type {
   Fill,
   JournalEntry,
   Order,
+  OrderSide,
   PortfolioSnapshot,
   ReplaySnapshot,
   ReplayStatus,
@@ -48,6 +49,15 @@ import type { ReportPayload } from "../types/reporting";
 const DEFAULT_SPEED = REPLAY_SPEEDS[1];
 export type BrokerMode = "scenario" | BrokerPresetName;
 
+export type BracketOrderRequest = {
+  symbol: string;
+  side: OrderSide;
+  quantity: number;
+  stopPrice: number;
+  targetPrice: number;
+  note?: string;
+};
+
 export type SessionState = {
   scenario: ScenarioPackage;
   broker: BrokerConfig;
@@ -77,6 +87,7 @@ type SessionActions = {
   submitMarketOrder: (req: OrderRequest) => { ok: boolean; message?: string };
   submitLimitOrder: (req: LimitOrderRequest) => { ok: boolean; message?: string };
   submitPendingOrder: (req: PendingOrderRequest) => { ok: boolean; message?: string };
+  submitBracketOrder: (req: BracketOrderRequest) => { ok: boolean; message?: string };
   cancelOrder: (orderId: string) => { ok: boolean; message?: string };
   updateLimitOrder: (
     orderId: string,
@@ -171,6 +182,22 @@ function journalEntryForFill(fill: Fill, note?: string): JournalEntry | undefine
   };
 }
 
+function generateOcoGroupId(): string {
+  const random = Math.random().toString(36).slice(2, 8);
+  return `oco_${Date.now().toString(36)}_${random}`;
+}
+
+function cancelOcoSiblings(orders: Order[], filledOrder: Order): Order[] {
+  if (!filledOrder.ocoGroupId) return orders;
+  return orders.map((order) =>
+    order.id !== filledOrder.id &&
+    order.status === "pending" &&
+    order.ocoGroupId === filledOrder.ocoGroupId
+      ? { ...order, status: "cancelled" }
+      : order,
+  );
+}
+
 function processTriggeredLimitOrders(
   state: SessionState,
   fromIndex: number,
@@ -228,6 +255,7 @@ function processTriggeredLimitOrders(
         rejectionMessage = result.reason;
         continue;
       }
+      orders.splice(0, orders.length, ...cancelOcoSiblings(orders, result.order));
       const prices = tradablePricesFor(
         state.scenario,
         candle.closeTime,
@@ -453,6 +481,83 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     return result.ok ? { ok: true } : { ok: false, message: result.reason };
   },
 
+  submitBracketOrder: (req) => {
+    const state = get();
+    if (state.status === "finished") {
+      return { ok: false, message: "Scenario already finished." };
+    }
+    if (
+      !Number.isFinite(req.stopPrice) ||
+      req.stopPrice <= 0 ||
+      !Number.isFinite(req.targetPrice) ||
+      req.targetPrice <= 0
+    ) {
+      const message = "Invalid bracket prices";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+    if (Math.abs(req.stopPrice - req.targetPrice) <= 0.0000001) {
+      const message = "Stop and target prices must be different.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+
+    const currentTime = currentTimeFor(state);
+    const tradablePrices = tradablePricesFor(
+      state.scenario,
+      currentTime,
+      state.broker,
+    );
+    const tradablePrice = tradablePrices.find((p) => p.symbol === req.symbol);
+    const context = {
+      broker: state.broker,
+      cash: state.portfolio.cash,
+      position: state.portfolio.positions[req.symbol],
+      tradablePrice,
+      currentTime,
+      instrument: state.scenario.instruments.find((i) => i.symbol === req.symbol),
+    };
+    const ocoGroupId = generateOcoGroupId();
+    const stop = createPendingOrder({
+      ...context,
+      request: {
+        symbol: req.symbol,
+        side: req.side,
+        type: "stop_loss",
+        quantity: req.quantity,
+        triggerPrice: req.stopPrice,
+        ocoGroupId,
+        note: req.note,
+      },
+    });
+    if (!stop.ok) {
+      set({ rejectionMessage: stop.reason });
+      return { ok: false, message: stop.reason };
+    }
+    const target = createPendingOrder({
+      ...context,
+      request: {
+        symbol: req.symbol,
+        side: req.side,
+        type: "take_profit",
+        quantity: req.quantity,
+        triggerPrice: req.targetPrice,
+        ocoGroupId,
+        note: req.note,
+      },
+    });
+    if (!target.ok) {
+      set({ rejectionMessage: target.reason });
+      return { ok: false, message: target.reason };
+    }
+
+    set({
+      orders: [...state.orders, stop.order, target.order],
+      rejectionMessage: undefined,
+    });
+    return { ok: true };
+  },
+
   cancelOrder: (orderId) => {
     const state = get();
     if (state.status === "finished") {
@@ -535,6 +640,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             type: "limit",
             quantity: updates.quantity,
             limitPrice: updates.price,
+            ocoGroupId: order.ocoGroupId,
             note: order.note,
           }
         : {
@@ -543,6 +649,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             type: order.type,
             quantity: updates.quantity,
             triggerPrice: updates.price,
+            ocoGroupId: order.ocoGroupId,
             note: order.note,
           };
     const result = createPendingOrder({

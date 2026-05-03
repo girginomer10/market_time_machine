@@ -31,6 +31,7 @@ export type LimitOrderRequest = {
   type: "limit";
   quantity: number;
   limitPrice: number;
+  ocoGroupId?: string;
   note?: string;
 };
 
@@ -40,6 +41,7 @@ export type TriggerOrderRequest = {
   type: "stop_loss" | "take_profit";
   quantity: number;
   triggerPrice: number;
+  ocoGroupId?: string;
   note?: string;
 };
 
@@ -231,6 +233,7 @@ export function createLimitOrder(
     type: "limit",
     quantity: request.quantity,
     limitPrice: request.limitPrice,
+    ocoGroupId: request.ocoGroupId,
     status: "pending",
     note: request.note,
   };
@@ -302,6 +305,7 @@ export function createTriggerOrder(
     type: request.type,
     quantity: request.quantity,
     triggerPrice: request.triggerPrice,
+    ocoGroupId: request.ocoGroupId,
     status: "pending",
     note: request.note,
   };

@@ -209,4 +209,54 @@ describe("sessionStore finish", () => {
     expect(finished.fills[1].quantity).toBe(0.02);
     expect(finished.fills[1].price).toBe(futureStop);
   });
+
+  it("cancels the sibling order when a bracket exit fills", () => {
+    const state = useSessionStore.getState();
+    const symbol = state.primarySymbol;
+    const primaryCandles = state.scenario.candles.filter(
+      (candle) => candle.symbol === symbol,
+    );
+    const futureStop = Math.min(
+      ...primaryCandles
+        .slice(state.currentIndex + 1)
+        .map((candle) => candle.low),
+    );
+    const unreachableTarget =
+      Math.max(
+        ...primaryCandles
+          .slice(state.currentIndex + 1)
+          .map((candle) => candle.high),
+      ) * 10;
+
+    const entry = state.submitMarketOrder({
+      symbol,
+      side: "buy",
+      type: "market",
+      quantity: 0.02,
+    });
+    expect(entry.ok).toBe(true);
+
+    const placement = useSessionStore.getState().submitBracketOrder({
+      symbol,
+      side: "sell",
+      quantity: 0.02,
+      stopPrice: futureStop,
+      targetPrice: unreachableTarget,
+      note: "Bracket should cancel the unfilled target.",
+    });
+    expect(placement.ok).toBe(true);
+
+    const working = useSessionStore.getState();
+    expect(working.orders).toHaveLength(3);
+    expect(working.orders[1].ocoGroupId).toBeTruthy();
+    expect(working.orders[1].ocoGroupId).toBe(working.orders[2].ocoGroupId);
+
+    useSessionStore.getState().finish();
+
+    const finished = useSessionStore.getState();
+    expect(finished.fills).toHaveLength(2);
+    expect(finished.orders[1].status).toBe("filled");
+    expect(finished.orders[2].status).toBe("cancelled");
+    expect(finished.fills[1].price).toBe(futureStop);
+  });
 });

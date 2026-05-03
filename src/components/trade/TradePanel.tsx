@@ -36,6 +36,8 @@ const BROKER_MODES: Array<{
   },
 ];
 
+type TicketOrderType = OrderType | "bracket";
+
 type Props = {
   tradablePrice?: TradablePrice;
   cash: number;
@@ -70,6 +72,7 @@ export default function TradePanel({
   const submitMarketOrder = useSessionStore((s) => s.submitMarketOrder);
   const submitLimitOrder = useSessionStore((s) => s.submitLimitOrder);
   const submitPendingOrder = useSessionStore((s) => s.submitPendingOrder);
+  const submitBracketOrder = useSessionStore((s) => s.submitBracketOrder);
   const rejectionMessage = useSessionStore((s) => s.rejectionMessage);
   const clearRejection = useSessionStore((s) => s.clearRejection);
   const status = useSessionStore((s) => s.status);
@@ -84,8 +87,9 @@ export default function TradePanel({
 
   const [quantity, setQuantity] = useState<string>("0.05");
   const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [orderType, setOrderType] = useState<OrderType>("market");
+  const [orderType, setOrderType] = useState<TicketOrderType>("market");
   const [limitPrice, setLimitPrice] = useState<string>("");
+  const [targetPrice, setTargetPrice] = useState<string>("");
   const [note, setNote] = useState<string>("");
 
   const totalReturn = useMemo(
@@ -97,7 +101,8 @@ export default function TradePanel({
     totalValue > 0 ? Math.max(0, Math.min(1, positionsValue / totalValue)) : 0;
   const heldQty = position?.quantity ?? 0;
   const marketPrice = tradablePrice?.price ?? position?.marketPrice;
-  const hasTriggerPrice = orderType !== "market";
+  const hasTriggerPrice = orderType !== "market" && orderType !== "bracket";
+  const hasBracketPrices = orderType === "bracket";
   const notionalPrice =
     hasTriggerPrice && Number.isFinite(Number(limitPrice))
       ? Number(limitPrice)
@@ -125,7 +130,11 @@ export default function TradePanel({
   const isFinished = status === "finished";
   const brokerLocked = fills.length > 0;
   const canSell = broker.allowShort || heldQty > 0;
-  const canSubmit = side === "buy" || canSell;
+  const canBracket =
+    orderType === "bracket" &&
+    heldQty !== 0 &&
+    ((heldQty > 0 && side === "sell") || (heldQty < 0 && side === "buy"));
+  const canSubmit = orderType === "bracket" ? canBracket : side === "buy" || canSell;
 
   const pendingPriceLabel =
     orderType === "limit"
@@ -136,7 +145,7 @@ export default function TradePanel({
   const orderLabel = orderType.replace("_", " ");
 
   function defaultPriceFor(
-    nextType: OrderType,
+    nextType: TicketOrderType,
     nextSide: "buy" | "sell",
   ): string {
     if (!tradablePrice) return "";
@@ -154,17 +163,23 @@ export default function TradePanel({
     return String(Math.round(price * multiplier * 100) / 100);
   }
 
-  function selectOrderType(nextType: OrderType): void {
+  function selectOrderType(nextType: TicketOrderType): void {
     const nextSide =
-      nextType !== "limit" && heldQty > 0
+      nextType !== "limit" && nextType !== "market" && heldQty > 0
         ? "sell"
-        : nextType !== "limit" && heldQty < 0
+        : nextType !== "limit" && nextType !== "market" && heldQty < 0
           ? "buy"
           : side;
     setOrderType(nextType);
     setSide(nextSide);
+    if (nextType === "bracket" && heldQty !== 0) {
+      setQuantity(String(Math.abs(heldQty)));
+    }
     if (nextType !== "market") {
       setLimitPrice(defaultPriceFor(nextType, nextSide));
+    }
+    if (nextType === "bracket") {
+      setTargetPrice(defaultPriceFor("take_profit", nextSide));
     }
   }
 
@@ -191,6 +206,16 @@ export default function TradePanel({
           type: "limit",
           quantity: qty,
           limitPrice: Number(limitPrice),
+          note: note.trim() || undefined,
+        });
+      }
+      if (orderType === "bracket") {
+        return submitBracketOrder({
+          symbol,
+          side,
+          quantity: qty,
+          stopPrice: Number(limitPrice),
+          targetPrice: Number(targetPrice),
           note: note.trim() || undefined,
         });
       }
@@ -340,6 +365,15 @@ export default function TradePanel({
           >
             Target
           </button>
+          <button
+            className={orderType === "bracket" ? "active" : ""}
+            onClick={() => selectOrderType("bracket")}
+            role="radio"
+            aria-checked={orderType === "bracket"}
+            disabled={isFinished}
+          >
+            Bracket
+          </button>
         </div>
         <div className="field-row">
           <label htmlFor="qty">Qty</label>
@@ -365,6 +399,32 @@ export default function TradePanel({
             />
           </div>
         ) : null}
+        {hasBracketPrices ? (
+          <>
+            <div className="field-row">
+              <label htmlFor="bracket-stop-price">Stop</label>
+              <input
+                id="bracket-stop-price"
+                inputMode="decimal"
+                value={limitPrice}
+                onChange={(e) => setLimitPrice(e.target.value)}
+                placeholder={tradablePrice ? defaultPriceFor("stop_loss", side) : "0"}
+                disabled={isFinished}
+              />
+            </div>
+            <div className="field-row">
+              <label htmlFor="bracket-target-price">Target</label>
+              <input
+                id="bracket-target-price"
+                inputMode="decimal"
+                value={targetPrice}
+                onChange={(e) => setTargetPrice(e.target.value)}
+                placeholder={tradablePrice ? defaultPriceFor("take_profit", side) : "0"}
+                disabled={isFinished}
+              />
+            </div>
+          </>
+        ) : null}
         <div className="ticket-summary">
           <Row label="Expected notional" value={expectedNotional} />
           <Row label={`${broker.commissionRateBps} bps commission`} value={commission} />
@@ -384,8 +444,12 @@ export default function TradePanel({
           disabled={isFinished || !tradablePrice || !canSubmit}
         >
           {!canSubmit
-            ? "Insufficient position"
-            : `Place ${orderLabel} ${side === "buy" ? "buy" : heldQty <= 0 && broker.allowShort ? "short" : "sell"}`}
+            ? orderType === "bracket"
+              ? "Open position required"
+              : "Insufficient position"
+            : orderType === "bracket"
+              ? "Place bracket exit"
+              : `Place ${orderLabel} ${side === "buy" ? "buy" : heldQty <= 0 && broker.allowShort ? "short" : "sell"}`}
         </button>
         {rejectionMessage ? (
           <div className="rejection" role="alert">

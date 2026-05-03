@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-03 17:30 - Codex
+
+- Task: Added bracket/OCO exits for paired stop-loss and take-profit orders.
+- Changed: Added optional `ocoGroupId` on orders; pending order requests preserve OCO ids; `submitBracketOrder` creates paired stop-loss/take-profit exits; replay processing cancels sibling pending orders when one OCO leg fills. `TradePanel` exposes a Bracket ticket mode with stop and target inputs. Updated broker docs, roadmap, changelog, and store regression coverage.
+- Verified: `npm run test -- sessionStore TradePanel` passed 7/7 focused tests; `npm run check` passed lint, 210/210 tests, and production build.
+- Memory: none; no repo semantic memory directory is installed. Durable note: bracket orders currently append stop first, then target, so if both prices are crossed inside the same candle, the stop leg wins and target is cancelled.
+- Next: Browser QA for bracket creation and OCO cancellation, then consider showing OCO group labels in trade history.
+
 ## 2026-05-03 16:34 - Codex
 
 - Task: Added trade history filters for faster order/fill review.

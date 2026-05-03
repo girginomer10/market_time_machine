@@ -70,6 +70,7 @@ Current alpha support:
 
 - Market orders fill immediately at the visible tradable price with configured spread, fees, and slippage.
 - Limit, stop-loss, and take-profit orders remain working until a future visible candle range triggers them.
+- Bracket exits place paired stop-loss and take-profit orders in an OCO group, so the unfilled sibling is cancelled after one leg fills.
 - Stop-loss and take-profit orders currently fill at their trigger price; stop-market slippage is a future broker-realism enhancement.
 
 ## Core Types
