@@ -14,6 +14,7 @@ The project currently follows a lightweight changelog while it is in open source
 - Surfaced OCO group labels in trade history so bracket legs and source fills stay easy to match.
 - Added the first professional-emulation pass: volume-limited partial fills, gap-aware stop/target execution, time-in-force expiry, replay audit events, margin snapshots, borrow costs, forced liquidation fills, chart/order markers, risk panel, and execution-quality reporting.
 - Added a local licensed OHLCV importer that generates gitignored `local-*` scenario packages with source-manifest metadata.
+- Added a visible replay audit panel so order, fill, risk, and system events can be reviewed during a session.
 
 ## 0.1.0 - Open Source Alpha
 

@@ -4,6 +4,7 @@ import ReplayControls from "../components/replay/ReplayControls";
 import EventTimeline from "../components/timeline/EventTimeline";
 import TradePanel from "../components/trade/TradePanel";
 import TradeHistory from "../components/journal/TradeHistory";
+import AuditTrail from "../components/audit/AuditTrail";
 import PostGameReport from "../components/report/PostGameReport";
 import { listScenarios } from "../data/scenarios";
 import { selectSnapshot, useSessionStore } from "../store/sessionStore";
@@ -65,6 +66,13 @@ export default function App() {
   }, [report]);
 
   const tradablePrice = snapshot.tradablePrices[0];
+  const auditEvents = snapshot.auditEvents ?? [];
+  const riskEventCount = auditEvents.filter(
+    (event) =>
+      event.type === "margin_call" ||
+      event.type === "forced_liquidation" ||
+      event.type === "borrow_cost",
+  ).length;
   const primarySymbol = scenario.meta.symbols[0];
   const primaryInstrument = scenario.instruments.find(
     (instrument) => instrument.symbol === primarySymbol,
@@ -314,6 +322,17 @@ export default function App() {
                   status === "finished" ? undefined : updatePendingOrder
                 }
               />
+            </div>
+          </div>
+          <div className="panel panel-flex">
+            <div className="panel-head">
+              <span className="panel-title">Replay audit</span>
+              <span className="panel-meta">
+                {auditEvents.length} events · {riskEventCount} risk
+              </span>
+            </div>
+            <div className="panel-body scrollable">
+              <AuditTrail events={auditEvents} />
             </div>
           </div>
           <div className="panel panel-flex">

@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-07 22:32 - Codex
+
+- Task: Continued professional-emulator UX by surfacing the replay audit log in the app.
+- Changed: Added `AuditTrail` UI with typed/tinted audit event rows, wired it into the bottom dashboard as a Replay audit panel, adjusted bottom-grid styling for four operational panels, and added component coverage. Updated changelog.
+- Verified: `npm run test -- AuditTrail` passed 2/2 focused tests; `npm run check` passed lint, 218/218 tests, and production build. In-app browser smoke at `http://127.0.0.1:5173/` confirmed the Replay audit panel and empty state render.
+- Memory: none; no repo semantic memory directory is installed. Durable note: audit events are now user-visible during replay, so future audit event messages should stay short, non-secret, and user-facing.
+- Next: Add a real E2E harness for placing orders and asserting audit/blotter updates after user interactions; then consider filtering audit events by category.
+
 ## 2026-05-07 22:24 - Codex
 
 - Task: Implemented the first professional-emulator pass from the roadmap.
