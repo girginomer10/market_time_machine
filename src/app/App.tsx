@@ -7,6 +7,7 @@ import TradeHistory from "../components/journal/TradeHistory";
 import AuditTrail from "../components/audit/AuditTrail";
 import PostGameReport from "../components/report/PostGameReport";
 import { listScenarios } from "../data/scenarios";
+import { eventCoverageSummary } from "../domain/scenario/eventCoverage";
 import { selectSnapshot, useSessionStore } from "../store/sessionStore";
 import type { Candle, ReplayStatus } from "../types";
 import { formatCurrency, formatNumber, formatPct } from "../utils/format";
@@ -98,6 +99,10 @@ export default function App() {
         a.publishedAt.localeCompare(b.publishedAt),
       ),
     [snapshot.visibleEvents],
+  );
+  const scenarioEventCoverage = useMemo(
+    () => eventCoverageSummary(scenario.events),
+    [scenario.events],
   );
   const eventNumbers = useMemo(() => {
     const map = new Map<string, number>();
@@ -289,7 +294,8 @@ export default function App() {
             <div className="panel-head">
               <span className="panel-title">Event timeline</span>
               <span className="panel-meta">
-                {snapshot.visibleEvents.length} visible · future hidden
+                {snapshot.visibleEvents.length} visible ·{" "}
+                {scenarioEventCoverage.label} · future hidden
               </span>
             </div>
             <div className="panel-body scrollable">

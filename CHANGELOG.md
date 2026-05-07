@@ -15,6 +15,7 @@ The project currently follows a lightweight changelog while it is in open source
 - Added the first professional-emulation pass: volume-limited partial fills, gap-aware stop/target execution, time-in-force expiry, replay audit events, margin snapshots, borrow costs, forced liquidation fills, chart/order markers, risk panel, and execution-quality reporting.
 - Added a local licensed OHLCV importer that generates gitignored `local-*` scenario packages with source-manifest metadata.
 - Added a visible replay audit panel so order, fill, risk, and system events can be reviewed during a session.
+- Completed BTC 2020-2021 event source attribution and surfaced scenario event-source coverage plus source links in the event timeline.
 
 ## 0.1.0 - Open Source Alpha
 

@@ -164,6 +164,18 @@ describe("validateScenarioPackage", () => {
     ).toBe(true);
   });
 
+  it("warns when events are missing source attribution", () => {
+    const pkg = clone(makeScenario());
+    const result = validateScenarioPackage(pkg);
+
+    expect(result.warnings.some((i) => i.code === "events.source_missing")).toBe(
+      true,
+    );
+    expect(
+      result.warnings.some((i) => i.code === "events.source_url_missing"),
+    ).toBe(true);
+  });
+
   it("flags events that reference unknown symbols", () => {
     const pkg = clone(makeScenario());
     pkg.events[0].affectedSymbols = ["MISSING"];

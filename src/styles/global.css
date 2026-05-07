@@ -1324,6 +1324,22 @@ textarea:focus {
   font-weight: 800;
 }
 
+.event-source,
+.event-source-link {
+  color: var(--text-dim);
+  font-family: var(--sans);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.event-source-link {
+  text-decoration: none;
+}
+
+.event-source-link:hover {
+  color: var(--accent);
+}
+
 .event-body strong {
   color: var(--text);
   line-height: 1.25;

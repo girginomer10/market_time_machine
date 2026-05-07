@@ -163,7 +163,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 5,
     sentiment: "negative",
-    source: "WHO press conference",
+    source: "WHO Director-General remarks",
+    sourceUrl:
+      "https://www.who.int/news-room/speeches/item/who-director-general-s-opening-remarks-at-the-media-briefing-on-covid-19---11-march-2020",
   },
   {
     id: "evt-2020-03-15-fed",
@@ -176,7 +178,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 5,
     sentiment: "mixed",
-    source: "Federal Reserve press release",
+    source: "Federal Reserve FOMC statement",
+    sourceUrl:
+      "https://www.federalreserve.gov/newsevents/pressreleases/monetary20200315a.htm",
   },
   {
     id: "evt-2020-05-11-halving",
@@ -189,6 +193,8 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 4,
     sentiment: "neutral",
+    source: "Blockchain.com Explorer",
+    sourceUrl: "https://www.blockchain.com/explorer/blocks/btc/630000",
   },
   {
     id: "evt-2020-08-11-microstrategy",
@@ -201,6 +207,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 4,
     sentiment: "positive",
+    source: "MicroStrategy press release",
+    sourceUrl:
+      "https://www.nasdaq.com/press-release/microstrategy-adopts-bitcoin-as-primary-treasury-reserve-asset-2020-08-11",
   },
   {
     id: "evt-2020-10-08-square",
@@ -213,6 +222,8 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 3,
     sentiment: "positive",
+    source: "Square press release",
+    sourceUrl: "https://squareup.com/us/en/press/2020-bitcoin-investment",
   },
   {
     id: "evt-2020-12-21-coinbase",
@@ -225,6 +236,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 3,
     sentiment: "positive",
+    source: "CNBC market report",
+    sourceUrl:
+      "https://www.cnbc.com/2020/12/16/bitcoin-breaks-above-20000-for-the-first-time-ever.html",
   },
   {
     id: "evt-2021-02-08-tesla",
@@ -237,6 +251,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 5,
     sentiment: "positive",
+    source: "Tesla 2020 Form 10-K",
+    sourceUrl:
+      "https://www.sec.gov/Archives/edgar/data/1318605/000156459021004599/tsla-10k_20201231.htm",
   },
   {
     id: "evt-2021-04-14-coinbase",
@@ -249,6 +266,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 4,
     sentiment: "positive",
+    source: "Coinbase investor relations",
+    sourceUrl:
+      "https://investor.coinbase.com/news/news-details/2021/Coinbase-Announces-Effectiveness-of-Registration-Statement-and-Anticipated-Listing-Date-of-its-Class-A-Common-Stock-on-the-Nasdaq-Global-Select-Market/default.aspx",
   },
   {
     id: "evt-2021-05-12-tesla-reverse",
@@ -261,6 +281,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 5,
     sentiment: "negative",
+    source: "CoinDesk market report",
+    sourceUrl:
+      "https://www.coindesk.com/business/2021/05/12/elon-musk-says-tesla-is-suspending-bitcoin-payments-over-environmental-concerns",
   },
   {
     id: "evt-2021-05-19-china-ban",
@@ -273,6 +296,8 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 5,
     sentiment: "negative",
+    source: "China Securities Journal",
+    sourceUrl: "https://www.cs.com.cn/xwzx/hg/202105/t20210518_6168004.html",
   },
   {
     id: "evt-2021-06-09-elsalvador-law",
@@ -285,6 +310,8 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 4,
     sentiment: "positive",
+    source: "Asamblea Legislativa de El Salvador",
+    sourceUrl: "https://www.asamblea.gob.sv/node/11282",
   },
   {
     id: "evt-2021-09-07-elsalvador",
@@ -297,6 +324,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 3,
     sentiment: "positive",
+    source: "Diario Oficial de El Salvador",
+    sourceUrl:
+      "https://www.diariooficial.gob.sv/diarios/do-2021/06-junio/09-06-2021.pdf",
   },
   {
     id: "evt-2021-10-19-bitoetf",
@@ -309,6 +339,9 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 4,
     sentiment: "positive",
+    source: "ProShares press release",
+    sourceUrl:
+      "https://www.proshares.com/press-releases/proshares-to-launch-the-first-u.s.-bitcoin-linked-etf-on-october-19",
   },
   {
     id: "evt-2021-11-10-cpi",
@@ -321,6 +354,8 @@ const events: MarketEvent[] = [
     affectedSymbols: [SYMBOL],
     importance: 4,
     sentiment: "mixed",
+    source: "U.S. Bureau of Labor Statistics",
+    sourceUrl: "https://www.bls.gov/news.release/archives/cpi_11102021.htm",
   },
 ];
 

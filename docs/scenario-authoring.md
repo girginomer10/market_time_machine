@@ -25,6 +25,7 @@ Before opening a pull request, confirm:
 - Candles are sorted by `closeTime` and do not overlap
 - Every event carries both `happenedAt` and `publishedAt`
 - `publishedAt` is the time the market could first know about the event, not the time the underlying thing happened
+- Every curated event should carry a concise `source` label and a traceable `sourceUrl`; missing attribution is treated as a validator warning
 - Event summaries are written in present-tense, knowable language — no hindsight
 - `affectedSymbols` and candle symbols all appear in `instruments`
 - Broker assumptions are realistic for the asset class (crypto vs. equities differ on fractional, leverage, hours)

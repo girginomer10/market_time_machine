@@ -422,6 +422,22 @@ export function validateEvents(
         }
       }
     }
+    if (!ev.source?.trim()) {
+      issues.push({
+        level: "warning",
+        code: "events.source_missing",
+        message: `Event ${ev.id} is missing a source label`,
+        path: `${path}.source`,
+      });
+    }
+    if (!ev.sourceUrl?.trim()) {
+      issues.push({
+        level: "warning",
+        code: "events.source_url_missing",
+        message: `Event ${ev.id} is missing a traceable source URL`,
+        path: `${path}.sourceUrl`,
+      });
+    }
     if (
       isIsoTimestamp(ev.publishedAt) &&
       Number.isFinite(startMs) &&

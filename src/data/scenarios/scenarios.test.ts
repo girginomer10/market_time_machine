@@ -56,6 +56,14 @@ describe("btc-2020-2021 scenario", () => {
     expect(types.has("regulation")).toBe(true);
   });
 
+  it("ships every event with a traceable source URL", () => {
+    expect(btc20202021Scenario.events.length).toBeGreaterThan(10);
+    expect(btc20202021Scenario.events.every((event) => event.source)).toBe(true);
+    expect(btc20202021Scenario.events.every((event) => event.sourceUrl)).toBe(
+      true,
+    );
+  });
+
   it("ships benchmarks aligned with candle close times", () => {
     const candleTimes = new Set(
       btc20202021Scenario.candles.map((c) => c.closeTime),

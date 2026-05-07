@@ -59,6 +59,18 @@ export default function EventTimeline({
                   {event.type.replace(/_/g, " ")}
                 </span>
                 <span>importance {event.importance}/5</span>
+                {event.sourceUrl ? (
+                  <a
+                    className="event-source-link"
+                    href={event.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {event.source ?? "Source"}
+                  </a>
+                ) : event.source ? (
+                  <span className="event-source">{event.source}</span>
+                ) : null}
               </div>
               <strong>{event.title}</strong>
               <p>{event.summary}</p>

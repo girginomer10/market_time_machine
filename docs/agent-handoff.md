@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-07 23:39 - Codex
+
+- Task: Completed curated event/news attribution coverage for the BTC scenario and made event sourcing visible in the app.
+- Changed: Added `source`/`sourceUrl` to all 14 BTC 2020-2021 events, added event-source coverage helper/tests, surfaced `14/14 sourced` in the event timeline header, rendered source links on visible event rows, and added validator warnings for missing event attribution. Updated scenario authoring docs and changelog.
+- Verified: `npm run test -- eventCoverage EventTimeline scenarios scenario` passed 56/56 focused tests; `npm run check` passed lint, 224/224 tests, and production build. In-app browser smoke at `http://127.0.0.1:5173/` confirmed the event timeline shows `14/14 sourced`, and after skipping to end, source links such as WHO and BLS render.
+- Memory: none; no repo semantic memory directory is installed. Durable note: curated shipped events should include both `source` and `sourceUrl`; missing attribution is now a validator warning and should be treated as a content-quality gap.
+- Next: Add a stronger source-manifest/audit export in finished reports so scenario provenance can be reviewed outside the live timeline.
+
 ## 2026-05-07 22:32 - Codex
 
 - Task: Continued professional-emulator UX by surfacing the replay audit log in the app.

@@ -13,6 +13,8 @@ const visibleEvent: MarketEvent = {
   affectedSymbols: ["BTCUSD"],
   importance: 5,
   sentiment: "negative",
+  source: "Official release",
+  sourceUrl: "https://example.com/release",
 };
 
 const futureEvent: MarketEvent = {
@@ -34,5 +36,19 @@ describe("EventTimeline", () => {
 
     expect(screen.getByText("Visible shock headline")).toBeInTheDocument();
     expect(screen.queryByText(futureEvent.title)).not.toBeInTheDocument();
+  });
+
+  it("links visible events back to their source material", () => {
+    render(
+      <EventTimeline
+        events={[visibleEvent]}
+        eventNumbers={new Map([["visible", 1]])}
+        onHoverEvent={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("link", { name: "Official release" }),
+    ).toHaveAttribute("href", "https://example.com/release");
   });
 });
