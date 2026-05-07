@@ -4,7 +4,7 @@ import {
   useSessionStore,
 } from "../../store/sessionStore";
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
-import type { OrderType, TradablePrice } from "../../types";
+import type { MarginSnapshot, OrderType, RiskSnapshot, TradablePrice } from "../../types";
 import { estimateOneWaySpreadCost } from "./costEstimates";
 
 const ZERO_EPSILON = 0.0000001;
@@ -46,6 +46,8 @@ type Props = {
   realizedPnl: number;
   unrealizedPnl: number;
   initialCash: number;
+  margin?: MarginSnapshot;
+  risk?: RiskSnapshot;
 };
 
 function toneFor(value: number): "pos" | "neg" | "neutral" {
@@ -68,6 +70,8 @@ export default function TradePanel({
   realizedPnl,
   unrealizedPnl,
   initialCash,
+  margin,
+  risk,
 }: Props) {
   const submitMarketOrder = useSessionStore((s) => s.submitMarketOrder);
   const submitLimitOrder = useSessionStore((s) => s.submitLimitOrder);
@@ -296,6 +300,55 @@ export default function TradePanel({
               />
             </div>
           )}
+        </div>
+      </section>
+
+      <section className="panel panel-risk">
+        <div className="panel-head">
+          <span className="panel-title">Risk and margin</span>
+          <span className={risk?.liquidationWarning ? "panel-meta neg" : "panel-meta"}>
+            {risk?.liquidationWarning ? "Warning" : "Normal"}
+          </span>
+        </div>
+        <div className="risk-grid">
+          <Metric
+            label="Equity"
+            value={margin ? formatCurrency(margin.equity) : "—"}
+            tone={margin && margin.equity < 0 ? "neg" : "neutral"}
+          />
+          <Metric
+            label="Buying power"
+            value={risk ? formatCurrency(risk.buyingPower) : "—"}
+          />
+          <Metric
+            label="Leverage"
+            value={
+              risk && Number.isFinite(risk.leverage)
+                ? `${formatNumber(risk.leverage, 2)}x`
+                : "—"
+            }
+            tone={risk && risk.leverage > broker.maxLeverage ? "neg" : "neutral"}
+          />
+          <Metric
+            label="Margin excess"
+            value={margin ? formatCurrency(margin.excessEquity) : "—"}
+            tone={margin && margin.excessEquity < 0 ? "neg" : "neutral"}
+          />
+        </div>
+        <div className="margin-meter" aria-label="Margin utilization">
+          <span
+            className={risk?.liquidationWarning ? "danger" : ""}
+            style={{
+              width: `${Math.min(100, (margin?.marginUtilization ?? 0) * 100)}%`,
+            }}
+          />
+        </div>
+        <div className="risk-note">
+          {margin?.requiresLiquidation
+            ? "Liquidation threshold has been breached."
+            : margin?.isMarginCall
+              ? "Maintenance margin is under pressure."
+              : "Margin state is within broker limits."}
         </div>
       </section>
 

@@ -7,6 +7,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import type { Candle, MarketEvent } from "../../types";
+import type { Fill, Order } from "../../types";
 import {
   buildOverlayMarkers,
   firstChartWindowIndex,
@@ -16,6 +17,8 @@ import {
 type Props = {
   candles: Candle[];
   events: MarketEvent[];
+  fills: Fill[];
+  orders: Order[];
   eventNumbers: Map<string, number>;
   hoveredEventId?: string;
   onHoverEvent: (id?: string) => void;
@@ -24,6 +27,8 @@ type Props = {
 export default function ReplayChart({
   candles,
   events,
+  fills,
+  orders,
   eventNumbers,
   hoveredEventId,
   onHoverEvent,
@@ -61,6 +66,38 @@ export default function ReplayChart({
   const overlayMarkers = useMemo<OverlayMarker[]>(() => {
     return buildOverlayMarkers(candles, events, eventNumbers);
   }, [candles, events, eventNumbers]);
+  const tradeMarkers = useMemo(() => {
+    if (candles.length === 0) return [];
+    const first = firstChartWindowIndex(candles.length);
+    const visibleWindow = candles.slice(first);
+    const timeToIndex = new Map(
+      visibleWindow.map((candle, index) => [candle.closeTime, index]),
+    );
+    const denominator = Math.max(1, visibleWindow.length - 1);
+    const fillMarkers = fills
+      .map((fill) => {
+        const index = timeToIndex.get(fill.time);
+        if (index === undefined) return undefined;
+        return {
+          id: fill.id,
+          leftPct: (index / denominator) * 100,
+          label: fill.forcedLiquidation ? "L" : fill.side === "buy" ? "B" : "S",
+          tone: fill.forcedLiquidation ? "liquidation" : fill.side,
+          title: `${fill.side} ${fill.quantity} ${fill.symbol} @ ${fill.price}`,
+        };
+      })
+      .filter((marker): marker is NonNullable<typeof marker> => Boolean(marker));
+    const orderMarkers = orders
+      .filter((order) => order.status === "pending" || order.status === "partially_filled")
+      .map((order) => ({
+        id: order.id,
+        leftPct: 98,
+        label: order.type === "limit" ? "LMT" : order.type === "stop_loss" ? "STP" : "TGT",
+        tone: "working",
+        title: `${order.type} ${order.side} ${order.remainingQuantity ?? order.quantity} ${order.symbol}`,
+      }));
+    return [...fillMarkers, ...orderMarkers];
+  }, [candles, fills, orders]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -148,6 +185,18 @@ export default function ReplayChart({
           >
             {number}
           </button>
+        ))}
+      </div>
+      <div className="chart-trade-layer" aria-label="Visible order and fill markers">
+        {tradeMarkers.map((marker) => (
+          <span
+            key={marker.id}
+            className={`chart-trade-marker ${marker.tone}`}
+            style={{ left: `${marker.leftPct}%` }}
+            title={marker.title}
+          >
+            {marker.label}
+          </span>
         ))}
       </div>
       <div className="now-line" aria-hidden>

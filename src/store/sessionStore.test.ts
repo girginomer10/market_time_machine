@@ -259,4 +259,50 @@ describe("sessionStore finish", () => {
     expect(finished.orders[2].status).toBe("cancelled");
     expect(finished.fills[1].price).toBe(futureStop);
   });
+
+  it("records audit and liquidates positions when margin threshold is breached", () => {
+    const state = useSessionStore.getState();
+    const symbol = state.primarySymbol;
+    const candle = state.scenario.candles.find((c) => c.symbol === symbol);
+    expect(candle).toBeTruthy();
+    if (!candle) return;
+
+    useSessionStore.setState({
+      broker: {
+        ...state.broker,
+        allowShort: true,
+        maxLeverage: 4,
+        marginCallPolicy: "liquidate_on_threshold",
+        spreadBps: 0,
+        slippageModel: "none",
+      },
+      portfolio: {
+        cash: -candle.close * 0.98,
+        realizedPnl: 0,
+        feesPaid: 0,
+        slippagePaid: 0,
+        financingPaid: 0,
+        positions: {
+          [symbol]: {
+            symbol,
+            quantity: 1,
+            averagePrice: candle.close,
+            marketPrice: candle.close,
+            marketValue: candle.close,
+            unrealizedPnl: 0,
+            realizedPnl: 0,
+          },
+        },
+      },
+    });
+
+    useSessionStore.getState().stepForward();
+
+    const next = useSessionStore.getState();
+    expect(next.fills.some((fill) => fill.forcedLiquidation)).toBe(true);
+    expect(
+      next.auditEvents.some((event) => event.type === "forced_liquidation"),
+    ).toBe(true);
+    expect(next.portfolio.positions[symbol].quantity).toBe(0);
+  });
 });

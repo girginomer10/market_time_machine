@@ -15,6 +15,7 @@ coverage
 # provider terms and should not be committed unless explicitly licensed.
 local-data/
 src/data/scenarios/sp500-covid-2020-fred/
+src/data/scenarios/local-*/
 
 # Editor
 .vscode/*

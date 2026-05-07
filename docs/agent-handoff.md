@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-07 22:24 - Codex
+
+- Task: Implemented the first professional-emulator pass from the roadmap.
+- Changed: Added public order/fill/broker/scenario metadata for TIF, partial fills, gap-aware stops, execution reasons, margin/risk snapshots, audit events, market calendars, source manifests, and corporate actions. Broker/session replay now supports volume-limited partial fills, gap-open stop/target execution, TIF expiry, replay audit logs, borrow costs, margin snapshots, and forced liquidation fills. UI now surfaces risk/margin, chart order/fill markers, richer blotter execution details, and execution-quality report metrics. Added `npm run import:ohlcv` for gitignored local licensed OHLCV scenario generation.
+- Verified: `npm run check` passed lint, 216/216 tests, and production build. In-app browser smoke opened `http://127.0.0.1:5173/` and confirmed the new risk panel and chart order/fill marker layer were present; ticket order interaction is covered by `TradePanel.test.tsx`.
+- Memory: none; no repo semantic memory directory is installed. Durable note: local OHLCV imports generate `src/data/scenarios/local-*/` and are gitignored by default; do not commit generated market data unless redistribution rights are explicit.
+- Next: Add a dedicated Playwright E2E harness outside the in-app browser backend for full click-through coverage of placing orders, bracket exits, partial fills, and forced liquidation.
+
 ## 2026-05-07 19:02 - Codex
 
 - Task: Continued bracket/OCO workflow polish by making linked exit legs visible in trade history.

@@ -1,10 +1,13 @@
 import type {
   BrokerConfig,
+  Candle,
+  ExecutionPriceSource,
   Fill,
   Instrument,
   Order,
   OrderSide,
   Position,
+  TimeInForce,
   TradablePrice,
 } from "../../types";
 import {
@@ -22,6 +25,7 @@ export type MarketOrderRequest = {
   side: OrderSide;
   type: "market";
   quantity: number;
+  timeInForce?: TimeInForce;
   note?: string;
 };
 
@@ -32,6 +36,8 @@ export type LimitOrderRequest = {
   quantity: number;
   limitPrice: number;
   ocoGroupId?: string;
+  timeInForce?: TimeInForce;
+  expiresAt?: string;
   note?: string;
 };
 
@@ -42,6 +48,8 @@ export type TriggerOrderRequest = {
   quantity: number;
   triggerPrice: number;
   ocoGroupId?: string;
+  timeInForce?: TimeInForce;
+  expiresAt?: string;
   note?: string;
 };
 
@@ -101,6 +109,60 @@ export type BrokerInputs = {
   volatility?: number;
 };
 
+function orderFillProgress(
+  quantity: number,
+  fillPrice?: number,
+  previousFilled = 0,
+  previousAverage = 0,
+) {
+  const filledQuantity = previousFilled + quantity;
+  const averageFillPrice =
+    filledQuantity > 0 && fillPrice !== undefined
+      ? (previousFilled * previousAverage + quantity * fillPrice) /
+        filledQuantity
+      : previousAverage;
+  return {
+    filledQuantity,
+    averageFillPrice,
+  };
+}
+
+function fillableQuantityFor(
+  requestedQuantity: number,
+  referencePrice: number,
+  broker: BrokerConfig,
+  candleVolumeNotional?: number,
+): { quantity: number; participation?: number } {
+  if (
+    broker.partialFillPolicy !== "volume_limited" ||
+    !broker.maxParticipationRate ||
+    broker.maxParticipationRate <= 0 ||
+    !candleVolumeNotional ||
+    candleVolumeNotional <= 0 ||
+    referencePrice <= 0
+  ) {
+    return { quantity: requestedQuantity };
+  }
+
+  const maxNotional = candleVolumeNotional * broker.maxParticipationRate;
+  const maxQuantity = maxNotional / referencePrice;
+  const quantity = Math.max(0, Math.min(requestedQuantity, maxQuantity));
+  return {
+    quantity,
+    participation:
+      candleVolumeNotional > 0 ? (quantity * referencePrice) / candleVolumeNotional : undefined,
+  };
+}
+
+function statusForFill(
+  normalizedQuantity: number,
+  fillQuantity: number,
+): Order["status"] {
+  return fillQuantity + 1e-9 >= normalizedQuantity
+    ? "filled"
+    : "partially_filled";
+}
+
 export function executeMarketOrder(inputs: BrokerInputs): FillResult {
   const { request, broker, cash, position, tradablePrice, currentTime } =
     inputs;
@@ -112,6 +174,7 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
     side: request.side,
     type: "market",
     quantity: request.quantity,
+    timeInForce: request.timeInForce ?? "day",
     status: "pending",
     note: request.note,
   };
@@ -121,21 +184,30 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
     broker,
     inputs.instrument,
   );
+  const fillable = tradablePrice
+    ? fillableQuantityFor(
+        normalizedQuantity,
+        tradablePrice.price,
+        broker,
+        inputs.candleVolumeNotional,
+      )
+    : { quantity: normalizedQuantity };
+  const fillQuantity = fillable.quantity;
   const fillBreakdown = tradablePrice
     ? priceWithSpreadAndSlippage(tradablePrice.price, request.side, broker, {
-        quantity: normalizedQuantity,
+        quantity: fillQuantity,
         candleVolumeNotional: inputs.candleVolumeNotional,
         volatility: inputs.volatility,
       })
     : undefined;
   const notional = fillBreakdown
-    ? fillBreakdown.fillPrice * normalizedQuantity
+    ? fillBreakdown.fillPrice * fillQuantity
     : 0;
   const commission = fillBreakdown ? commissionFor(notional, broker) : 0;
   const validation = validateMarketOrder({
     side: request.side,
     rawQuantity: request.quantity,
-    normalizedQuantity,
+    normalizedQuantity: fillQuantity > 0 ? fillQuantity : normalizedQuantity,
     referencePrice: tradablePrice?.price ?? 0,
     executionPrice: fillBreakdown?.fillPrice,
     cash,
@@ -145,7 +217,10 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
     hasPrice: Boolean(tradablePrice),
     marketOpen: inputs.marketOpen,
     candleVolumeNotional: inputs.candleVolumeNotional,
-    maxParticipationRate: inputs.maxParticipationRate,
+    maxParticipationRate:
+      broker.partialFillPolicy === "volume_limited"
+        ? undefined
+        : inputs.maxParticipationRate,
   });
 
   if (!validation.ok) {
@@ -154,13 +229,14 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
       order: {
         ...order,
         status: "rejected",
+        rejectionCode: validation.code,
         rejectionReason: validation.message,
       },
       reason: validation.message,
     };
   }
 
-  if (!tradablePrice || !fillBreakdown) {
+  if (!tradablePrice || !fillBreakdown || fillQuantity <= 0) {
     return {
       ok: false,
       order: {
@@ -172,26 +248,41 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
     };
   }
 
+  const fillProgress = orderFillProgress(0, fillBreakdown.fillPrice);
+  const fillStatus = statusForFill(normalizedQuantity, fillQuantity);
+
   const fill: Fill = {
     id: generateId("fil"),
     orderId: order.id,
     time: currentTime,
     symbol: request.symbol,
     side: request.side,
-    quantity: normalizedQuantity,
+    quantity: fillQuantity,
     price: fillBreakdown.fillPrice,
     referencePrice: tradablePrice.price,
     commission,
     spreadCost: fillBreakdown.spreadCost,
     slippage: fillBreakdown.slippage,
     totalCost: notional + commission,
+    reason: "user_order",
+    liquidityParticipation: fillable.participation,
+    executionPriceSource: "market",
     note: request.note,
   };
 
   return {
     ok: true,
     fill,
-    order: { ...order, status: "filled", quantity: normalizedQuantity },
+    order: {
+      ...order,
+      status: fillStatus,
+      quantity: normalizedQuantity,
+      remainingQuantity: Math.max(0, normalizedQuantity - fillQuantity),
+      filledQuantity: fillQuantity,
+      averageFillPrice:
+        fillQuantity > 0 ? fillBreakdown.fillPrice : fillProgress.averageFillPrice,
+      closedAt: currentTime,
+    },
   };
 }
 
@@ -234,6 +325,10 @@ export function createLimitOrder(
     quantity: request.quantity,
     limitPrice: request.limitPrice,
     ocoGroupId: request.ocoGroupId,
+    timeInForce: request.timeInForce ?? "gtc",
+    expiresAt: request.expiresAt,
+    remainingQuantity: request.quantity,
+    filledQuantity: 0,
     status: "pending",
     note: request.note,
   };
@@ -244,6 +339,7 @@ export function createLimitOrder(
       order: {
         ...order,
         status: "rejected",
+        closedAt: currentTime,
         rejectionReason: "Invalid limit price",
       },
       reason: "Invalid limit price",
@@ -277,6 +373,8 @@ export function createLimitOrder(
       order: {
         ...order,
         status: "rejected",
+        rejectionCode: validation.code,
+        closedAt: currentTime,
         rejectionReason: validation.message,
       },
       reason: validation.message,
@@ -288,6 +386,7 @@ export function createLimitOrder(
     order: {
       ...order,
       quantity: normalizedQuantity,
+      remainingQuantity: normalizedQuantity,
     },
   };
 }
@@ -306,6 +405,10 @@ export function createTriggerOrder(
     quantity: request.quantity,
     triggerPrice: request.triggerPrice,
     ocoGroupId: request.ocoGroupId,
+    timeInForce: request.timeInForce ?? "gtc",
+    expiresAt: request.expiresAt,
+    remainingQuantity: request.quantity,
+    filledQuantity: 0,
     status: "pending",
     note: request.note,
   };
@@ -316,6 +419,7 @@ export function createTriggerOrder(
       order: {
         ...order,
         status: "rejected",
+        closedAt: currentTime,
         rejectionReason: "Invalid trigger price",
       },
       reason: "Invalid trigger price",
@@ -349,6 +453,8 @@ export function createTriggerOrder(
       order: {
         ...order,
         status: "rejected",
+        rejectionCode: validation.code,
+        closedAt: currentTime,
         rejectionReason: validation.message,
       },
       reason: validation.message,
@@ -360,6 +466,7 @@ export function createTriggerOrder(
     order: {
       ...order,
       quantity: normalizedQuantity,
+      remainingQuantity: normalizedQuantity,
     },
   };
 }
@@ -382,12 +489,17 @@ export type LimitFillInputs = {
   currentTime: string;
   instrument?: Instrument;
   marketOpen?: boolean;
+  candle?: Candle;
+  candleVolumeNotional?: number;
 };
 
 export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
   const { order, broker, cash, position, currentTime } = inputs;
-  const fillPrice =
-    order.type === "limit" ? order.limitPrice ?? 0 : order.triggerPrice ?? 0;
+  const { fillPrice, priceSource } = pendingOrderFillPrice(
+    order,
+    broker,
+    inputs.candle,
+  );
   if (
     !["limit", "stop_loss", "take_profit"].includes(order.type) ||
     !Number.isFinite(fillPrice) ||
@@ -398,22 +510,30 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
       order: {
         ...order,
         status: "rejected",
+        closedAt: currentTime,
         rejectionReason: "Invalid fill price",
       },
       reason: "Invalid fill price",
     };
   }
   const normalizedQuantity = normalizeQuantity(
-    order.quantity,
+    order.remainingQuantity ?? order.quantity,
     broker,
     inputs.instrument,
   );
-  const notional = fillPrice * normalizedQuantity;
+  const fillable = fillableQuantityFor(
+    normalizedQuantity,
+    fillPrice,
+    broker,
+    inputs.candleVolumeNotional,
+  );
+  const fillQuantity = fillable.quantity;
+  const notional = fillPrice * fillQuantity;
   const commission = commissionFor(notional, broker);
   const validation = validateMarketOrder({
     side: order.side,
-    rawQuantity: order.quantity,
-    normalizedQuantity,
+    rawQuantity: order.remainingQuantity ?? order.quantity,
+    normalizedQuantity: fillQuantity > 0 ? fillQuantity : normalizedQuantity,
     referencePrice: fillPrice,
     executionPrice: fillPrice,
     cash,
@@ -429,11 +549,38 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
       order: {
         ...order,
         status: "rejected",
+        rejectionCode: validation.code,
+        closedAt: currentTime,
         rejectionReason: validation.message,
       },
       reason: validation.message,
     };
   }
+
+  if (fillQuantity <= 0) {
+    return {
+      ok: false,
+      order: {
+        ...order,
+        status: "rejected",
+        closedAt: currentTime,
+        rejectionReason: "Insufficient liquidity for fill",
+      },
+      reason: "Insufficient liquidity for fill",
+    };
+  }
+
+  const previousFilled = order.filledQuantity ?? 0;
+  const previousAverage = order.averageFillPrice ?? 0;
+  const progress = orderFillProgress(
+    fillQuantity,
+    fillPrice,
+    previousFilled,
+    previousAverage,
+  );
+  const totalQuantity = order.quantity;
+  const remainingQuantity = Math.max(0, totalQuantity - progress.filledQuantity);
+  const status = remainingQuantity <= 1e-9 ? "filled" : "partially_filled";
 
   const fill: Fill = {
     id: generateId("fil"),
@@ -441,13 +588,17 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
     time: currentTime,
     symbol: order.symbol,
     side: order.side,
-    quantity: normalizedQuantity,
+    quantity: fillQuantity,
     price: fillPrice,
-    referencePrice: fillPrice,
+    referencePrice:
+      order.type === "limit" ? order.limitPrice ?? fillPrice : order.triggerPrice ?? fillPrice,
     commission,
     spreadCost: 0,
     slippage: 0,
     totalCost: notional + commission,
+    reason: "working_order",
+    liquidityParticipation: fillable.participation,
+    executionPriceSource: priceSource,
     note: order.note,
   };
 
@@ -456,8 +607,13 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
     fill,
     order: {
       ...order,
-      quantity: normalizedQuantity,
-      status: "filled",
+      quantity: totalQuantity,
+      remainingQuantity,
+      filledQuantity: progress.filledQuantity,
+      averageFillPrice: progress.averageFillPrice,
+      triggeredAt: order.triggeredAt ?? currentTime,
+      closedAt: status === "filled" ? currentTime : order.closedAt,
+      status,
     },
   };
 }
@@ -474,7 +630,9 @@ export type LimitTriggerInput = {
 
 export function isPendingOrderTriggered(input: LimitTriggerInput): boolean {
   const { order, high, low } = input;
-  if (order.status !== "pending") return false;
+  if (order.status !== "pending" && order.status !== "partially_filled") {
+    return false;
+  }
   if (order.type === "limit") {
     const limit = order.limitPrice;
     if (!limit) return false;
@@ -495,4 +653,26 @@ export function isPendingOrderTriggered(input: LimitTriggerInput): boolean {
 
 export function isLimitOrderTriggered(input: LimitTriggerInput): boolean {
   return isPendingOrderTriggered(input);
+}
+
+function pendingOrderFillPrice(
+  order: Order,
+  broker: BrokerConfig,
+  candle?: Candle,
+): { fillPrice: number; priceSource: ExecutionPriceSource } {
+  if (order.type === "limit") {
+    return { fillPrice: order.limitPrice ?? 0, priceSource: "limit" };
+  }
+  const trigger = order.triggerPrice ?? 0;
+  if (broker.stopFillPolicy !== "gap_open" || !candle) {
+    return { fillPrice: trigger, priceSource: "stop_trigger" };
+  }
+
+  const gapped =
+    (order.side === "sell" && candle.open <= trigger) ||
+    (order.side === "buy" && candle.open >= trigger);
+  if (gapped) {
+    return { fillPrice: candle.open, priceSource: "gap_open" };
+  }
+  return { fillPrice: trigger, priceSource: "stop_trigger" };
 }

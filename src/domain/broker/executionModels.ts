@@ -12,6 +12,10 @@ export const IDEAL_BROKER_CONFIG: BrokerConfig = {
   allowFractional: true,
   allowShort: false,
   maxLeverage: 1,
+  maxParticipationRate: 1,
+  partialFillPolicy: "disabled",
+  stopFillPolicy: "trigger_price",
+  marketHoursEnforced: false,
   marginCallPolicy: "disabled",
   borrowRateBps: 0,
 };
@@ -26,6 +30,10 @@ export const REALISTIC_BROKER_CONFIG: BrokerConfig = {
   allowFractional: true,
   allowShort: true,
   maxLeverage: 2,
+  maxParticipationRate: 0.1,
+  partialFillPolicy: "volume_limited",
+  stopFillPolicy: "gap_open",
+  marketHoursEnforced: true,
   marginCallPolicy: "reject_new_orders",
   borrowRateBps: 200,
 };
@@ -40,6 +48,10 @@ export const HARSH_BROKER_CONFIG: BrokerConfig = {
   allowFractional: false,
   allowShort: true,
   maxLeverage: 4,
+  maxParticipationRate: 0.05,
+  partialFillPolicy: "volume_limited",
+  stopFillPolicy: "gap_open",
+  marketHoursEnforced: true,
   marginCallPolicy: "liquidate_on_threshold",
   borrowRateBps: 600,
 };

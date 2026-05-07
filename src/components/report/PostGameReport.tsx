@@ -159,6 +159,50 @@ export default function PostGameReport({ report, onClose, onReset }: Props) {
           </div>
         </section>
 
+        {report.executionQuality ? (
+          <section className="report-section">
+            <h3>Execution quality</h3>
+            <div className="numbers-grid">
+              <NumberCell
+                label="Partial fills"
+                value={`${report.executionQuality.partialFillCount}`}
+              />
+              <NumberCell
+                label="Rejected orders"
+                value={`${report.executionQuality.rejectedOrderCount}`}
+              />
+              <NumberCell
+                label="Expired orders"
+                value={`${report.executionQuality.expiredOrderCount}`}
+              />
+              <NumberCell
+                label="Liquidations"
+                value={`${report.executionQuality.forcedLiquidationCount}`}
+              />
+              <NumberCell
+                label="Margin events"
+                value={`${report.executionQuality.marginEventCount}`}
+              />
+              <NumberCell
+                label="Borrow cost"
+                value={formatCurrency(report.executionQuality.borrowCostPaid)}
+              />
+              <NumberCell
+                label="Avg participation"
+                value={
+                  report.executionQuality.averageLiquidityParticipation !== undefined
+                    ? formatPct(report.executionQuality.averageLiquidityParticipation)
+                    : "—"
+                }
+              />
+              <NumberCell
+                label="Audit events"
+                value={`${report.auditSummary?.totalEvents ?? 0}`}
+              />
+            </div>
+          </section>
+        ) : null}
+
         <div className="report-foot">
           <p>
             History rhymes; it does not repeat. Replay with another broker model

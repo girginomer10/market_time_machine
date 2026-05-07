@@ -1,9 +1,11 @@
 import type {
   BenchmarkPoint,
   Candle,
+  CorporateAction,
   Granularity,
   IndicatorSnapshot,
   Instrument,
+  MarketCalendar,
   MarketEvent,
   ScenarioPackage,
 } from "../../types";
@@ -148,6 +150,25 @@ export function validateScenarioMeta(meta: ScenarioMeta): ValidationIssue[] {
       code: "meta.initial_cash_invalid",
       message: "Scenario initialCash must be a positive number",
       path: "meta.initialCash",
+    });
+  }
+  if (meta.generatedAt && !isIsoTimestamp(meta.generatedAt)) {
+    issues.push({
+      level: "error",
+      code: "meta.generated_at_invalid",
+      message: `Scenario generatedAt is not a valid ISO 8601 timestamp: ${meta.generatedAt}`,
+      path: "meta.generatedAt",
+    });
+  }
+  if (
+    meta.priceAdjustment &&
+    !["raw", "split_adjusted", "total_return"].includes(meta.priceAdjustment)
+  ) {
+    issues.push({
+      level: "error",
+      code: "meta.price_adjustment_invalid",
+      message: "Scenario priceAdjustment must be raw, split_adjusted, or total_return",
+      path: "meta.priceAdjustment",
     });
   }
   return issues;
@@ -568,6 +589,96 @@ export function validateBroker(broker: BrokerConfig): ValidationIssue[] {
       path: "broker.slippageBps",
     });
   }
+  if (
+    broker.maxParticipationRate !== undefined &&
+    (broker.maxParticipationRate <= 0 || broker.maxParticipationRate > 1)
+  ) {
+    issues.push({
+      level: "error",
+      code: "broker.max_participation_invalid",
+      message: "Broker maxParticipationRate must be greater than 0 and at most 1",
+      path: "broker.maxParticipationRate",
+    });
+  }
+  return issues;
+}
+
+export function validateMarketCalendar(
+  calendar: MarketCalendar | undefined,
+  meta: ScenarioMeta,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (!calendar) {
+    if (meta.marketCalendarId) {
+      issues.push({
+        level: "warning",
+        code: "calendar.missing",
+        message: "Scenario declares marketCalendarId but has no marketCalendar object",
+        path: "marketCalendar",
+      });
+    }
+    return issues;
+  }
+  if (!calendar.id) {
+    issues.push({
+      level: "error",
+      code: "calendar.id_missing",
+      message: "Market calendar id is required",
+      path: "marketCalendar.id",
+    });
+  }
+  if (meta.marketCalendarId && calendar.id !== meta.marketCalendarId) {
+    issues.push({
+      level: "warning",
+      code: "calendar.id_mismatch",
+      message: "meta.marketCalendarId does not match marketCalendar.id",
+      path: "meta.marketCalendarId",
+    });
+  }
+  if (calendar.sessions.length === 0) {
+    issues.push({
+      level: "warning",
+      code: "calendar.sessions_empty",
+      message: "Market calendar has no sessions; broker market-hours checks may reject orders",
+      path: "marketCalendar.sessions",
+    });
+  }
+  return issues;
+}
+
+export function validateCorporateActions(
+  actions: CorporateAction[] | undefined,
+  knownSymbols: Set<string>,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (let i = 0; i < (actions ?? []).length; i++) {
+    const action = actions![i];
+    const path = `corporateActions[${i}]`;
+    if (!knownSymbols.has(action.symbol)) {
+      issues.push({
+        level: "error",
+        code: "corporate_actions.symbol_unknown",
+        message: `Corporate action references unknown symbol ${action.symbol}`,
+        path: `${path}.symbol`,
+      });
+    }
+    if (!isIsoTimestamp(action.effectiveAt)) {
+      issues.push({
+        level: "error",
+        code: "corporate_actions.effective_at_invalid",
+        message: "Corporate action effectiveAt must be ISO 8601",
+        path: `${path}.effectiveAt`,
+      });
+    }
+    if (action.type === "split" && (!action.ratio || action.ratio <= 0)) {
+      issues.push({
+        level: "error",
+        code: "corporate_actions.split_ratio_invalid",
+        message: "Split corporate actions require a positive ratio",
+        path: `${path}.ratio`,
+      });
+    }
+  }
   return issues;
 }
 
@@ -585,6 +696,8 @@ export function validateScenarioPackage(
   issues.push(...validateBenchmarks(pkg.benchmarks, knownSymbols));
   issues.push(...validateIndicators(pkg.indicators, knownSymbols));
   issues.push(...validateBroker(pkg.broker));
+  issues.push(...validateMarketCalendar(pkg.marketCalendar, pkg.meta));
+  issues.push(...validateCorporateActions(pkg.corporateActions, knownSymbols));
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");
   return {

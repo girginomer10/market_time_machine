@@ -252,6 +252,8 @@ export default function App() {
             <ReplayChart
               candles={snapshot.visibleCandles}
               events={visibleEventsChronological}
+              fills={fills}
+              orders={snapshot.workingOrders ?? orders}
               eventNumbers={eventNumbers}
               hoveredEventId={hoveredEventId}
               onHoverEvent={setHoveredEventId}
@@ -269,6 +271,8 @@ export default function App() {
             realizedPnl={snapshot.portfolio.realizedPnl}
             unrealizedPnl={snapshot.portfolio.unrealizedPnl}
             initialCash={scenario.meta.initialCash}
+            margin={snapshot.margin}
+            risk={snapshot.risk}
           />
         </section>
 

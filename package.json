@@ -29,6 +29,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "import:fred-sp500": "node scripts/import-fred-sp500.mjs",
+    "import:ohlcv": "node scripts/import-local-ohlcv.mjs",
     "check": "npm run lint && npm run test && npm run build",
     "lint": "eslint .",
     "test": "vitest run",

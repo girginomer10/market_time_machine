@@ -274,4 +274,84 @@ describe("broker simulator", () => {
       expect(result.order.status).toBe("filled");
     }
   });
+
+  it("partially fills volume-limited market orders", () => {
+    const broker = makeBroker({
+      commissionRateBps: 0,
+      partialFillPolicy: "volume_limited",
+      maxParticipationRate: 0.1,
+    });
+    const result = executeMarketOrder({
+      request: { symbol: "TEST", side: "buy", type: "market", quantity: 20 },
+      broker,
+      cash: 10_000,
+      tradablePrice: { symbol: "TEST", time: TIME, price: 100, bid: 100, ask: 100 },
+      candleVolumeNotional: 10_000,
+      currentTime: TIME,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.fill.quantity).toBe(10);
+      expect(result.fill.liquidityParticipation).toBeCloseTo(0.1, 6);
+      expect(result.order.status).toBe("partially_filled");
+      expect(result.order.remainingQuantity).toBe(10);
+    }
+  });
+
+  it("fills sell stops at the candle open when price gaps through the trigger", () => {
+    const placed = createPendingOrder({
+      request: {
+        symbol: "TEST",
+        side: "sell",
+        type: "stop_loss",
+        quantity: 1,
+        triggerPrice: 95,
+      },
+      broker: makeBroker({ stopFillPolicy: "gap_open" }),
+      cash: 0,
+      position: {
+        symbol: "TEST",
+        quantity: 1,
+        averagePrice: 100,
+        marketPrice: 100,
+        marketValue: 100,
+        unrealizedPnl: 0,
+        realizedPnl: 0,
+      },
+      tradablePrice: { symbol: "TEST", time: TIME, price: 100, bid: 100, ask: 100 },
+      currentTime: TIME,
+    });
+    expect(placed.ok).toBe(true);
+    if (!placed.ok) return;
+    const result = executeLimitOrderFill({
+      order: placed.order,
+      broker: makeBroker({ stopFillPolicy: "gap_open" }),
+      cash: 0,
+      position: {
+        symbol: "TEST",
+        quantity: 1,
+        averagePrice: 100,
+        marketPrice: 90,
+        marketValue: 90,
+        unrealizedPnl: -10,
+        realizedPnl: 0,
+      },
+      candle: {
+        symbol: "TEST",
+        openTime: "2024-01-04T00:00:00.000Z",
+        closeTime: "2024-01-04T23:59:59.000Z",
+        open: 90,
+        high: 94,
+        low: 88,
+        close: 91,
+        volume: 1000,
+      },
+      currentTime: "2024-01-04T23:59:59.000Z",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.fill.price).toBe(90);
+      expect(result.fill.executionPriceSource).toBe("gap_open");
+    }
+  });
 });

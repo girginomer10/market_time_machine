@@ -29,6 +29,7 @@ Before opening a pull request, confirm:
 - `affectedSymbols` and candle symbols all appear in `instruments`
 - Broker assumptions are realistic for the asset class (crypto vs. equities differ on fractional, leverage, hours)
 - License and data sources are declared
+- Local/professional scenarios should also declare `dataVersion`, `sourceManifest`, `generatedAt`, `priceAdjustment`, and `marketCalendarId` when those are known
 
 The validator returns errors and warnings:
 
@@ -100,6 +101,18 @@ Optional date range:
 ```sh
 npm run import:fred-sp500 -- --start=2020-01-02 --end=2020-12-31
 ```
+
+## Local Licensed OHLCV Import
+
+If you already have local-use or redistribution-safe OHLCV data, generate a gitignored local scenario:
+
+```sh
+npm run import:ohlcv -- --input=local-data/spy.csv --symbol=SPY --title="SPY Local Replay" --license="Licensed local use only"
+```
+
+Input may be CSV or JSON. Rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`. The generated package includes source manifest metadata, an always-open local market calendar, professional broker assumptions, and an empty `corporateActions` array that can be filled later for splits or dividends.
+
+Generated `src/data/scenarios/local-*/` folders are ignored by git. Keep them local unless the data owner grants explicit redistribution rights.
 
 ## Running the Validator Locally
 

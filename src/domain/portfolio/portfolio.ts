@@ -11,6 +11,7 @@ export type PortfolioState = {
   realizedPnl: number;
   feesPaid: number;
   slippagePaid: number;
+  financingPaid: number;
 };
 
 export function emptyPortfolio(initialCash: number): PortfolioState {
@@ -20,6 +21,7 @@ export function emptyPortfolio(initialCash: number): PortfolioState {
     realizedPnl: 0,
     feesPaid: 0,
     slippagePaid: 0,
+    financingPaid: 0,
   };
 }
 
@@ -117,6 +119,19 @@ export function applyFill(
   return next;
 }
 
+export function applyFinancingCost(
+  state: PortfolioState,
+  amount: number,
+): PortfolioState {
+  if (!Number.isFinite(amount) || amount <= 0) return state;
+  return {
+    ...state,
+    cash: state.cash - amount,
+    realizedPnl: state.realizedPnl - amount,
+    financingPaid: state.financingPaid + amount,
+  };
+}
+
 export function markToMarket(
   state: PortfolioState,
   prices: TradablePrice[],
@@ -160,5 +175,6 @@ export function snapshotPortfolio(
     unrealizedPnl,
     feesPaid: state.feesPaid,
     slippagePaid: state.slippagePaid,
+    financingPaid: state.financingPaid,
   };
 }

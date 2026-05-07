@@ -2,9 +2,11 @@ import type {
   AssetClass,
   BenchmarkPoint,
   Candle,
+  CorporateAction,
   Granularity,
   IndicatorSnapshot,
   Instrument,
+  MarketCalendar,
   MarketEvent,
 } from "./market";
 
@@ -28,6 +30,10 @@ export type BrokerConfig = {
   allowFractional: boolean;
   allowShort: boolean;
   maxLeverage: number;
+  maxParticipationRate?: number;
+  partialFillPolicy?: "disabled" | "volume_limited";
+  stopFillPolicy?: "trigger_price" | "gap_open";
+  marketHoursEnforced?: boolean;
   marginCallPolicy?: "disabled" | "liquidate_on_threshold" | "reject_new_orders";
   borrowRateBps?: number;
 };
@@ -49,6 +55,11 @@ export type ScenarioMeta = {
   benchmarkSymbol?: string;
   license: string;
   dataSources: string[];
+  dataVersion?: string;
+  sourceManifest?: string[];
+  generatedAt?: string;
+  priceAdjustment?: "raw" | "split_adjusted" | "total_return";
+  marketCalendarId?: string;
   isSampleData?: boolean;
   description?: string;
 };
@@ -61,4 +72,6 @@ export type ScenarioPackage = {
   indicators: IndicatorSnapshot[];
   benchmarks: BenchmarkPoint[];
   broker: BrokerConfig;
+  marketCalendar?: MarketCalendar;
+  corporateActions?: CorporateAction[];
 };

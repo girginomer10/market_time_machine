@@ -3,6 +3,8 @@ import type {
   Candle,
   IndicatorSnapshot,
   Instrument,
+  CorporateAction,
+  MarketCalendar,
   MarketEvent,
   ScenarioPackage,
 } from "../../types";
@@ -21,6 +23,8 @@ export type RawScenarioFiles = {
   indicators?: IndicatorSnapshot[];
   benchmarks?: BenchmarkPoint[];
   broker: BrokerConfig;
+  marketCalendar?: MarketCalendar;
+  corporateActions?: CorporateAction[];
 };
 
 export function assembleScenario(raw: RawScenarioFiles): ScenarioPackage {
@@ -47,6 +51,8 @@ export function assembleScenario(raw: RawScenarioFiles): ScenarioPackage {
     indicators: sortedIndicators,
     benchmarks: sortedBenchmarks,
     broker: raw.broker,
+    marketCalendar: raw.marketCalendar,
+    corporateActions: raw.corporateActions ?? [],
   };
 }
 

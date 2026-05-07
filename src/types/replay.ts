@@ -6,6 +6,12 @@ import type {
   TradablePrice,
 } from "./market";
 import type { PortfolioSnapshot } from "./trading";
+import type {
+  AuditEvent,
+  MarginSnapshot,
+  Order,
+  RiskSnapshot,
+} from "./trading";
 
 export type ReplayStatus = "idle" | "playing" | "paused" | "finished";
 
@@ -35,5 +41,9 @@ export type ReplaySnapshot = {
   visibleBenchmark: BenchmarkPoint[];
   tradablePrices: TradablePrice[];
   portfolio: PortfolioSnapshot;
+  margin?: MarginSnapshot;
+  risk?: RiskSnapshot;
+  auditEvents?: AuditEvent[];
+  workingOrders?: Order[];
   replayStatus: ReplayStatus;
 };

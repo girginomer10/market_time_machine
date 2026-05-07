@@ -1,4 +1,4 @@
-import type { Fill } from "./trading";
+import type { AuditEvent, Fill, Order } from "./trading";
 
 export type BehavioralFlagType =
   | "panic_sell"
@@ -53,6 +53,24 @@ export type TradeOutcome = {
   contributionPct: number;
 };
 
+export type ExecutionQuality = {
+  totalFills: number;
+  partialFillCount: number;
+  rejectedOrderCount: number;
+  expiredOrderCount: number;
+  forcedLiquidationCount: number;
+  marginEventCount: number;
+  borrowCostPaid: number;
+  averageLiquidityParticipation?: number;
+};
+
+export type AuditSummary = {
+  totalEvents: number;
+  orderEvents: number;
+  fillEvents: number;
+  riskEvents: number;
+};
+
 export type ReportPayload = {
   scenarioId: string;
   scenarioTitle: string;
@@ -62,4 +80,8 @@ export type ReportPayload = {
   worstTrade?: TradeOutcome;
   totalTrades: number;
   behavioralFlags: BehavioralFlag[];
+  executionQuality?: ExecutionQuality;
+  auditSummary?: AuditSummary;
+  orders?: Order[];
+  auditEvents?: AuditEvent[];
 };

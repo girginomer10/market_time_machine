@@ -34,6 +34,29 @@ export type Instrument = {
   lotSize?: number;
 };
 
+export type MarketCalendarSession = {
+  dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  open: string;
+  close: string;
+};
+
+export type MarketCalendar = {
+  id: string;
+  timezone: string;
+  sessions: MarketCalendarSession[];
+  holidays?: string[];
+};
+
+export type CorporateAction = {
+  symbol: string;
+  type: "split" | "dividend";
+  effectiveAt: string;
+  ratio?: number;
+  amount?: number;
+  currency?: string;
+  source?: string;
+};
+
 export type EventType =
   | "news"
   | "earnings"

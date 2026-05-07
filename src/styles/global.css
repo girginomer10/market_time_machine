@@ -686,6 +686,52 @@ textarea:focus {
   color: #15100a;
 }
 
+.chart-trade-layer {
+  position: absolute;
+  inset: auto 52px 42px 12px;
+  height: 28px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.chart-trade-marker {
+  position: absolute;
+  bottom: 0;
+  min-width: 22px;
+  height: 20px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(9, 12, 18, 0.9);
+  color: var(--text-2);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.chart-trade-marker.buy {
+  color: var(--pos);
+  border-color: rgba(79, 197, 138, 0.42);
+  background: var(--pos-soft);
+}
+
+.chart-trade-marker.sell,
+.chart-trade-marker.liquidation {
+  color: var(--neg);
+  border-color: rgba(242, 106, 111, 0.42);
+  background: var(--neg-soft);
+}
+
+.chart-trade-marker.working {
+  color: var(--accent-2);
+  border-color: rgba(123, 183, 224, 0.36);
+  background: rgba(123, 183, 224, 0.1);
+}
+
 .now-line {
   position: absolute;
   top: 0;
@@ -786,7 +832,8 @@ textarea:focus {
 }
 
 .panel-portfolio,
-.panel-order {
+.panel-order,
+.panel-risk {
   overflow: visible;
 }
 
@@ -848,6 +895,40 @@ textarea:focus {
   color: var(--text);
   font-family: var(--mono);
   font-size: 12px;
+}
+
+.risk-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 14px 10px;
+}
+
+.margin-meter {
+  height: 8px;
+  margin: 0 14px 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.margin-meter span {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--pos), var(--accent-2));
+}
+
+.margin-meter span.danger {
+  background: linear-gradient(90deg, var(--accent), var(--neg));
+}
+
+.risk-note {
+  padding: 0 14px 13px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .exposure-bar {
@@ -1223,6 +1304,13 @@ textarea:focus {
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 800;
+}
+
+.trade-table td small.execution-note {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
 }
 
 .trade-history-shell {
@@ -1786,7 +1874,8 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
-  .portfolio-split {
+  .portfolio-split,
+  .risk-grid {
     grid-template-columns: 1fr;
   }
 

@@ -3,9 +3,11 @@ import type {
   Candle,
   EquityPoint,
   Fill,
+  Order,
   ReportMetrics,
   ReportPayload,
   ScenarioPackage,
+  AuditEvent,
 } from "../../types";
 import {
   applyFill,
@@ -127,7 +129,11 @@ function findLastBenchmarkAtOrBefore(
 export type ReportInput = {
   scenario: ScenarioPackage;
   fills: Fill[];
+  orders?: Order[];
+  auditEvents?: AuditEvent[];
   initialCash: number;
+  finalEquityOverride?: number;
+  financingPaid?: number;
 };
 
 export type FinishedSessionReport = ReportPayload;
@@ -139,7 +145,9 @@ export function buildReport(input: ReportInput): FinishedSessionReport {
   const benchmarkValues = equityCurve.map((e) => e.benchmarkValue);
 
   const finalEquity =
-    portfolioValues[portfolioValues.length - 1] ?? initialCash;
+    input.finalEquityOverride ??
+    portfolioValues[portfolioValues.length - 1] ??
+    initialCash;
   const benchmarkFinal =
     benchmarkValues[benchmarkValues.length - 1] ?? initialCash;
   const benchmarkInitial = benchmarkValues[0] ?? initialCash;
@@ -171,6 +179,45 @@ export function buildReport(input: ReportInput): FinishedSessionReport {
 
   const fees = feesTotal(fills);
   const slippage = slippageTotal(fills);
+  const orders = input.orders ?? [];
+  const auditEvents = input.auditEvents ?? [];
+  const liquidityParticipations = fills
+    .map((fill) => fill.liquidityParticipation)
+    .filter((value): value is number => value !== undefined);
+  const executionQuality = {
+    totalFills: fills.length,
+    partialFillCount: orders.filter(
+      (order) => order.status === "partially_filled",
+    ).length,
+    rejectedOrderCount: orders.filter((order) => order.status === "rejected")
+      .length,
+    expiredOrderCount: orders.filter((order) => order.status === "expired")
+      .length,
+    forcedLiquidationCount: fills.filter((fill) => fill.forcedLiquidation)
+      .length,
+    marginEventCount: auditEvents.filter(
+      (event) =>
+        event.type === "margin_call" || event.type === "forced_liquidation",
+    ).length,
+    borrowCostPaid: input.financingPaid ?? 0,
+    averageLiquidityParticipation:
+      liquidityParticipations.length > 0
+        ? liquidityParticipations.reduce((sum, value) => sum + value, 0) /
+          liquidityParticipations.length
+        : undefined,
+  };
+  const auditSummary = {
+    totalEvents: auditEvents.length,
+    orderEvents: auditEvents.filter((event) => event.type.startsWith("order_"))
+      .length,
+    fillEvents: auditEvents.filter((event) => event.type === "fill").length,
+    riskEvents: auditEvents.filter(
+      (event) =>
+        event.type === "margin_call" ||
+        event.type === "forced_liquidation" ||
+        event.type === "borrow_cost",
+    ).length,
+  };
   const turnoverValue = turnover(fills);
   const primarySymbol = scenario.meta.symbols[0];
   const exposure = exposureTime(scenario.candles, fills, primarySymbol);
@@ -229,5 +276,9 @@ export function buildReport(input: ReportInput): FinishedSessionReport {
     worstTrade: worstTrade(outcomes),
     totalTrades: fills.length,
     behavioralFlags,
+    executionQuality,
+    auditSummary,
+    orders,
+    auditEvents,
   };
 }

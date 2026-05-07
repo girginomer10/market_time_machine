@@ -105,10 +105,15 @@ export default function TradeHistory({
   const ocoGroupLabels = buildOcoGroupLabels(orders);
   const sorted = [...fills].sort((a, b) => b.time.localeCompare(a.time));
   const workingOrders = orders
-    .filter((order) => order.status === "pending")
+    .filter((order) => order.status === "pending" || order.status === "partially_filled")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const closedOrders = orders
-    .filter((order) => order.status !== "pending" && order.status !== "filled")
+    .filter(
+      (order) =>
+        order.status !== "pending" &&
+        order.status !== "partially_filled" &&
+        order.status !== "filled",
+    )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const visibleWorkingOrders =
     historyView === "closed" ? [] : workingOrders;
@@ -325,6 +330,14 @@ export default function TradeHistory({
                     <td className="right">{formatCurrency(fill.price)}</td>
                     <td>
                       <span className="status-badge filled">Filled</span>
+                      {fill.reason ? (
+                        <small className="execution-note">
+                          {fill.reason.replace("_", " ")}
+                          {fill.executionPriceSource
+                            ? ` · ${fill.executionPriceSource.replace("_", " ")}`
+                            : ""}
+                        </small>
+                      ) : null}
                     </td>
                     {hasActions ? (
                       <td>
@@ -361,14 +374,21 @@ function OrderRow({
   onStartEditing: (order: Order) => void;
 }) {
   return (
-    <tr className={order.status === "pending" ? "pending" : undefined}>
+    <tr className={isWorkingOrder(order) ? "pending" : undefined}>
       <td>{dateLabel(order.createdAt)}</td>
       <td className={order.side === "buy" ? "pos" : "neg"}>{order.side}</td>
       <td>
         <OrderTypeText order={order} ocoGroupLabels={ocoGroupLabels} />
       </td>
-      <td className="right">{formatNumber(order.quantity, 6)}</td>
-      <td className="right muted">—</td>
+      <td className="right">
+        {formatNumber(order.remainingQuantity ?? order.quantity, 6)}
+        {order.filledQuantity ? (
+          <small>{formatNumber(order.filledQuantity, 6)} filled</small>
+        ) : null}
+      </td>
+      <td className="right">
+        {order.averageFillPrice ? formatCurrency(order.averageFillPrice) : <span className="muted">—</span>}
+      </td>
       <td>
         <span className={`status-badge ${statusClass(order.status)}`}>
           {STATUS_LABELS[order.status]}
@@ -376,7 +396,7 @@ function OrderRow({
       </td>
       {hasActions ? (
         <td>
-          {order.status === "pending" ? (
+          {isWorkingOrder(order) ? (
             <div className="order-action-group">
               {onUpdateOrder && order.type !== "market" ? (
                 <button
@@ -408,6 +428,10 @@ function OrderRow({
   );
 }
 
+function isWorkingOrder(order: Order): boolean {
+  return order.status === "pending" || order.status === "partially_filled";
+}
+
 function OrderTypeText({
   order,
   ocoGroupLabels,
@@ -421,6 +445,12 @@ function OrderTypeText({
       {orderTypeLabel(order.type)}
       {orderPriceText(order)}
       {label ? <small className="oco-chip">{label}</small> : null}
+      {order.timeInForce ? (
+        <small className="execution-note">
+          {order.timeInForce.toUpperCase()}
+          {order.expiresAt ? ` · expires ${dateLabel(order.expiresAt)}` : ""}
+        </small>
+      ) : null}
     </>
   );
 }

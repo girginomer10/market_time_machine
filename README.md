@@ -61,6 +61,7 @@ npm run lint             # Run ESLint
 npm run test             # Run Vitest test suite
 npm run test:watch       # Run Vitest in watch mode
 npm run import:fred-sp500 # Generate a local FRED SP500 scenario
+npm run import:ohlcv     # Generate a local scenario from licensed OHLCV CSV/JSON
 ```
 
 ## Included Scenarios
@@ -83,6 +84,16 @@ npm run import:fred-sp500
 ```
 
 This writes to `src/data/scenarios/sp500-covid-2020-fred/`, which is intentionally gitignored. FRED's `SP500` series is S&P Dow Jones Indices content, so generated files should remain local unless you have redistribution rights. See [Scenario Authoring](docs/scenario-authoring.md#local-fred-sp-500-import).
+
+### Optional Licensed OHLCV Local Import
+
+Users with their own redistribution-safe or local-use licensed OHLCV data can generate a local scenario:
+
+```sh
+npm run import:ohlcv -- --input=local-data/spy.csv --symbol=SPY --title="SPY Local Replay" --license="Licensed local use only"
+```
+
+This writes to `src/data/scenarios/local-spy/`, which is gitignored by default. CSV/JSON rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`.
 
 ## Core Principles
 
