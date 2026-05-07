@@ -11,6 +11,7 @@ The project currently follows a lightweight changelog while it is in open source
 - Extended working-order edits to stop-loss and take-profit trigger prices.
 - Added All/Working/Closed filters to the trade history table.
 - Added bracket/OCO exits so paired stop-loss and take-profit orders cancel the sibling leg after one fills.
+- Surfaced OCO group labels in trade history so bracket legs and source fills stay easy to match.
 
 ## 0.1.0 - Open Source Alpha
 

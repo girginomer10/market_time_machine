@@ -53,6 +53,33 @@ function orderPriceText(order: Order): string {
   return `${label} @ ${formatCurrency(price)}`;
 }
 
+function buildOcoGroupLabels(orders: Order[]): Map<string, string> {
+  const groups = orders
+    .filter((order) => order.ocoGroupId)
+    .reduce<Map<string, string>>((groupStartTimes, order) => {
+      const id = order.ocoGroupId!;
+      const currentStart = groupStartTimes.get(id);
+      if (!currentStart || order.createdAt.localeCompare(currentStart) < 0) {
+        groupStartTimes.set(id, order.createdAt);
+      }
+      return groupStartTimes;
+    }, new Map());
+
+  return new Map(
+    [...groups.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))
+      .map(([id], index) => [id, `OCO ${index + 1}`]),
+  );
+}
+
+function ocoGroupLabel(
+  order: Order | undefined,
+  labels: Map<string, string>,
+): string | undefined {
+  if (!order?.ocoGroupId) return undefined;
+  return labels.get(order.ocoGroupId);
+}
+
 function dateLabel(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -75,6 +102,7 @@ export default function TradeHistory({
     journal.filter((j) => j.fillId).map((j) => [j.fillId!, j]),
   );
   const ordersById = new Map(orders.map((order) => [order.id, order]));
+  const ocoGroupLabels = buildOcoGroupLabels(orders);
   const sorted = [...fills].sort((a, b) => b.time.localeCompare(a.time));
   const workingOrders = orders
     .filter((order) => order.status === "pending")
@@ -192,6 +220,7 @@ export default function TradeHistory({
                 <Fragment key={order.id}>
                   <OrderRow
                     order={order}
+                    ocoGroupLabels={ocoGroupLabels}
                     hasActions={hasActions}
                     onCancelOrder={onCancelOrder}
                     onUpdateOrder={onUpdateOrder}
@@ -263,6 +292,7 @@ export default function TradeHistory({
                 <OrderRow
                   key={order.id}
                   order={order}
+                  ocoGroupLabels={ocoGroupLabels}
                   hasActions={hasActions}
                   onCancelOrder={onCancelOrder}
                   onUpdateOrder={onUpdateOrder}
@@ -282,8 +312,14 @@ export default function TradeHistory({
                       {fill.side}
                     </td>
                     <td>
-                      {sourceOrder?.type ?? "market"}
-                      {sourceOrder ? orderPriceText(sourceOrder) : ""}
+                      {sourceOrder ? (
+                        <OrderTypeText
+                          order={sourceOrder}
+                          ocoGroupLabels={ocoGroupLabels}
+                        />
+                      ) : (
+                        "market"
+                      )}
                     </td>
                     <td className="right">{formatNumber(fill.quantity, 6)}</td>
                     <td className="right">{formatCurrency(fill.price)}</td>
@@ -308,12 +344,14 @@ export default function TradeHistory({
 
 function OrderRow({
   order,
+  ocoGroupLabels,
   hasActions,
   onCancelOrder,
   onUpdateOrder,
   onStartEditing,
 }: {
   order: Order;
+  ocoGroupLabels: Map<string, string>;
   hasActions: boolean;
   onCancelOrder?: (orderId: string) => void;
   onUpdateOrder?: (
@@ -327,8 +365,7 @@ function OrderRow({
       <td>{dateLabel(order.createdAt)}</td>
       <td className={order.side === "buy" ? "pos" : "neg"}>{order.side}</td>
       <td>
-        {orderTypeLabel(order.type)}
-        {orderPriceText(order)}
+        <OrderTypeText order={order} ocoGroupLabels={ocoGroupLabels} />
       </td>
       <td className="right">{formatNumber(order.quantity, 6)}</td>
       <td className="right muted">—</td>
@@ -368,5 +405,22 @@ function OrderRow({
         </td>
       ) : null}
     </tr>
+  );
+}
+
+function OrderTypeText({
+  order,
+  ocoGroupLabels,
+}: {
+  order: Order;
+  ocoGroupLabels: Map<string, string>;
+}) {
+  const label = ocoGroupLabel(order, ocoGroupLabels);
+  return (
+    <>
+      {orderTypeLabel(order.type)}
+      {orderPriceText(order)}
+      {label ? <small className="oco-chip">{label}</small> : null}
+    </>
   );
 }

@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-05-07 19:02 - Codex
+
+- Task: Continued bracket/OCO workflow polish by making linked exit legs visible in trade history.
+- Changed: `TradeHistory` now derives stable `OCO 1/2/...` labels from order groups, displays the same label on bracket legs and their source fill rows, and humanizes filled stop/take-profit order type text. Added chip styling, regression coverage, and a changelog note.
+- Verified: `npm run test -- TradeHistory` passed 6/6 focused tests; `npm run check` passed lint, 211/211 tests, and production build.
+- Memory: none; no repo semantic memory directory is installed. Durable note: OCO labels are display-only and intentionally derived per render from order `ocoGroupId` plus creation time; raw generated ids are not exposed in the UI.
+- Next: Browser QA the full bracket flow: open a position, place a bracket exit, confirm both legs show the same OCO label, then advance until one leg fills and the sibling is cancelled.
+
 ## 2026-05-03 17:30 - Codex
 
 - Task: Added bracket/OCO exits for paired stop-loss and take-profit orders.

@@ -36,6 +36,25 @@ const stopLossOrder: Order = {
   status: "pending",
 };
 
+const bracketStopOrder: Order = {
+  ...stopLossOrder,
+  id: "order-bracket-stop",
+  status: "filled",
+  ocoGroupId: "oco-demo",
+};
+
+const bracketTargetOrder: Order = {
+  id: "order-bracket-target",
+  createdAt: "2020-03-12T00:00:00.000Z",
+  symbol: "BTCUSD",
+  side: "sell",
+  type: "take_profit",
+  quantity: 0.5,
+  triggerPrice: 5800,
+  status: "cancelled",
+  ocoGroupId: "oco-demo",
+};
+
 const cancelledOrder: Order = {
   id: "order-cancelled",
   createdAt: "2020-03-11T00:00:00.000Z",
@@ -60,6 +79,15 @@ const fill: Fill = {
   spreadCost: 0,
   slippage: 0,
   totalCost: 511,
+};
+
+const bracketFill: Fill = {
+  ...fill,
+  id: "fill-bracket",
+  orderId: "order-bracket-stop",
+  side: "sell",
+  price: 4600,
+  totalCost: 2299,
 };
 
 describe("TradeHistory", () => {
@@ -180,5 +208,21 @@ describe("TradeHistory", () => {
       price: 4550,
       quantity: 0.5,
     });
+  });
+
+  it("labels bracket/OCO legs and their source fills with the same group", () => {
+    render(
+      <TradeHistory
+        fills={[bracketFill]}
+        orders={[bracketStopOrder, bracketTargetOrder]}
+        journal={[]}
+      />,
+    );
+
+    expect(screen.getByText(/stop loss trigger @ \$4,600\.00/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/take profit trigger @ \$5,800\.00/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("OCO 1")).toHaveLength(2);
   });
 });
