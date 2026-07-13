@@ -48,11 +48,17 @@ Show:
 For each important trade:
 
 - User action
-- User note
+- Original thesis, invalidation, exit plan, and accepted risk
 - Price context at the time
-- Visible events at the time
+- Events visible or explicitly linked at order submission time
+- Actual fills, including grouped partial fills
 - What happened afterward
 - Contribution to total P/L
+
+The Local Lab v1 report replays every submitted decision chronologically, not
+only the best and worst outcomes. Qualitative plan-vs-actual review is explicit;
+accepted-risk text is not presented as an automatically verified monetary risk
+limit.
 
 ### 4. Attribution
 
@@ -191,7 +197,7 @@ Recommended score:
 10% journal quality
 ```
 
-Professional mode may use stricter scoring:
+Realistic Practice may use stricter local scoring:
 
 ```text
 30% excess return
@@ -249,3 +255,16 @@ You made a terrible trade.
 
 The product should teach decision quality while preserving user trust.
 
+## Local Sharing And History
+
+The report offers four user-controlled outputs:
+
+- Native operating-system share when supported
+- Clipboard text fallback
+- Print / Save PDF through the browser print dialog
+- Full JSON export for portability and audit
+
+No report is uploaded by the app. The browser keeps a bounded local history of
+up to 12 completed runs with a pruned report copy, score, benchmark comparison,
+and same-scenario attempt deltas. Users can view, replay, remove, export, or
+clear this history from the scenario library.

@@ -36,6 +36,17 @@ const meta: ScenarioMeta = {
   isSampleData: true,
   description:
     "Sample/demo regional-bank scenario for practicing panic, liquidity, deposit-confidence, and policy-response decisions. Prices are synthetic and should not be used for trading decisions.",
+  estimatedMinutes: 8,
+  mission:
+    "Manage regional-bank exposure while institution-specific failures and system-wide policy responses arrive in sequence.",
+  learningObjectives: [
+    "Separate idiosyncratic bank failure from sector contagion risk.",
+    "Avoid overreacting to headlines without a position invalidation rule.",
+    "Track how liquidity and confidence signals change an existing thesis.",
+  ],
+  dataFidelity: "synthetic",
+  observedFields: ["Official regulator and central-bank event publications"],
+  derivedFields: ["All KRE proxy OHLCV prices and benchmark values are deterministic samples"],
 };
 
 const instruments: Instrument[] = [

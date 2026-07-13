@@ -1,0 +1,142 @@
+.run-history {
+  display: grid;
+  gap: 18px;
+}
+
+.run-history-heading {
+  align-items: end;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+}
+
+.run-history-heading h2,
+.run-history-card h3 {
+  margin: 0;
+}
+
+.run-history-eyebrow,
+.run-history-date {
+  color: var(--text-dim);
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.run-history-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-history-heading-side {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+}
+
+.run-history-library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.run-history-stats span {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  display: grid;
+  font-size: 10px;
+  min-width: 78px;
+  padding: 8px 10px;
+}
+
+.run-history-stats strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.run-history-empty,
+.run-history-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.run-history-empty p,
+.run-history-card p {
+  color: var(--text-dim);
+  margin: 6px 0 0;
+}
+
+.run-history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.run-history-card {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(210px, 1.2fr) minmax(280px, 1fr) auto;
+}
+
+.run-history-card-main {
+  min-width: 0;
+}
+
+.run-history-sample {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  display: inline-block;
+  font-size: 10px;
+  margin-top: 10px;
+  padding: 4px 8px;
+}
+
+.run-history-metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(100px, 1fr));
+}
+
+.run-history-metrics span {
+  display: grid;
+}
+
+.run-history-metrics small {
+  color: var(--text-dim);
+}
+
+.run-history-comparison {
+  grid-column: 1 / -1;
+}
+
+.run-history-actions {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+  min-width: 112px;
+}
+
+@media (max-width: 860px) {
+  .run-history-heading,
+  .run-history-card {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .run-history-actions {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .run-history-heading-side {
+    justify-items: start;
+  }
+}

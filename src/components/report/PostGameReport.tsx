@@ -6,12 +6,14 @@ import type {
   TradeOutcome,
 } from "../../types";
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
+import "./PostGameReport.css";
 
 const ZERO_EPSILON = 0.0000001;
 
 type Props = {
   report: ReportPayload;
   currency?: string;
+  pricePrecision?: number;
   onClose: () => void;
   onReset: () => void;
 };
@@ -31,6 +33,7 @@ function signedPct(value: number): string {
 export default function PostGameReport({
   report,
   currency = "USD",
+  pricePrecision = 2,
   onClose,
   onReset,
 }: Props) {
@@ -84,13 +87,40 @@ export default function PostGameReport({
     };
   }, [onClose]);
 
-  const copySummary = async () => {
+  const copySummary = async (
+    successMessage = "Report summary copied.",
+  ): Promise<void> => {
     try {
       await navigator.clipboard.writeText(summary);
-      setShareMessage("Report summary copied.");
+      setShareMessage(successMessage);
     } catch {
       setShareMessage("Clipboard access is unavailable in this browser.");
     }
+  };
+
+  const canNativeShare = typeof navigator.share === "function";
+  const shareSummary = async (): Promise<void> => {
+    if (!canNativeShare) {
+      await copySummary();
+      return;
+    }
+    try {
+      await navigator.share({
+        title: `Market Time Machine — ${report.scenarioTitle}`,
+        text: summary,
+      });
+      setShareMessage("Report summary shared.");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setShareMessage("Sharing cancelled.");
+        return;
+      }
+      await copySummary("Native sharing was unavailable; report summary copied.");
+    }
+  };
+
+  const printReport = (): void => {
+    window.print();
   };
 
   const downloadReport = () => {
@@ -126,8 +156,11 @@ export default function PostGameReport({
             </p>
           </div>
           <div className="report-head-actions">
-            <button className="btn" type="button" onClick={copySummary}>
-              Copy summary
+            <button className="btn" type="button" onClick={shareSummary}>
+              {canNativeShare ? "Share summary" : "Copy summary"}
+            </button>
+            <button className="btn" type="button" onClick={printReport}>
+              Print / Save PDF
             </button>
             <button className="btn" type="button" onClick={downloadReport}>
               Export JSON
@@ -209,6 +242,7 @@ export default function PostGameReport({
             trade={report.bestTrade}
             replay={decisionReplayFor(report, report.bestTrade)}
             currency={currency}
+            pricePrecision={pricePrecision}
             positive
           />
           <DecisionCard
@@ -216,8 +250,15 @@ export default function PostGameReport({
             trade={report.worstTrade}
             replay={decisionReplayFor(report, report.worstTrade)}
             currency={currency}
+            pricePrecision={pricePrecision}
           />
         </section>
+
+        <DecisionReplaySection
+          points={report.decisionReplay ?? []}
+          currency={currency}
+          pricePrecision={pricePrecision}
+        />
 
         <section className="report-section">
           <h3>By the numbers</h3>
@@ -491,6 +532,7 @@ function reportSummary(
 ): string {
   const m = report.metrics;
   return [
+    "Market Time Machine · Decision-quality report",
     report.scenarioTitle,
     `Return: ${signedPct(m.totalReturn)}`,
     `Benchmark: ${signedPct(m.benchmarkReturn)}`,
@@ -510,7 +552,10 @@ function decisionReplayFor(
 ): DecisionReplayPoint | undefined {
   if (!trade) return undefined;
   return report.decisionReplay?.find(
-    (point) => point.fill.id === trade.fill.id,
+    (point) =>
+      point.fill.id === trade.fill.id ||
+      point.fill.orderId === trade.fill.orderId ||
+      point.fills?.some((fill) => fill.id === trade.fill.id),
   );
 }
 
@@ -594,6 +639,14 @@ function JournalQualityCard({
           label="Linked decisions"
           value={`${summary.linkedEntryCount}/${summary.executedDecisionCount}`}
         />
+        <NumberCell
+          label="Structured plans"
+          value={formatPct(summary.structuredPlanRate ?? 0)}
+        />
+        <NumberCell
+          label="Event-linked plans"
+          value={formatPct(summary.eventLinkRate ?? 0)}
+        />
       </div>
       <EvidenceList evidence={summary.evidence} />
     </article>
@@ -671,13 +724,15 @@ function ProvenanceSection({
 }: {
   provenance: NonNullable<ReportPayload["provenance"]>;
 }) {
+  const fidelityLabel = dataFidelityLabel(provenance.dataFidelity);
   const details = [
     ["License", provenance.license],
     ["Data version", provenance.dataVersion],
     ["Price adjustment", provenance.priceAdjustment?.replaceAll("_", " ")],
     ["Market calendar", provenance.marketCalendarId],
     ["Generated", provenance.generatedAt ? dateTimeLabel(provenance.generatedAt) : undefined],
-    ["Dataset", provenance.isSampleData ? "Sample data" : "Production dataset"],
+    ["Dataset", provenance.isSampleData ? "Sample data" : "Non-sample dataset"],
+    ["Data fidelity", fidelityLabel],
   ].filter((entry): entry is [string, string] => Boolean(entry[1]));
 
   return (
@@ -710,9 +765,46 @@ function ProvenanceSection({
             </ul>
           </div>
         ) : null}
+        {provenance.observedFields && provenance.observedFields.length > 0 ? (
+          <div>
+            <strong>Observed fields</strong>
+            <ul>
+              {provenance.observedFields.map((field) => (
+                <li key={field}>{field}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {provenance.derivedFields && provenance.derivedFields.length > 0 ? (
+          <div>
+            <strong>Derived or reconstructed fields</strong>
+            <ul>
+              {provenance.derivedFields.map((field) => (
+                <li key={field}>{field}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </section>
   );
+}
+
+function dataFidelityLabel(
+  fidelity: NonNullable<ReportPayload["provenance"]>["dataFidelity"],
+): string | undefined {
+  switch (fidelity) {
+    case "observed":
+      return "Observed market fields";
+    case "derived":
+      return "Derived dataset";
+    case "synthetic":
+      return "Synthetic training data";
+    case "mixed":
+      return "Mixed observed and derived fields";
+    default:
+      return undefined;
+  }
 }
 
 function statusLabel(status: string): string {
@@ -895,17 +987,185 @@ function DrawdownCurve({ points }: { points: EquityPoint[] }) {
   );
 }
 
+function DecisionReplaySection({
+  points,
+  currency,
+  pricePrecision,
+}: {
+  points: DecisionReplayPoint[];
+  currency: string;
+  pricePrecision: number;
+}) {
+  return (
+    <section className="report-section" aria-label="Chronological decision replay">
+      <h3>Decision replay</h3>
+      <p>
+        Every executed order is reviewed in sequence with the plan captured
+        before submission, actual execution, and information visible at that
+        moment.
+      </p>
+      {points.length === 0 ? (
+        <div className="empty-state">
+          No executed decision is available for chronological review.
+        </div>
+      ) : (
+        <div className="recommendation-list">
+          {points.map((point, index) => (
+            <DecisionReplayCard
+              key={point.order?.id ?? point.fill.orderId}
+              point={point}
+              index={index}
+              currency={currency}
+              pricePrecision={pricePrecision}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DecisionReplayCard({
+  point,
+  index,
+  currency,
+  pricePrecision,
+}: {
+  point: DecisionReplayPoint;
+  index: number;
+  currency: string;
+  pricePrecision: number;
+}) {
+  const plan = point.decisionPlan;
+  const actual = point.actual;
+  const linkedIds = new Set((point.linkedEvents ?? []).map((event) => event.id));
+  const recentVisible = (point.visibleEvents ?? [])
+    .filter((event) => !linkedIds.has(event.id))
+    .slice(-3);
+  const contextEvents = [...(point.linkedEvents ?? []), ...recentVisible];
+  const planItems = [
+    ["Thesis", plan?.thesis],
+    ["Invalidation", plan?.invalidation],
+    ["Exit plan", plan?.exitPlan],
+    ["Accepted risk", plan?.acceptedRisk],
+  ].filter((item): item is [string, string] => Boolean(item[1]));
+  const legacyNote = !planItems.length ? point.journalEntry?.note : undefined;
+  const executedQuantity = actual?.executedQuantity ?? point.fill.quantity;
+  const averageFillPrice = actual?.averageFillPrice ?? point.fill.price;
+  const fillCount = actual?.fillCount ?? point.fills?.length ?? 1;
+
+  return (
+    <article className="recommendation-card">
+      <div className="recommendation-head">
+        <span>
+          Decision {index + 1} · {dateTimeLabel(point.decisionTime ?? point.fill.time)}
+        </span>
+        <h4>
+          {point.fill.side.toUpperCase()} {formatNumber(executedQuantity, 6)}{" "}
+          {point.fill.symbol}
+        </h4>
+      </div>
+      <div className="report-two-column assessment-grid">
+        <div className="assessment-card">
+          <h4>Planned before submission</h4>
+          {planItems.length > 0 ? (
+            <ul className="assessment-evidence">
+              {planItems.map(([label, value]) => (
+                <li key={label}>
+                  <strong>{label}:</strong> {value}
+                </li>
+              ))}
+            </ul>
+          ) : legacyNote ? (
+            <ul className="assessment-evidence">
+              <li>
+                <strong>Legacy note:</strong> {legacyNote}
+              </li>
+            </ul>
+          ) : (
+            <div className="empty-state">
+              No decision plan was recorded for this order.
+            </div>
+          )}
+        </div>
+        <div className="assessment-card">
+          <h4>Actual execution and outcome</h4>
+          <ul className="assessment-evidence">
+            <li>
+              <strong>Execution:</strong> {fillCount} {fillCount === 1 ? "fill" : "fills"}
+              {" "}at {formatCurrency(averageFillPrice, currency, pricePrecision)} average, first filled {dateTimeLabel(actual?.firstFillTime ?? point.fill.time)}.
+            </li>
+            <li>
+              <strong>Result:</strong>{" "}
+              {actual?.realizedPnl !== undefined
+                ? `${formatCurrency(actual.realizedPnl, currency)} realized (${actualResultLabel(actual.result)}).`
+                : "No realized P/L was attributed to this order; review the later exit and final equity."}
+            </li>
+            {plan?.acceptedRisk ? (
+              <li>
+                <strong>Risk comparison:</strong> Planned acceptance was “{plan.acceptedRisk}”;
+                {" "}compare it with the realized result above and the session drawdown.
+              </li>
+            ) : null}
+            {point.equityBefore !== undefined && point.equityAfter !== undefined ? (
+              <li>
+                <strong>Equity context:</strong>{" "}
+                {formatCurrency(point.equityBefore, currency)} before and{" "}
+                {formatCurrency(point.equityAfter, currency)} after recorded execution.
+              </li>
+            ) : null}
+          </ul>
+        </div>
+      </div>
+      <div className="assessment-card">
+        <h4>Information visible at the decision</h4>
+        {contextEvents.length > 0 ? (
+          <ul className="assessment-evidence">
+            {contextEvents.map((event) => (
+              <li key={event.id}>
+                <strong>{linkedIds.has(event.id) ? "Linked event" : "Recent visible event"}:</strong>{" "}
+                {event.title} · {dateTimeLabel(event.publishedAt)}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="empty-state">
+            No published market event was visible at this decision time.
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function actualResultLabel(
+  result: NonNullable<DecisionReplayPoint["actual"]>["result"],
+): string {
+  switch (result) {
+    case "realized_gain":
+      return "gain";
+    case "realized_loss":
+      return "loss";
+    case "realized_flat":
+      return "flat";
+    case "not_realized":
+      return "not realized";
+  }
+}
+
 function DecisionCard({
   title,
   trade,
   replay,
   currency,
+  pricePrecision,
   positive,
 }: {
   title: string;
   trade?: TradeOutcome;
   replay?: DecisionReplayPoint;
   currency: string;
+  pricePrecision: number;
   positive?: boolean;
 }) {
   return (
@@ -915,7 +1175,8 @@ function DecisionCard({
         <>
           <span className="decision-meta">
             {trade.fill.side} {formatNumber(trade.fill.quantity, 6)}{" "}
-            {trade.fill.symbol} at {formatCurrency(trade.fill.price, currency)}
+            {trade.fill.symbol} at{" "}
+            {formatCurrency(trade.fill.price, currency, pricePrecision)}
           </span>
           <strong className={toneFor(trade.realizedPnl)}>
             {formatCurrency(trade.realizedPnl, currency)}

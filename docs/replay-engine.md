@@ -166,7 +166,7 @@ Replay engine tests should cover:
 
 Local mode cannot fully prevent cheating because data lives on the user's machine.
 
-Challenge and professional modes require:
+Secure hosted challenge and team modes would require:
 
 - Server-side replay state
 - Server-side order execution
@@ -175,4 +175,3 @@ Challenge and professional modes require:
 - Immutable session logs
 - Locked scenario configuration
 - No client access to full future datasets
-

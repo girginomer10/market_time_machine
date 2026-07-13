@@ -33,6 +33,17 @@ const meta: ScenarioMeta = {
   isSampleData: true,
   description:
     "Sample/demo dataset for the open source Financial History Lab vertical slice. Prices are deterministic samples that follow the public macro shape of BTC during 2020-2021. Not for trading decisions.",
+  estimatedMinutes: 14,
+  mission:
+    "Build and defend a risk plan across a crash, a supply event, and a fast bull-market regime change.",
+  learningObjectives: [
+    "Distinguish a durable thesis from momentum chasing.",
+    "Size exposure through unusually large daily volatility.",
+    "Use journaled invalidation rules before changing a position.",
+  ],
+  dataFidelity: "synthetic",
+  observedFields: ["Officially sourced event publication dates and summaries"],
+  derivedFields: ["All OHLCV prices and benchmark values are deterministic samples"],
 };
 
 const instruments: Instrument[] = [

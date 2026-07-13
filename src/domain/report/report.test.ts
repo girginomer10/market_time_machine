@@ -204,6 +204,132 @@ describe("report builder", () => {
     expect(report.decisionConsistency?.status).toBe("assessed");
   });
 
+  it("groups partial fills into one structured decision with visible event context", () => {
+    const scenario = makeScenario();
+    const first = fillFor({
+      id: "partial-1",
+      orderId: "planned-order",
+      quantity: 0.4,
+      price: 105,
+      time: scenario.candles[2].closeTime,
+    });
+    const second = fillFor({
+      id: "partial-2",
+      orderId: "planned-order",
+      quantity: 0.6,
+      price: 110,
+      time: scenario.candles[3].closeTime,
+    });
+    const decisionPlan = {
+      thesis: "The published event supports the recovery thesis.",
+      invalidation: "Close below 95.",
+      exitPlan: "Exit into a 20% rally.",
+      acceptedRisk: "$50 maximum loss",
+      linkedEventIds: ["evt-1", "evt-2"],
+    };
+
+    const report = buildReport({
+      scenario,
+      fills: [second, first],
+      orders: [
+        {
+          id: "planned-order",
+          createdAt: first.time,
+          symbol: "TEST",
+          side: "buy",
+          type: "limit",
+          quantity: 1,
+          status: "filled",
+          decisionPlan,
+          note: decisionPlan.thesis,
+        },
+      ],
+      initialCash: scenario.meta.initialCash,
+    });
+
+    expect(report.decisionReplay).toHaveLength(1);
+    expect(report.decisionReplay?.[0]).toMatchObject({
+      decisionPlan,
+      actual: {
+        fillCount: 2,
+        executedQuantity: 1,
+        averageFillPrice: 108,
+        result: "not_realized",
+      },
+    });
+    expect(report.decisionReplay?.[0].fills?.map((fill) => fill.id)).toEqual([
+      "partial-1",
+      "partial-2",
+    ]);
+    expect(report.decisionReplay?.[0].visibleEvents?.map((event) => event.id)).toEqual([
+      "evt-1",
+    ]);
+    expect(report.decisionReplay?.[0].linkedEvents?.map((event) => event.id)).toEqual([
+      "evt-1",
+    ]);
+    expect(report.journalQuality).toMatchObject({
+      status: "assessed",
+      structuredPlanRate: 1,
+      eventLinkRate: 1,
+      reasonRate: 1,
+      riskPlanRate: 1,
+    });
+  });
+
+  it("uses order submission time for decision chronology and visible information", () => {
+    const scenario = makeScenario();
+    const fill = fillFor({
+      id: "pending-fill",
+      orderId: "pending-order",
+      time: scenario.candles[3].closeTime,
+    });
+    const createdAt = scenario.candles[1].closeTime;
+    const report = buildReport({
+      scenario,
+      fills: [fill],
+      orders: [
+        {
+          id: "pending-order",
+          createdAt,
+          symbol: "TEST",
+          side: "buy",
+          type: "limit",
+          quantity: 1,
+          status: "filled",
+          decisionPlan: {
+            thesis: "Enter before the scheduled information release.",
+            linkedEventIds: ["evt-1"],
+          },
+        },
+      ],
+      initialCash: scenario.meta.initialCash,
+    });
+
+    expect(report.decisionReplay?.[0].decisionTime).toBe(createdAt);
+    expect(report.decisionReplay?.[0].actual?.firstFillTime).toBe(fill.time);
+    expect(report.decisionReplay?.[0].visibleEvents).toEqual([]);
+    expect(report.decisionReplay?.[0].linkedEvents).toEqual([]);
+  });
+
+  it("carries field-level data fidelity into provenance", () => {
+    const scenario = makeScenario();
+    scenario.meta.dataFidelity = "mixed";
+    scenario.meta.observedFields = ["Observed daily close"];
+    scenario.meta.derivedFields = ["Open, high, and low reconstructed from close"];
+
+    const report = buildReport({
+      scenario,
+      fills: [],
+      initialCash: scenario.meta.initialCash,
+    });
+
+    expect(report.provenance).toMatchObject({
+      dataFidelity: "mixed",
+      observedFields: ["Observed daily close"],
+      derivedFields: ["Open, high, and low reconstructed from close"],
+    });
+  });
+
   it("sorts mixed-offset and fractional timestamps by instant", () => {
     const scenario = makeScenario();
     const report = buildReport({

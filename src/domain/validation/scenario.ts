@@ -171,6 +171,46 @@ export function validateScenarioMeta(meta: ScenarioMeta): ValidationIssue[] {
       path: "meta.priceAdjustment",
     });
   }
+  if (
+    meta.estimatedMinutes !== undefined &&
+    (!Number.isFinite(meta.estimatedMinutes) || meta.estimatedMinutes <= 0)
+  ) {
+    issues.push({
+      level: "error",
+      code: "meta.estimated_minutes_invalid",
+      message: "Scenario estimatedMinutes must be a positive number",
+      path: "meta.estimatedMinutes",
+    });
+  }
+  if (
+    meta.dataFidelity &&
+    !["observed", "derived", "synthetic", "mixed"].includes(meta.dataFidelity)
+  ) {
+    issues.push({
+      level: "error",
+      code: "meta.data_fidelity_invalid",
+      message: "Scenario dataFidelity must be observed, derived, synthetic, or mixed",
+      path: "meta.dataFidelity",
+    });
+  }
+  for (const [field, values] of [
+    ["learningObjectives", meta.learningObjectives],
+    ["observedFields", meta.observedFields],
+    ["derivedFields", meta.derivedFields],
+  ] as const) {
+    if (
+      values !== undefined &&
+      (!Array.isArray(values) ||
+        values.some((value) => typeof value !== "string" || !value.trim()))
+    ) {
+      issues.push({
+        level: "error",
+        code: `meta.${field}_invalid`,
+        message: `Scenario ${field} must contain non-empty strings`,
+        path: `meta.${field}`,
+      });
+    }
+  }
   return issues;
 }
 

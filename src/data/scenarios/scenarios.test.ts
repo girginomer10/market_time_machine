@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { validateScenarioPackage } from "../../domain/validation/scenario";
 import { buildScenarioRegistry, listScenarios } from "./index";
 import { btc20202021Scenario } from "./btc-2020-2021";
+import { eurGbpBrexit2016Scenario } from "./eurgbp-brexit-2016";
 import { kreBankingCrisis2023Scenario } from "./kre-banking-crisis-2023";
 import { qqqRateHike2022Scenario } from "./qqq-rate-hike-2022";
 import { sp500Covid2020Scenario } from "./sp500-covid-2020";
@@ -28,6 +29,41 @@ describe("scenario registry", () => {
     expect(() =>
       buildScenarioRegistry([btc20202021Scenario, btc20202021Scenario]),
     ).toThrow("Duplicate scenario id: btc-2020-2021");
+  });
+});
+
+describe("eurgbp-brexit-2016 scenario", () => {
+  it("ships an observed official reference-rate path for beginners", () => {
+    expect(eurGbpBrexit2016Scenario.meta).toMatchObject({
+      id: "eurgbp-brexit-2016",
+      difficulty: "beginner",
+      isSampleData: false,
+      dataFidelity: "mixed",
+    });
+    expect(eurGbpBrexit2016Scenario.candles).toHaveLength(152);
+    expect(
+      eurGbpBrexit2016Scenario.candles.every(
+        (candle) =>
+          candle.open === candle.close &&
+          candle.high === candle.close &&
+          candle.low === candle.close &&
+          candle.volume === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("attributes every replay event and the ECB source manifest", () => {
+    expect(
+      eurGbpBrexit2016Scenario.events.every(
+        (event) => event.source && event.sourceUrl,
+      ),
+    ).toBe(true);
+    expect(eurGbpBrexit2016Scenario.meta.sourceManifest).toContain(
+      "scripts/import-ecb-eurgbp.mjs",
+    );
+    expect(eurGbpBrexit2016Scenario.meta.observedFields?.[0]).toContain(
+      "ECB reference rate",
+    );
   });
 });
 

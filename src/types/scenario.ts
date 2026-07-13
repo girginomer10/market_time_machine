@@ -14,6 +14,8 @@ export type ScenarioMode = "explorer" | "professional" | "blind" | "challenge";
 
 export type Difficulty = "beginner" | "intermediate" | "advanced" | "expert";
 
+export type DataFidelity = "observed" | "derived" | "synthetic" | "mixed";
+
 export type SlippageModel =
   | "none"
   | "fixed_bps"
@@ -62,6 +64,12 @@ export type ScenarioMeta = {
   marketCalendarId?: string;
   isSampleData?: boolean;
   description?: string;
+  estimatedMinutes?: number;
+  learningObjectives?: string[];
+  mission?: string;
+  dataFidelity?: DataFidelity;
+  observedFields?: string[];
+  derivedFields?: string[];
 };
 
 export type ScenarioPackage = {

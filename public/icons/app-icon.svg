@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Market Time Machine</title>
+  <desc id="desc">A clock face with a rising market path.</desc>
+  <rect width="512" height="512" rx="112" fill="#0b0f17"/>
+  <circle cx="256" cy="256" r="154" fill="#111827" stroke="#d6b56d" stroke-width="22"/>
+  <path d="M256 150v112l78 44" fill="none" stroke="#f4e2b5" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M142 350l72-64 52 36 104-108" fill="none" stroke="#56c596" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M334 214h36v36" fill="none" stroke="#56c596" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

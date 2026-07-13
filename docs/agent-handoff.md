@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-07-13 17:44 +03 - Codex
+
+- Task: Completed Market Time Machine Local Lab v1 as an end-to-end local-first product, beyond bug remediation.
+- Changed: Added the scenario library and guided briefing; shipped the official ECB EUR/GBP Brexit lab; introduced structured decision plans, major-event pauses, chronological planned-versus-actual reports, scoring, recommendations, sharing/print/export, local run history and comparisons, user-scenario import/removal, session restore, PWA/offline packaging, release automation, privacy/support/security guidance, and honest Local Lab product boundaries.
+- Verified: `npm ci`, `npm run check`, and the complete `npm audit` passed after the Vite/Vitest toolchain refresh: lint, 397/397 tests across 30 files, TypeScript, production build, restricted-data scan, PWA asset validation, and 0 dependency vulnerabilities. The ECB importer reproduced all 152 committed observations byte-for-byte. Browser QA covered the full decision-to-report flow, local history, 5-decimal FX display, event auto-pause cleanup, desktop/mobile layouts with no horizontal overflow, an empty app warning/error console, and a real Chrome offline reopen after the preview server was stopped.
+- Memory: none; no repo semantic memory is installed. Durable product decisions and remaining hosted-platform boundaries are documented in the product, roadmap, privacy, and release guides.
+- Next: No Local Lab v1 product blocker. Optional hosted-platform work is accounts, managed cohorts, server-authoritative anti-cheat/leaderboards, and broker integrations; public release still requires manually running the Pages workflow and checking install behavior on the deployed HTTPS URL.
+
 ## 2026-07-13 16:36 +03 - Codex
 
 - Task: Completed the repo-wide remediation of replay, execution, portfolio, analytics, reporting, persistence, data import, and UI behavior after a full functional audit.

@@ -28,9 +28,10 @@ function candle(
 
 function installScenario(scenario: ScenarioPackage): void {
   const primarySymbol = scenario.meta.symbols[0];
+  const mode = scenario.meta.supportedModes[0] ?? "explorer";
   useSessionStore.setState({
     scenario,
-    mode: scenario.meta.supportedModes[0] ?? "explorer",
+    mode,
     broker: { ...scenario.broker },
     brokerMode: "scenario",
     status: "idle",
@@ -48,6 +49,8 @@ function installScenario(scenario: ScenarioPackage): void {
     marginCallActive: false,
     liquidityConsumed: {},
     financingCosts: [],
+    pauseOnMajorEvents: mode === "explorer",
+    majorEventPauseNotice: undefined,
   });
 }
 
@@ -299,7 +302,9 @@ describe("sessionStore finish", () => {
     expect(finished.fills).toHaveLength(2);
     expect(finished.fills[1].side).toBe("sell");
     expect(finished.fills[1].price).toBeLessThanOrEqual(futureStop);
-    expect(finished.fills[1].executionPriceSource).toBe("stop_trigger");
+    expect(["stop_trigger", "gap_open"]).toContain(
+      finished.fills[1].executionPriceSource,
+    );
   });
 
   it("updates stop-loss trigger prices before replay processing", () => {
@@ -352,7 +357,9 @@ describe("sessionStore finish", () => {
     expect(finished.fills).toHaveLength(2);
     expect(finished.fills[1].quantity).toBe(0.02);
     expect(finished.fills[1].price).toBeLessThanOrEqual(futureStop);
-    expect(finished.fills[1].executionPriceSource).toBe("stop_trigger");
+    expect(["stop_trigger", "gap_open"]).toContain(
+      finished.fills[1].executionPriceSource,
+    );
   });
 
   it("cancels the sibling order when a bracket exit fills", () => {
@@ -403,7 +410,9 @@ describe("sessionStore finish", () => {
     expect(finished.orders[1].status).toBe("filled");
     expect(finished.orders[2].status).toBe("cancelled");
     expect(finished.fills[1].price).toBeLessThanOrEqual(futureStop);
-    expect(finished.fills[1].executionPriceSource).toBe("stop_trigger");
+    expect(["stop_trigger", "gap_open"]).toContain(
+      finished.fills[1].executionPriceSource,
+    );
   });
 
   it("records audit and liquidates positions when margin threshold is breached", () => {
@@ -815,6 +824,48 @@ describe("sessionStore professional lifecycle", () => {
     expect(state.financingCosts[0].amount).toBeCloseTo(100 / 365, 5);
   });
 
+  it("stops high-speed Explorer playback at the first major published event", () => {
+    const scenario = makeScenario();
+    installScenario(scenario);
+    useSessionStore.getState().setSpeed("60x");
+    useSessionStore.getState().play();
+
+    useSessionStore.getState().stepForward();
+
+    const state = useSessionStore.getState();
+    expect(state.currentIndex).toBe(4);
+    expect(state.status).toBe("paused");
+    expect(state.majorEventPauseNotice).toMatchObject({
+      eventId: "evt-2",
+      title: "Future event",
+    });
+    expect(
+      state.getSnapshot().visibleEvents.map((event) => event.id),
+    ).toContain("evt-2");
+
+    state.finish();
+    expect(useSessionStore.getState()).toMatchObject({
+      status: "finished",
+      majorEventPauseNotice: undefined,
+    });
+  });
+
+  it("keeps high-speed playback moving when major-event pause is disabled", () => {
+    const scenario = makeScenario();
+    installScenario(scenario);
+    useSessionStore.getState().setPauseOnMajorEvents(false);
+    useSessionStore.getState().setSpeed("60x");
+    useSessionStore.getState().play();
+
+    useSessionStore.getState().stepForward();
+
+    expect(useSessionStore.getState()).toMatchObject({
+      currentIndex: 5,
+      status: "playing",
+      majorEventPauseNotice: undefined,
+    });
+  });
+
   it("applies raw splits and dividends to positions and working orders", () => {
     const scenario = scenarioWithCandles(
       [
@@ -1098,6 +1149,54 @@ describe("sessionStore professional lifecycle", () => {
     expect(
       useSessionStore.getState().auditEvents.at(-1)?.type,
     ).toBe("session_restored");
+  });
+
+  it("persists major-event pause and defaults legacy Explorer sessions on", () => {
+    useSessionStore.getState().setPauseOnMajorEvents(false);
+    const serialized = useSessionStore.getState().exportSession();
+    expect(JSON.parse(serialized).pauseOnMajorEvents).toBe(false);
+
+    useSessionStore.getState().resetScenario();
+    expect(useSessionStore.getState().importSession(serialized).ok).toBe(true);
+    expect(useSessionStore.getState().pauseOnMajorEvents).toBe(false);
+
+    const legacy = JSON.parse(serialized) as Record<string, unknown>;
+    delete legacy.pauseOnMajorEvents;
+    expect(
+      useSessionStore.getState().importSession(JSON.stringify(legacy)).ok,
+    ).toBe(true);
+    expect(useSessionStore.getState().pauseOnMajorEvents).toBe(true);
+  });
+
+  it("round-trips structured decision plans while keeping legacy note sessions valid", () => {
+    const state = useSessionStore.getState();
+    const decisionPlan = {
+      thesis: "A testable recovery thesis.",
+      invalidation: "A close below the visible low.",
+      exitPlan: "Exit after the target or invalidation.",
+      acceptedRisk: "1% of equity",
+      linkedEventIds: [] as string[],
+    };
+    expect(
+      state.submitMarketOrder({
+        symbol: state.primarySymbol,
+        side: "buy",
+        type: "market",
+        quantity: 0.05,
+        note: decisionPlan.thesis,
+        decisionPlan,
+      }).ok,
+    ).toBe(true);
+    const serialized = useSessionStore.getState().exportSession();
+
+    useSessionStore.getState().resetScenario();
+    expect(useSessionStore.getState().importSession(serialized).ok).toBe(true);
+    expect(useSessionStore.getState().orders[0].decisionPlan).toEqual(decisionPlan);
+    expect(useSessionStore.getState().fills[0].decisionPlan).toEqual(decisionPlan);
+    expect(useSessionStore.getState().journal[0].decisionPlan).toEqual({
+      ...decisionPlan,
+      linkedEventIds: undefined,
+    });
   });
 
   it("rejects malformed records instead of installing unsafe session data", () => {

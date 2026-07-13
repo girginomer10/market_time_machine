@@ -4,6 +4,18 @@ export type OrderType = "market" | "limit" | "stop_loss" | "take_profit";
 
 export type TimeInForce = "day" | "gtc";
 
+/**
+ * The decision record captured before an order is submitted. Every field is
+ * optional so sessions written before structured plans existed remain valid.
+ */
+export type DecisionPlan = {
+  thesis?: string;
+  invalidation?: string;
+  exitPlan?: string;
+  acceptedRisk?: string;
+  linkedEventIds?: string[];
+};
+
 export type OrderStatus =
   | "pending"
   | "filled"
@@ -33,6 +45,7 @@ export type Order = {
   status: OrderStatus;
   rejectionReason?: string;
   note?: string;
+  decisionPlan?: DecisionPlan;
 };
 
 export type FillReason =
@@ -69,6 +82,7 @@ export type Fill = {
   executionPriceSource?: ExecutionPriceSource;
   forcedLiquidation?: boolean;
   note?: string;
+  decisionPlan?: DecisionPlan;
 };
 
 export type Position = {
@@ -144,4 +158,5 @@ export type JournalEntry = {
   fillId?: string;
   note: string;
   symbol?: string;
+  decisionPlan?: DecisionPlan;
 };

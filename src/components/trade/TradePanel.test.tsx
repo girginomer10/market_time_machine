@@ -39,6 +39,99 @@ describe("TradePanel order entry", () => {
     expect(useSessionStore.getState().orders[0].timeInForce).toBe("gtc");
   });
 
+  it("records a structured decision plan and links only visible events", () => {
+    useSessionStore.getState().selectScenario("btc-2020-2021");
+    useSessionStore.setState({ currentIndex: 90, status: "paused" });
+    const state = useSessionStore.getState();
+    const snapshot = selectSnapshot(state);
+
+    render(
+      <TradePanel
+        tradablePrice={snapshot.tradablePrices[0]}
+        cash={snapshot.portfolio.cash}
+        positionsValue={snapshot.portfolio.positionsValue}
+        totalValue={snapshot.portfolio.totalValue}
+        realizedPnl={snapshot.portfolio.realizedPnl}
+        unrealizedPnl={snapshot.portfolio.unrealizedPnl}
+        initialCash={state.scenario.meta.initialCash}
+        margin={snapshot.margin}
+        risk={snapshot.risk}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Decision thesis"), {
+      target: { value: "Volatility is stabilizing after the policy response." },
+    });
+    fireEvent.change(screen.getByLabelText("Invalidation"), {
+      target: { value: "Close below the panic low." },
+    });
+    fireEvent.change(screen.getByLabelText("Exit plan"), {
+      target: { value: "Scale out after a 15% recovery." },
+    });
+    fireEvent.change(screen.getByLabelText("Accepted risk"), {
+      target: { value: "1% of equity" },
+    });
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Link WHO declares COVID-19 a pandemic/i,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /place market buy/i }));
+
+    const next = useSessionStore.getState();
+    expect(next.orders.at(-1)?.decisionPlan).toEqual({
+      thesis: "Volatility is stabilizing after the policy response.",
+      invalidation: "Close below the panic low.",
+      exitPlan: "Scale out after a 15% recovery.",
+      acceptedRisk: "1% of equity",
+      linkedEventIds: ["evt-2020-03-11-who"],
+    });
+    expect(next.fills.at(-1)?.decisionPlan).toEqual(
+      next.orders.at(-1)?.decisionPlan,
+    );
+    expect(next.journal.at(-1)?.decisionPlan).toEqual(
+      next.orders.at(-1)?.decisionPlan,
+    );
+  });
+
+  it("requires a thesis and one risk control in professional mode", () => {
+    useSessionStore.getState().setScenarioMode("professional");
+    const state = useSessionStore.getState();
+    const snapshot = selectSnapshot(state);
+    render(
+      <TradePanel
+        tradablePrice={snapshot.tradablePrices[0]}
+        cash={snapshot.portfolio.cash}
+        positionsValue={snapshot.portfolio.positionsValue}
+        totalValue={snapshot.portfolio.totalValue}
+        realizedPnl={snapshot.portfolio.realizedPnl}
+        unrealizedPnl={snapshot.portfolio.unrealizedPnl}
+        initialCash={state.scenario.meta.initialCash}
+        margin={snapshot.margin}
+        risk={snapshot.risk}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /place market buy/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This mode requires a concise decision thesis.",
+    );
+
+    fireEvent.change(screen.getByLabelText("Decision thesis"), {
+      target: { value: "A defined professional thesis." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /place market buy/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Add an invalidation, exit plan, or accepted-risk statement",
+    );
+
+    fireEvent.change(screen.getByLabelText("Accepted risk"), {
+      target: { value: "$100 maximum loss" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /place market buy/i }));
+    expect(useSessionStore.getState().fills).toHaveLength(1);
+  });
+
   it("passes the selected GTC time in force to a working order", () => {
     const state = useSessionStore.getState();
     const snapshot = selectSnapshot(state);
@@ -126,6 +219,38 @@ describe("TradePanel order entry", () => {
 
     expect(Number((screen.getByLabelText("Stop") as HTMLInputElement).value)).toBeLessThan(mark);
     expect(Number((screen.getByLabelText("Target") as HTMLInputElement).value)).toBeGreaterThan(mark);
+  });
+
+  it("preserves FX tick precision in the quote and pending-order defaults", () => {
+    const state = useSessionStore.getState();
+    const snapshot = selectSnapshot(state);
+    render(
+      <TradePanel
+        tradablePrice={{
+          symbol: "EURGBP",
+          time: snapshot.currentTime,
+          price: 0.78123,
+          bid: 0.78122,
+          ask: 0.78124,
+        }}
+        tickSize={0.00001}
+        currency="GBP"
+        cash={snapshot.portfolio.cash}
+        positionsValue={snapshot.portfolio.positionsValue}
+        totalValue={snapshot.portfolio.totalValue}
+        realizedPnl={snapshot.portfolio.realizedPnl}
+        unrealizedPnl={snapshot.portfolio.unrealizedPnl}
+        initialCash={state.scenario.meta.initialCash}
+        margin={snapshot.margin}
+        risk={snapshot.risk}
+      />,
+    );
+
+    expect(screen.getByText("£0.78123 mark")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "Limit" }));
+    const limit = screen.getByLabelText("Limit") as HTMLInputElement;
+    expect(limit.value).toBe("0.78123");
+    expect(limit).toHaveAttribute("step", "0.00001");
   });
 
   it("locks broker selection as soon as an order is working", () => {

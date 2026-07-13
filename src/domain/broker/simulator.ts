@@ -1,6 +1,7 @@
 import type {
   BrokerConfig,
   Candle,
+  DecisionPlan,
   ExecutionPriceSource,
   Fill,
   Instrument,
@@ -27,6 +28,7 @@ export type MarketOrderRequest = {
   quantity: number;
   timeInForce?: TimeInForce;
   note?: string;
+  decisionPlan?: DecisionPlan;
 };
 
 export type LimitOrderRequest = {
@@ -39,6 +41,7 @@ export type LimitOrderRequest = {
   timeInForce?: TimeInForce;
   expiresAt?: string;
   note?: string;
+  decisionPlan?: DecisionPlan;
 };
 
 export type TriggerOrderRequest = {
@@ -51,6 +54,7 @@ export type TriggerOrderRequest = {
   timeInForce?: TimeInForce;
   expiresAt?: string;
   note?: string;
+  decisionPlan?: DecisionPlan;
 };
 
 export type OrderRequest = MarketOrderRequest;
@@ -251,6 +255,7 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
     timeInForce: request.timeInForce ?? "day",
     status: "pending",
     note: request.note,
+    decisionPlan: request.decisionPlan,
   };
 
   const normalizedQuantity = normalizeQuantity(
@@ -373,6 +378,7 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
     liquidityParticipation: fillable.participation,
     executionPriceSource: "market",
     note: request.note,
+    decisionPlan: request.decisionPlan,
   };
 
   return {
@@ -437,6 +443,7 @@ export function createLimitOrder(
     filledQuantity: 0,
     status: "pending",
     note: request.note,
+    decisionPlan: request.decisionPlan,
   };
 
   if (!Number.isFinite(request.limitPrice) || request.limitPrice <= 0) {
@@ -525,6 +532,7 @@ export function createTriggerOrder(
     filledQuantity: 0,
     status: "pending",
     note: request.note,
+    decisionPlan: request.decisionPlan,
   };
 
   if (!Number.isFinite(request.triggerPrice) || request.triggerPrice <= 0) {
@@ -778,6 +786,7 @@ export function executeMarketRemainderFill(
     liquidityParticipation: fillable.participation,
     executionPriceSource: "market",
     note: order.note,
+    decisionPlan: order.decisionPlan,
   };
   return {
     ok: true,
@@ -946,6 +955,7 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
     liquidityParticipation: fillable.participation,
     executionPriceSource: priceSource,
     note: order.note,
+    decisionPlan: order.decisionPlan,
   };
 
   return {

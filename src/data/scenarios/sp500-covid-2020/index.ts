@@ -36,6 +36,17 @@ const meta: ScenarioMeta = {
   isSampleData: true,
   description:
     "Sample/demo U.S. equity scenario for practicing decisions during the COVID shock, circuit-breaker halts, emergency monetary policy, fiscal support, macro data releases, and vaccine news. Prices are synthetic and should not be used for trading decisions.",
+  estimatedMinutes: 10,
+  mission:
+    "Manage equity exposure while health, liquidity, fiscal, and monetary-policy information arrives at different times.",
+  learningObjectives: [
+    "Avoid confusing a sharp price move with complete information.",
+    "Separate emergency policy announcements from their later economic effects.",
+    "Compare active de-risking with passive benchmark exposure.",
+  ],
+  dataFidelity: "synthetic",
+  observedFields: ["Official event publication dates and source documents"],
+  derivedFields: ["All SPY proxy OHLCV prices and benchmark values are deterministic samples"],
 };
 
 const instruments: Instrument[] = [

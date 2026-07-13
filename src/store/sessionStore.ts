@@ -3,6 +3,7 @@ import type {
   AuditEvent,
   BrokerConfig,
   CorporateAction,
+  DecisionPlan,
   Fill,
   JournalEntry,
   MarginSnapshot,
@@ -69,6 +70,12 @@ const SESSION_STORAGE_KEY = "market-time-machine.session.v1";
 const SESSION_STORAGE_VERSION = 1;
 export type BrokerMode = "scenario" | BrokerPresetName;
 
+export type MajorEventPauseNotice = {
+  eventId: string;
+  title: string;
+  publishedAt: string;
+};
+
 export type BracketOrderRequest = {
   symbol: string;
   side: OrderSide;
@@ -77,6 +84,7 @@ export type BracketOrderRequest = {
   targetPrice: number;
   timeInForce?: Order["timeInForce"];
   note?: string;
+  decisionPlan?: DecisionPlan;
 };
 
 type FinancingCostEvent = { time: string; amount: number };
@@ -104,6 +112,8 @@ export type SessionState = {
   marginCallActive: boolean;
   liquidityConsumed: Record<string, number>;
   financingCosts: FinancingCostEvent[];
+  pauseOnMajorEvents: boolean;
+  majorEventPauseNotice?: MajorEventPauseNotice;
 };
 
 type SessionActions = {
@@ -113,6 +123,7 @@ type SessionActions = {
   pause: () => void;
   stepForward: () => void;
   setSpeed: (label: ReplaySpeed["label"]) => void;
+  setPauseOnMajorEvents: (enabled: boolean) => void;
   setScenarioMode: (mode: ScenarioMode) => void;
   setBrokerMode: (mode: BrokerMode) => void;
   finish: () => void;
@@ -146,9 +157,10 @@ function buildInitialState(scenarioId: string): SessionState {
   }
   const primarySymbol = scenario.meta.symbols[0];
   const timeline = replayTimeline(scenario);
+  const mode = scenario.meta.supportedModes[0] ?? "explorer";
   return {
     scenario,
-    mode: scenario.meta.supportedModes[0] ?? "explorer",
+    mode,
     broker: { ...scenario.broker },
     brokerMode: "scenario",
     status: "idle",
@@ -168,6 +180,8 @@ function buildInitialState(scenarioId: string): SessionState {
     marginCallActive: false,
     liquidityConsumed: {},
     financingCosts: [],
+    pauseOnMajorEvents: mode === "explorer",
+    majorEventPauseNotice: undefined,
   };
 }
 
@@ -190,6 +204,7 @@ type PersistedSession = {
   marginCallActive: boolean;
   liquidityConsumed: Record<string, number>;
   financingCosts: FinancingCostEvent[];
+  pauseOnMajorEvents?: boolean;
 };
 
 function persistedSessionFor(state: SessionState): PersistedSession {
@@ -212,6 +227,7 @@ function persistedSessionFor(state: SessionState): PersistedSession {
     marginCallActive: state.marginCallActive,
     liquidityConsumed: state.liquidityConsumed,
     financingCosts: state.financingCosts,
+    pauseOnMajorEvents: state.pauseOnMajorEvents,
   };
 }
 
@@ -237,6 +253,25 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
+}
+
+function isValidDecisionPlan(value: unknown): value is DecisionPlan | undefined {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  if (
+    !isOptionalString(value.thesis) ||
+    !isOptionalString(value.invalidation) ||
+    !isOptionalString(value.exitPlan) ||
+    !isOptionalString(value.acceptedRisk)
+  ) {
+    return false;
+  }
+  if (value.linkedEventIds === undefined) return true;
+  return (
+    Array.isArray(value.linkedEventIds) &&
+    value.linkedEventIds.every(isNonEmptyString) &&
+    new Set(value.linkedEventIds).size === value.linkedEventIds.length
+  );
 }
 
 function isValidBroker(value: unknown): value is BrokerConfig {
@@ -382,7 +417,8 @@ function isValidOrder(value: unknown, symbols: Set<string>): value is Order {
     !isOptionalString(value.ocoGroupId) ||
     !isOptionalString(value.rejectionCode) ||
     !isOptionalString(value.rejectionReason) ||
-    !isOptionalString(value.note)
+    !isOptionalString(value.note) ||
+    !isValidDecisionPlan(value.decisionPlan)
   ) {
     return false;
   }
@@ -435,7 +471,8 @@ function isValidFill(value: unknown, symbols: Set<string>): value is Fill {
         value.liquidityParticipation < 0)) ||
     (value.forcedLiquidation !== undefined &&
       typeof value.forcedLiquidation !== "boolean") ||
-    !isOptionalString(value.note)
+    !isOptionalString(value.note) ||
+    !isValidDecisionPlan(value.decisionPlan)
   ) {
     return false;
   }
@@ -452,6 +489,7 @@ function isValidJournalEntry(
     isTimestamp(value.time) &&
     typeof value.note === "string" &&
     isOptionalString(value.fillId) &&
+    isValidDecisionPlan(value.decisionPlan) &&
     (value.symbol === undefined ||
       (isNonEmptyString(value.symbol) && symbols.has(value.symbol)))
   );
@@ -579,6 +617,12 @@ function parsePersistedSession(serialized: string): SessionState {
     !isValidBroker(parsed.broker)
   ) {
     throw new Error("Session file contains invalid trading state.");
+  }
+  if (
+    parsed.pauseOnMajorEvents !== undefined &&
+    typeof parsed.pauseOnMajorEvents !== "boolean"
+  ) {
+    throw new Error("Session file contains an invalid replay preference.");
   }
   if (
     !Number.isInteger(parsed.currentIndex) ||
@@ -734,6 +778,9 @@ function parsePersistedSession(serialized: string): SessionState {
     marginCallActive: false,
     liquidityConsumed,
     financingCosts,
+    pauseOnMajorEvents:
+      mode === "explorer" ? (parsed.pauseOnMajorEvents ?? true) : false,
+    majorEventPauseNotice: undefined,
   };
   const prices = tradablePricesFor(
     next.scenario,
@@ -797,6 +844,62 @@ function currentTimeFor(
     state.currentIndex,
     state.scenario.meta.startTime,
   );
+}
+
+function majorEventPauseFor(
+  state: SessionState,
+  requestedIndex: number,
+): { index: number; notice: MajorEventPauseNotice } | undefined {
+  if (
+    state.status !== "playing" ||
+    state.mode !== "explorer" ||
+    !state.pauseOnMajorEvents
+  ) {
+    return undefined;
+  }
+  const timeline = replayTimeline(state.scenario);
+  const currentTime = timeAtIndex(
+    timeline,
+    state.currentIndex,
+    state.scenario.meta.startTime,
+  );
+  const requestedTime = timeAtIndex(
+    timeline,
+    requestedIndex,
+    state.scenario.meta.endTime,
+  );
+  const currentTimestamp = Date.parse(currentTime);
+  const requestedTimestamp = Date.parse(requestedTime);
+  const event = [...state.scenario.events]
+    .filter((candidate) => {
+      const publishedTimestamp = Date.parse(candidate.publishedAt);
+      return (
+        candidate.importance >= 4 &&
+        Number.isFinite(publishedTimestamp) &&
+        publishedTimestamp > currentTimestamp &&
+        publishedTimestamp <= requestedTimestamp
+      );
+    })
+    .sort(
+      (left, right) =>
+        Date.parse(left.publishedAt) - Date.parse(right.publishedAt),
+    )[0];
+  if (!event) return undefined;
+
+  const eventTimestamp = Date.parse(event.publishedAt);
+  const eventIndex = timeline.findIndex(
+    (time, index) =>
+      index > state.currentIndex && Date.parse(time) >= eventTimestamp,
+  );
+  return {
+    index:
+      eventIndex >= 0 ? Math.min(requestedIndex, eventIndex) : requestedIndex,
+    notice: {
+      eventId: event.id,
+      title: event.title,
+      publishedAt: event.publishedAt,
+    },
+  };
 }
 
 function buildMarginSnapshot(
@@ -884,17 +987,42 @@ function buildSnapshot(state: SessionState): ReplaySnapshot {
   };
 }
 
-function journalEntryForFill(fill: Fill, note?: string): JournalEntry | undefined {
-  const trimmed = note?.trim();
-  if (!trimmed) return undefined;
+function compactDecisionPlan(
+  plan: DecisionPlan | undefined,
+): DecisionPlan | undefined {
+  if (!plan) return undefined;
+  const compacted: DecisionPlan = {
+    thesis: plan.thesis?.trim() || undefined,
+    invalidation: plan.invalidation?.trim() || undefined,
+    exitPlan: plan.exitPlan?.trim() || undefined,
+    acceptedRisk: plan.acceptedRisk?.trim() || undefined,
+    linkedEventIds:
+      plan.linkedEventIds && plan.linkedEventIds.length > 0
+        ? [...new Set(plan.linkedEventIds)]
+        : undefined,
+  };
+  return Object.values(compacted).some((value) => value !== undefined)
+    ? compacted
+    : undefined;
+}
+
+function journalEntryForFill(
+  fill: Fill,
+  note?: string,
+  decisionPlan?: DecisionPlan,
+): JournalEntry | undefined {
+  const plan = compactDecisionPlan(decisionPlan ?? fill.decisionPlan);
+  const trimmed = note?.trim() || plan?.thesis;
+  if (!trimmed && !plan) return undefined;
   return {
     id: `jrn_${Date.now().toString(36)}_${Math.random()
       .toString(36)
       .slice(2, 6)}`,
     time: fill.time,
     fillId: fill.id,
-    note: trimmed,
+    note: trimmed ?? "Structured decision plan recorded.",
     symbol: fill.symbol,
+    decisionPlan: plan,
   };
 }
 
@@ -1842,7 +1970,11 @@ function processTriggeredLimitOrders(
         }
         portfolio = markToMarket(applyFill(portfolio, result.fill), prices);
         fills.push(result.fill);
-        const entry = journalEntryForFill(result.fill, order.note);
+        const entry = journalEntryForFill(
+          result.fill,
+          order.note,
+          order.decisionPlan,
+        );
         if (entry) journal.push(entry);
         auditEvents = [
           ...auditEvents,
@@ -1970,11 +2102,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         finalTime,
         state.auditEvents,
       );
-      set({ ...closed, status: "finished" });
+      set({
+        ...closed,
+        status: "finished",
+        majorEventPauseNotice: undefined,
+      });
       finalizeReport();
       return;
     }
-    set({ status: "playing" });
+    set({ status: "playing", majorEventPauseNotice: undefined });
   },
 
   pause: () => {
@@ -1986,10 +2122,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   stepForward: () => {
     const state = get();
     if (state.status === "finished") return;
-    const nextIndex = Math.min(
+    const requestedIndex = Math.min(
       state.currentIndex + state.speed.candlesPerTick,
       state.primaryCandlesLength - 1,
     );
+    const majorEventPause = majorEventPauseFor(state, requestedIndex);
+    const nextIndex = majorEventPause?.index ?? requestedIndex;
     const isFinished = nextIndex >= state.primaryCandlesLength - 1;
     const triggered = processTriggeredLimitOrders(
       state,
@@ -2012,7 +2150,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       ...triggered,
       ...(closed ?? {}),
       currentIndex: nextIndex,
-      status: isFinished ? "finished" : state.status === "playing" ? "playing" : "paused",
+      status: isFinished
+        ? "finished"
+        : majorEventPause
+          ? "paused"
+          : state.status === "playing"
+            ? "playing"
+            : "paused",
+      majorEventPauseNotice: isFinished ? undefined : majorEventPause?.notice,
     });
     if (isFinished) {
       finalizeReport();
@@ -2022,6 +2167,24 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   setSpeed: (label) => {
     const found = REPLAY_SPEEDS.find((s) => s.label === label);
     if (found) set({ speed: { ...found } });
+  },
+
+  setPauseOnMajorEvents: (enabled) => {
+    const state = get();
+    if (state.mode !== "explorer") {
+      set({
+        pauseOnMajorEvents: false,
+        majorEventPauseNotice: undefined,
+        rejectionMessage:
+          "Major-event auto-pause is available in Explorer mode.",
+      });
+      return;
+    }
+    set({
+      pauseOnMajorEvents: enabled,
+      majorEventPauseNotice: undefined,
+      rejectionMessage: undefined,
+    });
   },
 
   setScenarioMode: (mode) => {
@@ -2047,6 +2210,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         mode === "professional" || mode === "blind" || mode === "challenge"
           ? "scenario"
           : state.brokerMode,
+      pauseOnMajorEvents: mode === "explorer",
+      majorEventPauseNotice: undefined,
       rejectionMessage: undefined,
     });
   },
@@ -2116,6 +2281,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       ...closed,
       currentIndex: finalIndex,
       status: "finished",
+      majorEventPauseNotice: undefined,
     });
     finalizeReport();
   },
@@ -2230,7 +2396,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       applyFill(state.portfolio, result.fill),
       tradablePrices,
     );
-    const entry = journalEntryForFill(result.fill, req.note);
+    const entry = journalEntryForFill(
+      result.fill,
+      req.note,
+      req.decisionPlan,
+    );
     const newJournal = entry ? [...state.journal, entry] : state.journal;
     const placedAudit = auditEvent(state.auditEvents, {
       time: currentTime,
@@ -2496,6 +2666,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ocoGroupId,
         timeInForce: req.timeInForce,
         note: req.note,
+        decisionPlan: req.decisionPlan,
       },
     });
     if (!stop.ok) {
@@ -2525,6 +2696,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ocoGroupId,
         timeInForce: req.timeInForce,
         note: req.note,
+        decisionPlan: req.decisionPlan,
       },
     });
     if (!target.ok) {
@@ -2671,6 +2843,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             limitPrice: updates.price,
             ocoGroupId: order.ocoGroupId,
             note: order.note,
+            decisionPlan: order.decisionPlan,
           }
         : {
             symbol: order.symbol,
@@ -2680,6 +2853,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             triggerPrice: updates.price,
             ocoGroupId: order.ocoGroupId,
             note: order.note,
+            decisionPlan: order.decisionPlan,
           };
     const account = accountContextFor(
       state.portfolio,

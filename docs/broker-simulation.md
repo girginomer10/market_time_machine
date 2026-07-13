@@ -66,7 +66,7 @@ Minimum viable professional set:
 - Stop loss
 - Take profit
 
-Current alpha support:
+Current Local Lab v1 support:
 
 - Market orders fill immediately at the visible tradable price with configured spread, fees, and slippage.
 - Limit, stop-loss, and take-profit orders remain working until a future visible candle range triggers them.
@@ -171,7 +171,7 @@ This prevents unrealistic large trades in low-liquidity historical periods.
 
 ## Margin and Leverage
 
-Professional mode should support:
+Realistic Practice and locked local modes support:
 
 - Cash account
 - Margin account

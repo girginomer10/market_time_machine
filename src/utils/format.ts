@@ -1,8 +1,16 @@
 const currencyFormatters = new Map<string, Intl.NumberFormat>();
 
-function currencyFormatter(currency: string): Intl.NumberFormat {
+function currencyFormatter(
+  currency: string,
+  fractionDigits?: number,
+): Intl.NumberFormat {
   const normalized = currency.trim().toUpperCase() || "USD";
-  const cached = currencyFormatters.get(normalized);
+  const normalizedDigits =
+    fractionDigits === undefined
+      ? undefined
+      : Math.max(0, Math.min(8, Math.trunc(fractionDigits)));
+  const cacheKey = `${normalized}:${normalizedDigits ?? "default"}`;
+  const cached = currencyFormatters.get(cacheKey);
   if (cached) return cached;
 
   let formatter: Intl.NumberFormat;
@@ -10,29 +18,43 @@ function currencyFormatter(currency: string): Intl.NumberFormat {
     formatter = new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: normalized,
-      maximumFractionDigits: 2,
+      maximumFractionDigits: normalizedDigits ?? 2,
+      ...(normalizedDigits === undefined
+        ? {}
+        : { minimumFractionDigits: normalizedDigits }),
     });
   } catch {
     formatter = new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
-      maximumFractionDigits: 2,
+      maximumFractionDigits: normalizedDigits ?? 2,
+      ...(normalizedDigits === undefined
+        ? {}
+        : { minimumFractionDigits: normalizedDigits }),
     });
   }
-  currencyFormatters.set(normalized, formatter);
+  currencyFormatters.set(cacheKey, formatter);
   return formatter;
 }
 
-export function formatCurrency(value: number, currency = "USD"): string {
+export function formatCurrency(
+  value: number,
+  currency = "USD",
+  fractionDigits?: number,
+): string {
   if (!Number.isFinite(value)) return "—";
-  return currencyFormatter(currency).format(value);
+  return currencyFormatter(currency, fractionDigits).format(value);
 }
 
-export function formatNumber(value: number, decimals = 2): string {
+export function formatNumber(
+  value: number,
+  decimals = 2,
+  minimumDecimals = Math.min(decimals, 2),
+): string {
   if (!Number.isFinite(value)) return "—";
   return value.toLocaleString("en-US", {
     maximumFractionDigits: decimals,
-    minimumFractionDigits: Math.min(decimals, 2),
+    minimumFractionDigits: Math.min(decimals, Math.max(0, minimumDecimals)),
   });
 }
 

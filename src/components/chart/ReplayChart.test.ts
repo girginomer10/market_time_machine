@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildOverlayMarkers } from "./eventOverlay";
+import { inferPricePrecision } from "./pricePrecision";
 import type { Candle, MarketEvent } from "../../types";
 
 function candle(index: number): Candle {
@@ -54,5 +55,22 @@ describe("buildOverlayMarkers", () => {
     ]);
     expect(markers[0].leftPct).toBe(0);
     expect(markers[1].leftPct).toBe(100);
+  });
+});
+
+describe("inferPricePrecision", () => {
+  it("keeps conventional prices at two decimals and preserves FX reference rates", () => {
+    expect(inferPricePrecision([candle(0)])).toBe(2);
+    expect(
+      inferPricePrecision([
+        {
+          ...candle(0),
+          open: 0.77435,
+          high: 0.77435,
+          low: 0.77435,
+          close: 0.77435,
+        },
+      ]),
+    ).toBe(5);
   });
 });

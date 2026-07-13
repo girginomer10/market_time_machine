@@ -107,6 +107,36 @@ describe("TradeHistory", () => {
     expect(table.getByText("limit @ $5,100.00")).toBeInTheDocument();
   });
 
+  it("preserves instrument precision for FX fills and working prices", () => {
+    const fxOrder: Order = {
+      ...filledLimitOrder,
+      id: "fx-order",
+      symbol: "EURGBP",
+      limitPrice: 0.77835,
+    };
+    const fxFill: Fill = {
+      ...fill,
+      id: "fx-fill",
+      orderId: fxOrder.id,
+      symbol: "EURGBP",
+      price: 0.77835,
+      referencePrice: 0.778,
+      totalCost: 778.35,
+    };
+    render(
+      <TradeHistory
+        fills={[fxFill]}
+        orders={[fxOrder]}
+        journal={[]}
+        currency="GBP"
+        pricePrecision={5}
+      />,
+    );
+
+    expect(screen.getByText("limit @ £0.77835")).toBeInTheDocument();
+    expect(screen.getByText("£0.77835")).toBeInTheDocument();
+  });
+
   it("filters working and closed records", () => {
     render(
       <TradeHistory

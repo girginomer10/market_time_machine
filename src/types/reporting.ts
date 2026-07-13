@@ -1,4 +1,12 @@
-import type { AuditEvent, Fill, JournalEntry, Order } from "./trading";
+import type { MarketEvent } from "./market";
+import type { DataFidelity } from "./scenario";
+import type {
+  AuditEvent,
+  DecisionPlan,
+  Fill,
+  JournalEntry,
+  Order,
+} from "./trading";
 
 export type BehavioralFlagType =
   | "panic_sell"
@@ -65,12 +73,29 @@ export type FinancingCostPoint = {
   amount: number;
 };
 
+export type DecisionActualContext = {
+  firstFillTime: string;
+  lastFillTime: string;
+  fillCount: number;
+  executedQuantity: number;
+  averageFillPrice: number;
+  realizedPnl?: number;
+  result: "realized_gain" | "realized_loss" | "realized_flat" | "not_realized";
+};
+
 export type DecisionReplayPoint = {
   fill: Fill;
+  fills?: Fill[];
   order?: Order;
+  decisionTime?: string;
   journalEntry?: JournalEntry;
+  decisionPlan?: DecisionPlan;
+  visibleEvents?: MarketEvent[];
+  linkedEvents?: MarketEvent[];
   auditEvents: AuditEvent[];
   tradeOutcome?: TradeOutcome;
+  tradeOutcomes?: TradeOutcome[];
+  actual?: DecisionActualContext;
   equityBefore?: number;
   equityAfter?: number;
 };
@@ -94,6 +119,9 @@ export type ScenarioProvenance = {
   priceAdjustment?: "raw" | "split_adjusted" | "total_return";
   marketCalendarId?: string;
   isSampleData: boolean;
+  dataFidelity?: DataFidelity;
+  observedFields?: string[];
+  derivedFields?: string[];
 };
 
 export type ReportScoreComponentId =
@@ -129,6 +157,8 @@ export type JournalQualitySummary = {
   coverageRate: number;
   reasonRate: number;
   riskPlanRate: number;
+  structuredPlanRate?: number;
+  eventLinkRate?: number;
   evidence: string[];
 };
 

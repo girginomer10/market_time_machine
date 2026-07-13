@@ -16,6 +16,7 @@ type Props = {
   orders: Order[];
   journal: JournalEntry[];
   currency?: string;
+  pricePrecision?: number;
   onCancelOrder?: (orderId: string) => void;
   onUpdateOrder?: (
     orderId: string,
@@ -47,11 +48,15 @@ function orderTypeLabel(type: Order["type"]): string {
   return type.replace("_", " ");
 }
 
-function orderPriceText(order: Order, currency: string): string {
+function orderPriceText(
+  order: Order,
+  currency: string,
+  pricePrecision: number,
+): string {
   const price = order.limitPrice ?? order.triggerPrice;
   if (!price) return "";
   const label = order.type === "limit" ? "" : " trigger";
-  return `${label} @ ${formatCurrency(price, currency)}`;
+  return `${label} @ ${formatCurrency(price, currency, pricePrecision)}`;
 }
 
 function buildOcoGroupLabels(orders: Order[]): Map<string, string> {
@@ -92,6 +97,7 @@ export default function TradeHistory({
   orders,
   journal,
   currency = "USD",
+  pricePrecision = 2,
   onCancelOrder,
   onUpdateOrder,
 }: Props) {
@@ -228,6 +234,7 @@ export default function TradeHistory({
                   <OrderRow
                     order={order}
                     currency={currency}
+                    pricePrecision={pricePrecision}
                     ocoGroupLabels={ocoGroupLabels}
                     hasActions={hasActions}
                     onCancelOrder={onCancelOrder}
@@ -301,6 +308,7 @@ export default function TradeHistory({
                   key={order.id}
                   order={order}
                   currency={currency}
+                  pricePrecision={pricePrecision}
                   ocoGroupLabels={ocoGroupLabels}
                   hasActions={hasActions}
                   onCancelOrder={onCancelOrder}
@@ -325,6 +333,7 @@ export default function TradeHistory({
                         <OrderTypeText
                           order={sourceOrder}
                           currency={currency}
+                          pricePrecision={pricePrecision}
                           ocoGroupLabels={ocoGroupLabels}
                         />
                       ) : (
@@ -333,7 +342,7 @@ export default function TradeHistory({
                     </td>
                     <td className="right">{formatNumber(fill.quantity, 6)}</td>
                     <td className="right">
-                      {formatCurrency(fill.price, currency)}
+                      {formatCurrency(fill.price, currency, pricePrecision)}
                     </td>
                     <td>
                       <span className="status-badge filled">Filled</span>
@@ -365,6 +374,7 @@ export default function TradeHistory({
 function OrderRow({
   order,
   currency,
+  pricePrecision,
   ocoGroupLabels,
   hasActions,
   onCancelOrder,
@@ -373,6 +383,7 @@ function OrderRow({
 }: {
   order: Order;
   currency: string;
+  pricePrecision: number;
   ocoGroupLabels: Map<string, string>;
   hasActions: boolean;
   onCancelOrder?: (orderId: string) => void;
@@ -391,6 +402,7 @@ function OrderRow({
           order={order}
           ocoGroupLabels={ocoGroupLabels}
           currency={currency}
+          pricePrecision={pricePrecision}
         />
       </td>
       <td className="right">
@@ -401,7 +413,7 @@ function OrderRow({
       </td>
       <td className="right">
         {order.averageFillPrice ? (
-          formatCurrency(order.averageFillPrice, currency)
+          formatCurrency(order.averageFillPrice, currency, pricePrecision)
         ) : (
           <span className="muted">—</span>
         )}
@@ -453,16 +465,18 @@ function OrderTypeText({
   order,
   ocoGroupLabels,
   currency,
+  pricePrecision,
 }: {
   order: Order;
   ocoGroupLabels: Map<string, string>;
   currency: string;
+  pricePrecision: number;
 }) {
   const label = ocoGroupLabel(order, ocoGroupLabels);
   return (
     <>
       {orderTypeLabel(order.type)}
-      {orderPriceText(order, currency)}
+      {orderPriceText(order, currency, pricePrecision)}
       {label ? <small className="oco-chip">{label}</small> : null}
       {order.timeInForce ? (
         <small className="execution-note">

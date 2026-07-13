@@ -14,6 +14,7 @@ import {
   firstChartWindowIndex,
   type OverlayMarker,
 } from "./eventOverlay";
+import { inferPricePrecision } from "./pricePrecision";
 
 type Props = {
   candles: Candle[];
@@ -203,6 +204,14 @@ export default function ReplayChart({
 
   useEffect(() => {
     if (!seriesRef.current || !volumeRef.current) return;
+    const precision = inferPricePrecision(candles);
+    seriesRef.current.applyOptions({
+      priceFormat: {
+        type: "price",
+        precision,
+        minMove: 10 ** -precision,
+      },
+    });
     seriesRef.current.setData(chartData);
     volumeRef.current.setData(volumeData);
     if (chartData.length > 0) {
@@ -213,7 +222,7 @@ export default function ReplayChart({
         to: last.time,
       });
     }
-  }, [chartData, volumeData]);
+  }, [candles, chartData, volumeData]);
 
   useEffect(() => {
     const chart = chartRef.current;

@@ -1,0 +1,58 @@
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  body {
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .report-overlay {
+    position: static !important;
+    display: block !important;
+    padding: 0 !important;
+    background: #fff !important;
+    backdrop-filter: none !important;
+  }
+
+  .report-card {
+    --bg: #fff;
+    --text: #111827;
+    --text-2: #374151;
+    --text-dim: #4b5563;
+    --border: #d1d5db;
+    --border-strong: #9ca3af;
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+
+  .report-head {
+    padding: 0 0 12px !important;
+  }
+
+  .report-head-actions,
+  .report-share-message,
+  .report-foot {
+    display: none !important;
+  }
+
+  .report-section,
+  .report-stat,
+  .assessment-card,
+  .recommendation-card,
+  .decision-card,
+  .provenance-section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-card svg {
+    max-width: 100%;
+  }
+}

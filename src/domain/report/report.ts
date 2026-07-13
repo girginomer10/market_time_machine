@@ -413,6 +413,7 @@ function leverageByFillFor(
 }
 
 function decisionReplayFor(
+  scenario: ScenarioPackage,
   fills: Fill[],
   orders: Order[],
   journal: JournalEntry[],
@@ -426,31 +427,117 @@ function decisionReplayFor(
       .filter((entry) => entry.fillId)
       .map((entry) => [entry.fillId!, entry]),
   );
-  const outcomesByFill = new Map(
-    outcomes.map((outcome) => [outcome.fill.id, outcome]),
-  );
-  return [...fills].sort(compareTimestamps).map((fill) => {
-    const fillTimestamp = timestamp(fill.time);
-    const before = [...equityCurve]
-      .reverse()
-      .find((point) => timestamp(point.time) < fillTimestamp);
-    const after = [...equityCurve]
-      .reverse()
-      .find((point) => timestamp(point.time) <= fillTimestamp);
-    return {
-      fill,
-      order: ordersById.get(fill.orderId),
-      journalEntry: journalByFill.get(fill.id),
-      auditEvents: auditEvents
-        .filter(
-          (event) => event.fillId === fill.id || event.orderId === fill.orderId,
-        )
-        .sort(compareTimestamps),
-      tradeOutcome: outcomesByFill.get(fill.id),
-      equityBefore: before?.portfolioValue,
-      equityAfter: after?.portfolioValue,
-    };
-  });
+  const outcomesByOrder = new Map<string, TradeOutcome[]>();
+  for (const outcome of outcomes) {
+    const orderOutcomes = outcomesByOrder.get(outcome.fill.orderId) ?? [];
+    orderOutcomes.push(outcome);
+    outcomesByOrder.set(outcome.fill.orderId, orderOutcomes);
+  }
+  const fillsByOrder = new Map<string, Fill[]>();
+  for (const fill of [...fills]
+    .filter(
+      (candidate) =>
+        !candidate.forcedLiquidation && candidate.reason !== "borrow_cost",
+    )
+    .sort(compareTimestamps)) {
+    const orderFills = fillsByOrder.get(fill.orderId) ?? [];
+    orderFills.push(fill);
+    fillsByOrder.set(fill.orderId, orderFills);
+  }
+
+  return [...fillsByOrder.values()]
+    .sort((left, right) => {
+      const leftOrder = ordersById.get(left[0].orderId);
+      const rightOrder = ordersById.get(right[0].orderId);
+      return (
+        timestamp(leftOrder?.createdAt ?? left[0].time) -
+        timestamp(rightOrder?.createdAt ?? right[0].time)
+      );
+    })
+    .map((orderFills) => {
+      const fill = orderFills[0];
+      const lastFill = orderFills[orderFills.length - 1];
+      const lastFillTimestamp = timestamp(lastFill.time);
+      const order = ordersById.get(fill.orderId);
+      const decisionTime = order?.createdAt ?? fill.time;
+      const decisionTimestamp = timestamp(decisionTime);
+      const journalEntry = orderFills
+        .map((candidate) => journalByFill.get(candidate.id))
+        .find((entry) => entry !== undefined);
+      const decisionPlan =
+        order?.decisionPlan ??
+        orderFills.find((candidate) => candidate.decisionPlan)?.decisionPlan ??
+        journalEntry?.decisionPlan;
+      const visibleEvents = [...scenario.events]
+        .filter((event) => timestamp(event.publishedAt) <= decisionTimestamp)
+        .sort(
+          (left, right) =>
+            timestamp(left.publishedAt) - timestamp(right.publishedAt),
+        );
+      const linkedEventIds = new Set(decisionPlan?.linkedEventIds ?? []);
+      const linkedEvents = visibleEvents.filter((event) =>
+        linkedEventIds.has(event.id),
+      );
+      const orderOutcomes = outcomesByOrder.get(fill.orderId) ?? [];
+      const realizedPnl = orderOutcomes.reduce(
+        (sum, outcome) => sum + outcome.realizedPnl,
+        0,
+      );
+      const executedQuantity = orderFills.reduce(
+        (sum, candidate) => sum + candidate.quantity,
+        0,
+      );
+      const averageFillPrice =
+        executedQuantity > 0
+          ? orderFills.reduce(
+              (sum, candidate) => sum + candidate.price * candidate.quantity,
+              0,
+            ) / executedQuantity
+          : fill.price;
+      const before = [...equityCurve]
+        .reverse()
+        .find((point) => timestamp(point.time) < decisionTimestamp);
+      const after = [...equityCurve]
+        .reverse()
+        .find((point) => timestamp(point.time) <= lastFillTimestamp);
+      return {
+        fill,
+        fills: orderFills,
+        order,
+        decisionTime,
+        journalEntry,
+        decisionPlan,
+        visibleEvents,
+        linkedEvents,
+        auditEvents: auditEvents
+          .filter(
+            (event) =>
+              orderFills.some((candidate) => event.fillId === candidate.id) ||
+              event.orderId === fill.orderId,
+          )
+          .sort(compareTimestamps),
+        tradeOutcome: orderOutcomes[0],
+        tradeOutcomes: orderOutcomes,
+        actual: {
+          firstFillTime: fill.time,
+          lastFillTime: lastFill.time,
+          fillCount: orderFills.length,
+          executedQuantity,
+          averageFillPrice,
+          realizedPnl: orderOutcomes.length > 0 ? realizedPnl : undefined,
+          result:
+            orderOutcomes.length === 0
+              ? "not_realized"
+              : realizedPnl > 1e-9
+                ? "realized_gain"
+                : realizedPnl < -1e-9
+                  ? "realized_loss"
+                  : "realized_flat",
+        },
+        equityBefore: before?.portfolioValue,
+        equityAfter: after?.portfolioValue,
+      };
+    });
 }
 
 function clamp(value: number, minimum = 0, maximum = 100): number {
@@ -473,29 +560,84 @@ const RISK_PATTERN =
 function journalQualityFor(
   fills: Fill[],
   journal: JournalEntry[],
+  orders: Order[],
 ): JournalQualitySummary {
   const orderIds = new Set(fills.map((fill) => fill.orderId));
+  const ordersById = new Map(orders.map((order) => [order.id, order]));
   const fillsById = new Map(fills.map((fill) => [fill.id, fill]));
   const notesByOrder = new Map<string, string[]>();
+  const journalPlansByOrder = new Map<
+    string,
+    NonNullable<JournalEntry["decisionPlan"]>
+  >();
   for (const entry of journal) {
-    if (!entry.fillId || !entry.note.trim()) continue;
+    if (!entry.fillId) continue;
     const fill = fillsById.get(entry.fillId);
     if (!fill) continue;
-    const notes = notesByOrder.get(fill.orderId) ?? [];
-    notes.push(entry.note.trim());
-    notesByOrder.set(fill.orderId, notes);
+    if (entry.note.trim()) {
+      const notes = notesByOrder.get(fill.orderId) ?? [];
+      notes.push(entry.note.trim());
+      notesByOrder.set(fill.orderId, notes);
+    }
+    if (entry.decisionPlan) {
+      journalPlansByOrder.set(fill.orderId, entry.decisionPlan);
+    }
   }
 
   const executedDecisionCount = orderIds.size;
-  const linkedEntryCount = notesByOrder.size;
+  let linkedEntryCount = 0;
+  let reasonCount = 0;
+  let riskPlanCount = 0;
+  let structuredPlanCount = 0;
+  let eventLinkCount = 0;
+  for (const orderId of orderIds) {
+    const order = ordersById.get(orderId);
+    const orderFills = fills.filter((fill) => fill.orderId === orderId);
+    const plan =
+      order?.decisionPlan ??
+      orderFills.find((fill) => fill.decisionPlan)?.decisionPlan ??
+      journalPlansByOrder.get(orderId);
+    const legacyText = [
+      order?.note,
+      ...orderFills.map((fill) => fill.note),
+      ...(notesByOrder.get(orderId) ?? []),
+    ]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .join(" ");
+    const hasStructuredPlan = Boolean(
+      plan &&
+        (plan.thesis?.trim() ||
+          plan.invalidation?.trim() ||
+          plan.exitPlan?.trim() ||
+          plan.acceptedRisk?.trim() ||
+          plan.linkedEventIds?.length),
+    );
+    if (hasStructuredPlan) structuredPlanCount += 1;
+    if ((plan?.linkedEventIds?.length ?? 0) > 0) eventLinkCount += 1;
+    if (hasStructuredPlan || legacyText) linkedEntryCount += 1;
+    if (plan?.thesis?.trim() || REASON_PATTERN.test(legacyText)) {
+      reasonCount += 1;
+    }
+    if (
+      plan?.invalidation?.trim() ||
+      plan?.exitPlan?.trim() ||
+      plan?.acceptedRisk?.trim() ||
+      RISK_PATTERN.test(legacyText)
+    ) {
+      riskPlanCount += 1;
+    }
+  }
   const coverageRate =
     executedDecisionCount > 0 ? linkedEntryCount / executedDecisionCount : 0;
-  const linkedNotes = [...notesByOrder.values()].map((notes) => notes.join(" "));
-  const reasonCount = linkedNotes.filter((note) => REASON_PATTERN.test(note)).length;
-  const riskPlanCount = linkedNotes.filter((note) => RISK_PATTERN.test(note)).length;
-  const reasonRate = linkedNotes.length > 0 ? reasonCount / linkedNotes.length : 0;
+  const reasonRate = linkedEntryCount > 0 ? reasonCount / linkedEntryCount : 0;
   const riskPlanRate =
-    linkedNotes.length > 0 ? riskPlanCount / linkedNotes.length : 0;
+    linkedEntryCount > 0 ? riskPlanCount / linkedEntryCount : 0;
+  const structuredPlanRate =
+    executedDecisionCount > 0
+      ? structuredPlanCount / executedDecisionCount
+      : 0;
+  const eventLinkRate =
+    executedDecisionCount > 0 ? eventLinkCount / executedDecisionCount : 0;
 
   if (executedDecisionCount === 0) {
     return {
@@ -505,24 +647,27 @@ function journalQualityFor(
       coverageRate,
       reasonRate,
       riskPlanRate,
+      structuredPlanRate,
+      eventLinkRate,
       evidence: ["No executed decisions were available to journal."],
     };
   }
 
   const evidence = [
-    `${linkedEntryCount} of ${executedDecisionCount} executed decisions had a linked journal entry.`,
+    `${linkedEntryCount} of ${executedDecisionCount} executed decisions had a structured plan or legacy linked note.`,
+    `${structuredPlanCount} decisions used the structured thesis and risk fields; ${eventLinkCount} explicitly linked a visible event.`,
   ];
-  if (linkedNotes.length > 0) {
+  if (linkedEntryCount > 0) {
     evidence.push(
-      `${reasonCount} linked notes stated a detectable reason; ${riskPlanCount} mentioned risk, invalidation, an exit, or a target.`,
-      "Plan-following cannot be verified from free text alone; structured entry and exit-plan fields are not available.",
+      `${reasonCount} decisions stated a reason; ${riskPlanCount} recorded an invalidation, exit plan, accepted risk, or equivalent legacy text.`,
+      "Structured plans are shown beside execution outcomes; free-text conditions still require qualitative review.",
     );
   } else {
-    evidence.push("No non-empty journal entry was linked to an executed fill.");
+    evidence.push("No decision plan or non-empty legacy note was linked to an executed fill.");
   }
 
   return {
-    status: linkedNotes.length > 0 ? "assessed" : "insufficient_evidence",
+    status: linkedEntryCount > 0 ? "assessed" : "insufficient_evidence",
     score: roundedScore(
       coverageRate * 50 + reasonRate * 25 + riskPlanRate * 25,
     ),
@@ -531,6 +676,8 @@ function journalQualityFor(
     coverageRate,
     reasonRate,
     riskPlanRate,
+    structuredPlanRate,
+    eventLinkRate,
     evidence,
   };
 }
@@ -542,6 +689,7 @@ function decisionConsistencyFor(
     forcedLiquidationCount: number;
     rejectedOrderCount: number;
   },
+  journalQuality: JournalQualitySummary,
 ): DecisionConsistencySummary {
   const assessedDecisionCount = new Set(fills.map((fill) => fill.orderId)).size;
   const severeBehavioralFlagCount = flags.filter(
@@ -573,7 +721,8 @@ function decisionConsistencyFor(
   const evidence = [
     `${flags.length} evidence-backed behavioral flags were detected across ${assessedDecisionCount} executed decisions.`,
     `${executionQuality.forcedLiquidationCount} forced liquidations and ${executionQuality.rejectedOrderCount} rejected orders affected discipline scoring.`,
-    "Free-text notes do not provide enough structure to claim that exits matched stated plans.",
+    `${Math.round((journalQuality.structuredPlanRate ?? 0) * assessedDecisionCount)} decisions included a structured plan for planned-versus-actual review.`,
+    "Free-text conditions remain interpretive; the report presents the evidence without claiming semantic plan compliance.",
   ];
   return {
     status: "assessed",
@@ -978,11 +1127,12 @@ export function buildReport(input: ReportInput): FinishedSessionReport {
     benchmarkInitial,
     benchmarkFinal,
   };
-  const journalQuality = journalQualityFor(fills, journal);
+  const journalQuality = journalQualityFor(fills, journal, orders);
   const decisionConsistency = decisionConsistencyFor(
     fills,
     behavioralFlags,
     executionQuality,
+    journalQuality,
   );
   const score = scoreFor(
     fills,
@@ -1027,6 +1177,7 @@ export function buildReport(input: ReportInput): FinishedSessionReport {
     behavioralFlags,
     journal,
     decisionReplay: decisionReplayFor(
+      scenario,
       fills,
       orders,
       journal,
@@ -1046,6 +1197,13 @@ export function buildReport(input: ReportInput): FinishedSessionReport {
       priceAdjustment: scenario.meta.priceAdjustment,
       marketCalendarId: scenario.meta.marketCalendarId,
       isSampleData: scenario.meta.isSampleData ?? false,
+      dataFidelity: scenario.meta.dataFidelity,
+      observedFields: scenario.meta.observedFields
+        ? [...scenario.meta.observedFields]
+        : undefined,
+      derivedFields: scenario.meta.derivedFields
+        ? [...scenario.meta.derivedFields]
+        : undefined,
     },
     score,
     journalQuality,

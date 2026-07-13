@@ -36,6 +36,17 @@ const meta: ScenarioMeta = {
   isSampleData: true,
   description:
     "Sample/demo growth-equity scenario for practicing position sizing, rallies within drawdowns, inflation data reactions, and central-bank event risk. Prices are synthetic and should not be used for trading decisions.",
+  estimatedMinutes: 10,
+  mission:
+    "Adapt a growth-equity risk plan as inflation releases and monetary-policy decisions change the discount-rate regime.",
+  learningObjectives: [
+    "Recognize the difference between a bear-market rally and a confirmed regime change.",
+    "Plan exposure before scheduled inflation and central-bank releases.",
+    "Measure whether tactical decisions improve on passive QQQ exposure after costs.",
+  ],
+  dataFidelity: "synthetic",
+  observedFields: ["Official CPI, speech, and FOMC publication timestamps"],
+  derivedFields: ["All QQQ proxy OHLCV prices and benchmark values are deterministic samples"],
 };
 
 const instruments: Instrument[] = [

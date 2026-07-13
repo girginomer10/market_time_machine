@@ -14,18 +14,81 @@ import TradePanel from "../components/trade/TradePanel";
 import TradeHistory from "../components/journal/TradeHistory";
 import DecisionJournal from "../components/journal/DecisionJournal";
 import AuditTrail from "../components/audit/AuditTrail";
+import RunHistory from "../components/history/RunHistory";
 import PostGameReport from "../components/report/PostGameReport";
-import { listScenarios } from "../data/scenarios";
+import ScenarioLibrary from "../components/scenario/ScenarioLibrary";
+import {
+  defaultScenarioId,
+  getScenario,
+  isUserScenario,
+  listScenarios,
+  registerUserScenario,
+  removeUserScenario,
+} from "../data/scenarios";
+import {
+  clearRunHistory,
+  exportRunHistory,
+  loadRunHistory,
+  recordCompletedRun,
+  removeCompletedRun,
+  type CompletedRun,
+} from "../domain/history/runHistory";
 import { eventCoverageSummary } from "../domain/scenario/eventCoverage";
 import { selectSnapshot, useSessionStore } from "../store/sessionStore";
 import type { Candle, ReplayStatus, ScenarioMode } from "../types";
 import { formatCurrency, formatNumber, formatPct } from "../utils/format";
+import { scenarioModeLabel } from "../utils/scenarioMode";
 
 const ZERO_EPSILON = 0.0000001;
+const MAX_SCENARIO_IMPORT_BYTES = 25 * 1024 * 1024;
 
 type PendingConfirmation =
   | { kind: "reset" }
-  | { kind: "scenario"; scenarioId: string; title: string };
+  | { kind: "clear-history" }
+  | { kind: "remove-scenario"; scenarioId: string; title: string }
+  | {
+      kind: "start";
+      scenarioId: string;
+      title: string;
+      mode: ScenarioMode;
+    };
+
+function confirmationCopy(pending: PendingConfirmation): {
+  title: string;
+  description: string;
+  confirmLabel: string;
+} {
+  switch (pending.kind) {
+    case "reset":
+      return {
+        title: "Reset this replay?",
+        description:
+          "Orders, fills, journal notes, and replay progress in this session will be cleared.",
+        confirmLabel: "Reset replay",
+      };
+    case "clear-history":
+      return {
+        title: "Clear completed replay history?",
+        description:
+          "Saved reports and progress comparisons will be removed from this browser. Export first if you want a copy.",
+        confirmLabel: "Clear history",
+      };
+    case "remove-scenario":
+      return {
+        title: `Remove ${pending.title}?`,
+        description:
+          "This imported lab will be removed from this browser. Existing report history stays available, but replaying it will require importing the scenario again.",
+        confirmLabel: "Remove imported lab",
+      };
+    case "start":
+      return {
+        title: `Start ${pending.title}?`,
+        description:
+          "The active orders, fills, journal notes, report, and replay progress will be cleared before this new lab starts.",
+        confirmLabel: "Start new replay",
+      };
+  }
+}
 
 function toneFor(value: number): "pos" | "neg" | "neutral" {
   if (value > ZERO_EPSILON) return "pos";
@@ -55,6 +118,15 @@ function currentCandle(candles: Candle[]): Candle | undefined {
   return candles[candles.length - 1];
 }
 
+function pricePrecisionForScenario(scenarioId: string): number {
+  const candidate = getScenario(scenarioId);
+  const primary = candidate?.meta.symbols[0];
+  const instrument = candidate?.instruments.find(
+    (entry) => entry.symbol === primary,
+  );
+  return decimalPlacesForTickSize(instrument?.tickSize);
+}
+
 export default function App() {
   const scenario = useSessionStore((s) => s.scenario);
   const status = useSessionStore((s) => s.status);
@@ -79,17 +151,54 @@ export default function App() {
   const snapshot = useSessionStore(selectSnapshot);
 
   const [reportOpen, setReportOpen] = useState(false);
-  const [scenarioMenuOpen, setScenarioMenuOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(
+    () => status === "finished" || !isRestrictedScenarioMode(mode),
+  );
+  const [libraryCanClose, setLibraryCanClose] = useState(false);
+  const [scenarios, setScenarios] = useState(() => listScenarios());
+  const [runHistory, setRunHistory] = useState<CompletedRun[]>(() =>
+    loadRunHistory(),
+  );
+  const [historicalRun, setHistoricalRun] = useState<CompletedRun>();
   const [hoveredEventId, setHoveredEventId] = useState<string | undefined>();
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const [pendingConfirmation, setPendingConfirmation] =
     useState<PendingConfirmation>();
   const [sessionMessage, setSessionMessage] = useState<string>();
-  const importInputRef = useRef<HTMLInputElement | null>(null);
+  const [scenarioMessage, setScenarioMessage] = useState<{
+    kind: "status" | "error";
+    text: string;
+  }>();
+  const brandButtonRef = useRef<HTMLButtonElement | null>(null);
+  const primarySymbol = scenario.meta.symbols[0];
+  const primaryInstrument = scenario.instruments.find(
+    (instrument) => instrument.symbol === primarySymbol,
+  );
+  const primaryPricePrecision = decimalPlacesForTickSize(
+    primaryInstrument?.tickSize,
+  );
 
   useEffect(() => {
-    if (report) setReportOpen(true);
-  }, [report]);
+    if (report && !libraryOpen) setReportOpen(true);
+  }, [libraryOpen, report]);
+
+  useEffect(() => {
+    if (!report) return;
+    const recorded = recordCompletedRun({
+      report,
+      mode,
+      brokerMode,
+      currency: scenario.meta.baseCurrency,
+      pricePrecision: primaryPricePrecision,
+    });
+    setRunHistory(recorded.history);
+  }, [
+    brokerMode,
+    mode,
+    primaryPricePrecision,
+    report,
+    scenario.meta.baseCurrency,
+  ]);
 
   const tradablePrice = snapshot.tradablePrices[0];
   const currency = scenario.meta.baseCurrency;
@@ -103,10 +212,6 @@ export default function App() {
       event.type === "forced_liquidation" ||
       event.type === "borrow_cost",
   ).length;
-  const primarySymbol = scenario.meta.symbols[0];
-  const primaryInstrument = scenario.instruments.find(
-    (instrument) => instrument.symbol === primarySymbol,
-  );
   const progressPct =
     totalReplaySteps > 0
       ? Math.min(100, ((snapshot.currentIndex + 1) / totalReplaySteps) * 100)
@@ -120,7 +225,6 @@ export default function App() {
     visibleCandle && visibleCandle.open > 0
       ? visibleCandle.close / visibleCandle.open - 1
       : 0;
-  const scenarios = listScenarios();
   const workingOrderCount = orders.filter(
     (order) =>
       order.status === "pending" || order.status === "partially_filled",
@@ -135,7 +239,7 @@ export default function App() {
   const restrictedReplay =
     status !== "finished" && isRestrictedScenarioMode(mode);
   useEffect(() => {
-    if (restrictedReplay) setScenarioMenuOpen(false);
+    if (restrictedReplay) setLibraryOpen(false);
   }, [restrictedReplay]);
   const visibleEventsChronological = useMemo(
     () =>
@@ -260,19 +364,22 @@ export default function App() {
 
   const resetSession = () => {
     setReportOpen(false);
-    setScenarioMenuOpen(false);
+    setLibraryOpen(false);
+    setLibraryCanClose(false);
     setPendingConfirmation(undefined);
     setSessionMessage(undefined);
     reset();
     setSessionEpoch((epoch) => epoch + 1);
   };
 
-  const switchScenario = (scenarioId: string) => {
+  const startScenario = (scenarioId: string, nextMode: ScenarioMode) => {
     setReportOpen(false);
-    setScenarioMenuOpen(false);
+    setLibraryOpen(false);
+    setLibraryCanClose(false);
     setPendingConfirmation(undefined);
     setSessionMessage(undefined);
     selectScenario(scenarioId);
+    setScenarioMode(nextMode);
     setSessionEpoch((epoch) => epoch + 1);
   };
 
@@ -282,24 +389,91 @@ export default function App() {
     else resetSession();
   };
 
-  const requestScenario = (scenarioId: string, title: string) => {
-    if (scenarioId === scenario.meta.id) {
-      setScenarioMenuOpen(false);
+  const requestStart = (
+    scenarioId: string,
+    nextMode: ScenarioMode,
+  ) => {
+    const candidate = scenarios.find(
+      (candidate) => candidate.meta.id === scenarioId,
+    );
+    if (!candidate) {
+      setScenarioMessage({
+        kind: "error",
+        text: "That scenario is no longer available in this browser. Restore or import it before replaying this run.",
+      });
       return;
     }
+    const title = candidate.meta.title;
+    const resolvedMode = candidate.meta.supportedModes.includes(nextMode)
+      ? nextMode
+      : (candidate.meta.supportedModes[0] ?? "explorer");
     if (status === "playing") pause();
     if (sessionHasProgress) {
-      setScenarioMenuOpen(false);
-      setPendingConfirmation({ kind: "scenario", scenarioId, title });
+      setPendingConfirmation({
+        kind: "start",
+        scenarioId,
+        title,
+        mode: resolvedMode,
+      });
     } else {
-      switchScenario(scenarioId);
+      startScenario(scenarioId, resolvedMode);
     }
   };
 
   const confirmPendingAction = () => {
     if (!pendingConfirmation) return;
-    if (pendingConfirmation.kind === "reset") resetSession();
-    else switchScenario(pendingConfirmation.scenarioId);
+    switch (pendingConfirmation.kind) {
+      case "reset":
+        resetSession();
+        break;
+      case "start":
+        startScenario(
+          pendingConfirmation.scenarioId,
+          pendingConfirmation.mode,
+        );
+        break;
+      case "clear-history":
+        clearRunHistory();
+        setRunHistory([]);
+        setHistoricalRun(undefined);
+        setPendingConfirmation(undefined);
+        break;
+      case "remove-scenario": {
+        const removed = removeUserScenario(pendingConfirmation.scenarioId);
+        if (!removed) {
+          setScenarioMessage({
+            kind: "error",
+            text: "That imported scenario is no longer available in this browser.",
+          });
+        } else {
+          if (scenario.meta.id === pendingConfirmation.scenarioId) {
+            selectScenario(defaultScenarioId);
+            setSessionEpoch((epoch) => epoch + 1);
+          }
+          setScenarios(listScenarios());
+          setScenarioMessage({
+            kind: "status",
+            text: `${pendingConfirmation.title} was removed from this browser.`,
+          });
+        }
+        setPendingConfirmation(undefined);
+        break;
+      }
+    }
+  };
+
+  const openLibrary = () => {
+    if (restrictedReplay) return;
+    if (status === "playing") pause();
+    setReportOpen(false);
+    setLibraryCanClose(true);
+    setLibraryOpen(true);
+  };
+
+  const continueSession = () => {
+    setLibraryCanClose(false);
+    setLibraryOpen(false);
+    setReportOpen(Boolean(report));
   };
 
   const downloadSession = () => {
@@ -314,14 +488,40 @@ export default function App() {
     setSessionMessage("Session file exported.");
   };
 
+  const downloadRunHistory = () => {
+    const serialized = exportRunHistory(runHistory);
+    const blob = new Blob([serialized], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "market-time-machine-run-history.json";
+    link.click();
+    URL.revokeObjectURL(url);
+    setScenarioMessage({
+      kind: "status",
+      text: "Completed replay history exported.",
+    });
+  };
+
+  const requestRemoveScenario = (scenarioId: string, title: string) => {
+    if (scenario.meta.id === scenarioId && sessionHasProgress) {
+      setScenarioMessage({
+        kind: "error",
+        text: "Finish or replace the active replay before removing its imported scenario.",
+      });
+      return;
+    }
+    setPendingConfirmation({ kind: "remove-scenario", scenarioId, title });
+  };
+
   const restoreSession = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
     const result = importSession(await file.text());
     if (result.ok) {
-      setScenarioMenuOpen(false);
-      setReportOpen(Boolean(useSessionStore.getState().report));
+      setReportOpen(false);
+      setLibraryCanClose(false);
       setSessionEpoch((epoch) => epoch + 1);
       setSessionMessage("Saved session restored.");
     } else {
@@ -329,21 +529,149 @@ export default function App() {
     }
   };
 
+  const importUserScenario = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > MAX_SCENARIO_IMPORT_BYTES) {
+      setScenarioMessage({
+        kind: "error",
+        text: "Scenario package is larger than the 25 MB local import limit.",
+      });
+      return;
+    }
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(await file.text());
+    } catch {
+      setScenarioMessage({
+        kind: "error",
+        text: "Scenario package is not valid JSON. Choose an exported scenario package, not a session backup.",
+      });
+      return;
+    }
+    const result = registerUserScenario(candidate);
+    if (!result.ok) {
+      setScenarioMessage({
+        kind: "error",
+        text: result.message ?? "Unable to add this scenario package.",
+      });
+      return;
+    }
+    setScenarios(listScenarios());
+    const warningSummary = result.warnings?.length
+      ? ` ${result.warnings.length} quality warning${result.warnings.length === 1 ? "" : "s"} should be reviewed before sharing.`
+      : "";
+    setScenarioMessage({
+      kind: "status",
+      text: `${result.message ?? "Scenario added."}${warningSummary}`,
+    });
+  };
+
+  const pendingDialogCopy = pendingConfirmation
+    ? confirmationCopy(pendingConfirmation)
+    : undefined;
+  const pendingDialog = pendingDialogCopy ? (
+    <ConfirmationDialog
+      {...pendingDialogCopy}
+      onConfirm={confirmPendingAction}
+      onCancel={() => setPendingConfirmation(undefined)}
+    />
+  ) : null;
+
+  if (libraryOpen) {
+    return (
+      <>
+        <ScenarioLibrary
+          scenarios={scenarios}
+          activeScenario={scenario}
+          activeMode={mode}
+          activeStatus={status}
+          activeProgressPct={progressPct}
+          hasActiveSession={sessionHasProgress}
+          hideActiveIdentity={restrictedReplay}
+          history={
+            <RunHistory
+              runs={runHistory}
+              onViewReport={setHistoricalRun}
+              onReplay={(run) => {
+                setHistoricalRun(undefined);
+                requestStart(run.scenarioId, run.mode);
+              }}
+              onRemove={(run) => {
+                setRunHistory(removeCompletedRun(run.id));
+              }}
+              onExport={downloadRunHistory}
+              onClear={() =>
+                setPendingConfirmation({ kind: "clear-history" })
+              }
+            />
+          }
+          sessionMessage={sessionMessage}
+          scenarioMessage={scenarioMessage?.text}
+          scenarioMessageKind={scenarioMessage?.kind}
+          userScenarioIds={scenarios
+            .filter((candidate) => isUserScenario(candidate.meta.id))
+            .map((candidate) => candidate.meta.id)}
+          onContinue={continueSession}
+          onStart={requestStart}
+          onClose={
+            libraryCanClose
+              ? () => {
+                  setLibraryCanClose(false);
+                  setLibraryOpen(false);
+                  window.requestAnimationFrame(() => brandButtonRef.current?.focus());
+                }
+              : undefined
+          }
+          onExport={downloadSession}
+          onRestore={restoreSession}
+          onImportScenario={importUserScenario}
+          onRemoveScenario={requestRemoveScenario}
+          onClearSavedSession={() => {
+            clearSavedSession();
+            setSessionMessage("Browser save cleared for this session.");
+          }}
+        />
+        {historicalRun ? (
+          <PostGameReport
+            report={historicalRun.report}
+            currency={
+              historicalRun.currency ??
+              getScenario(historicalRun.scenarioId)?.meta.baseCurrency ??
+              "USD"
+            }
+            pricePrecision={
+              historicalRun.pricePrecision ??
+              pricePrecisionForScenario(historicalRun.scenarioId)
+            }
+            onClose={() => setHistoricalRun(undefined)}
+            onReset={() => {
+              const run = historicalRun;
+              setHistoricalRun(undefined);
+              requestStart(run.scenarioId, run.mode);
+            }}
+          />
+        ) : null}
+        {pendingDialog}
+      </>
+    );
+  }
+
   return (
     <div className={restrictedReplay ? "app-shell restricted-replay" : "app-shell"}>
       <header className="app-header">
         <div className="header-left">
           <button
             className="brand"
-            onClick={() => {
-              if (!restrictedReplay) setScenarioMenuOpen((open) => !open);
-            }}
+            onClick={openLibrary}
             aria-label={
               restrictedReplay
                 ? "Scenario switch locked during local challenge"
-                : "Switch scenario"
+                : "Open scenario library"
             }
             disabled={restrictedReplay}
+            ref={brandButtonRef}
           >
             <div className="brand-mark" aria-hidden>
               <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
@@ -367,7 +695,7 @@ export default function App() {
               <div className="brand-name">Market Time Machine</div>
               <div className="brand-tagline">Financial History Lab</div>
             </div>
-            <span className="brand-caret">v</span>
+            <span className="brand-caret">Library</span>
           </button>
           <div className="scenario-meta">
             <div className="scenario-eyebrow">Replaying</div>
@@ -384,111 +712,6 @@ export default function App() {
                 : scenario.meta.subtitle}
             </div>
           </div>
-          {scenarioMenuOpen ? (
-            <>
-              <button
-                className="menu-scrim"
-                aria-label="Close scenario menu"
-                onClick={() => setScenarioMenuOpen(false)}
-              />
-              <div className="scenario-menu">
-                <div className="scenario-menu-title">Switch scenario</div>
-                {scenarios.map((candidate) => (
-                  <button
-                    key={candidate.meta.id}
-                    className={
-                      candidate.meta.id === scenario.meta.id
-                        ? "scenario-menu-row active"
-                        : "scenario-menu-row"
-                    }
-                    onClick={() =>
-                      requestScenario(candidate.meta.id, candidate.meta.title)
-                    }
-                  >
-                    <span>{candidate.meta.title}</span>
-                    <small>{candidate.meta.subtitle}</small>
-                    <span className="scenario-menu-facts">
-                      <i>{candidate.meta.assetClass}</i>
-                      <i>{candidate.meta.difficulty}</i>
-                      <i>{candidate.meta.defaultGranularity}</i>
-                      <i>
-                        {formatReplayDate(candidate.meta.startTime)} –{" "}
-                        {formatReplayDate(candidate.meta.endTime)}
-                      </i>
-                    </span>
-                  </button>
-                ))}
-                <div className="scenario-menu-section">
-                  <div className="scenario-menu-title">Learning mode</div>
-                  <div className="mode-grid" role="radiogroup" aria-label="Learning mode">
-                    {scenario.meta.supportedModes.map((candidateMode) => (
-                      <button
-                        key={candidateMode}
-                        className={mode === candidateMode ? "mode-pill active" : "mode-pill"}
-                        type="button"
-                        role="radio"
-                        aria-checked={mode === candidateMode}
-                        onClick={() => {
-                          setScenarioMode(candidateMode);
-                          if (isRestrictedScenarioMode(candidateMode)) {
-                            setScenarioMenuOpen(false);
-                          }
-                        }}
-                        disabled={fills.length > 0 || workingOrderCount > 0}
-                        title={modeDescription(candidateMode)}
-                      >
-                        <span>{modeLabel(candidateMode)}</span>
-                        <small>{modeDescription(candidateMode)}</small>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="scenario-menu-section session-tools">
-                  <div className="scenario-menu-title">Session file</div>
-                  <div>
-                    <button className="btn" type="button" onClick={downloadSession}>
-                      Export
-                    </button>
-                    <button
-                      className="btn"
-                      type="button"
-                      onClick={() => importInputRef.current?.click()}
-                    >
-                      Restore
-                    </button>
-                    <button
-                      className="btn"
-                      type="button"
-                      onClick={() => {
-                        clearSavedSession();
-                        setSessionMessage("Browser save cleared for this session.");
-                      }}
-                    >
-                      Clear browser save
-                    </button>
-                    <input
-                      ref={importInputRef}
-                      className="visually-hidden"
-                      type="file"
-                      accept="application/json,.json"
-                      onChange={restoreSession}
-                      aria-label="Restore session file"
-                    />
-                  </div>
-                  {sessionMessage ? (
-                    <p className="session-message" role="status">
-                      {sessionMessage}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="scenario-menu-note">
-                  {sessionHasProgress
-                    ? "Switching scenarios will reset this lab after confirmation."
-                    : "Choose a scenario and mode before trading starts."}
-                </div>
-              </div>
-            </>
-          ) : null}
         </div>
 
         <div className="header-center">
@@ -522,14 +745,18 @@ export default function App() {
           <span className="header-badge broker">
             Broker · {brokerModeLabel(brokerMode)}
           </span>
-          <span className="header-badge">Mode · {modeLabel(mode)}</span>
+          <span className="header-badge">Mode · {scenarioModeLabel(mode)}</span>
           {status === "finished" ? (
             <button className="btn primary" onClick={() => setReportOpen(true)}>
               View report
             </button>
           ) : (
             <button className="btn primary" onClick={togglePlay}>
-              {status === "playing" ? "Pause replay" : "Resume replay"}
+              {status === "playing"
+                ? "Pause replay"
+                : status === "idle"
+                  ? "Start replay"
+                  : "Resume replay"}
             </button>
           )}
         </div>
@@ -551,7 +778,13 @@ export default function App() {
               </div>
               <div className="price-block">
                 <span className="price">
-                  {visibleCandle ? formatNumber(visibleCandle.close, 2) : "—"}
+                  {visibleCandle
+                    ? formatNumber(
+                        visibleCandle.close,
+                        primaryPricePrecision,
+                        primaryPricePrecision,
+                      )
+                    : "—"}
                 </span>
                 <span className={`price-change ${toneFor(currentCandleReturn)}`}>
                   {formatSignedPct(currentCandleReturn)}
@@ -592,6 +825,8 @@ export default function App() {
           <TradePanel
             key={`${scenario.meta.id}:${sessionEpoch}`}
             tradablePrice={tradablePrice}
+            tickSize={primaryInstrument?.tickSize}
+            pricePrecision={primaryPricePrecision}
             currency={currency}
             cash={snapshot.portfolio.cash}
             positionsValue={snapshot.portfolio.positionsValue}
@@ -637,6 +872,7 @@ export default function App() {
                 orders={displayOrders}
                 journal={displayJournal}
                 currency={currency}
+                pricePrecision={primaryPricePrecision}
                 onCancelOrder={
                   status === "finished" ? undefined : cancelOrder
                 }
@@ -680,31 +916,12 @@ export default function App() {
         <PostGameReport
           report={report}
           currency={currency}
+          pricePrecision={primaryPricePrecision}
           onClose={() => setReportOpen(false)}
           onReset={resetSession}
         />
       ) : null}
-      {pendingConfirmation ? (
-        <ConfirmationDialog
-          title={
-            pendingConfirmation.kind === "reset"
-              ? "Reset this replay?"
-              : `Switch to ${pendingConfirmation.title}?`
-          }
-          description={
-            pendingConfirmation.kind === "reset"
-              ? "Orders, fills, journal notes, and replay progress in this session will be cleared."
-              : "The current orders, fills, journal notes, and replay progress will be cleared before the new scenario opens."
-          }
-          confirmLabel={
-            pendingConfirmation.kind === "reset"
-              ? "Reset replay"
-              : "Switch scenario"
-          }
-          onConfirm={confirmPendingAction}
-          onCancel={() => setPendingConfirmation(undefined)}
-        />
-      ) : null}
+      {pendingDialog}
     </div>
   );
 }
@@ -753,25 +970,16 @@ function brokerModeLabel(mode: string): string {
   return mode.charAt(0).toUpperCase() + mode.slice(1);
 }
 
-function modeLabel(mode: ScenarioMode): string {
-  return mode.charAt(0).toUpperCase() + mode.slice(1);
-}
-
-function modeDescription(mode: ScenarioMode): string {
-  switch (mode) {
-    case "explorer":
-      return "Guided replay with flexible broker assumptions.";
-    case "professional":
-      return "Scenario broker rules with full research context.";
-    case "blind":
-      return "Limited context and no shortcut to the ending.";
-    case "challenge":
-      return "Locked assumptions and a complete replay required.";
-  }
-}
-
 function isRestrictedScenarioMode(mode: ScenarioMode): boolean {
   return mode === "blind" || mode === "challenge";
+}
+
+function decimalPlacesForTickSize(tickSize?: number): number {
+  if (!tickSize || !Number.isFinite(tickSize) || tickSize <= 0) return 2;
+  const [coefficient, exponentText] = tickSize.toString().toLowerCase().split("e");
+  const coefficientDecimals = coefficient.split(".")[1]?.length ?? 0;
+  const exponent = exponentText ? Number(exponentText) : 0;
+  return Math.min(8, Math.max(0, coefficientDecimals - exponent));
 }
 
 function maskAssetText(

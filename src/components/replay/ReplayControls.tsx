@@ -18,6 +18,13 @@ export default function ReplayControls({ onRequestReset }: Props) {
   const pause = useSessionStore((s) => s.pause);
   const stepForward = useSessionStore((s) => s.stepForward);
   const setSpeed = useSessionStore((s) => s.setSpeed);
+  const pauseOnMajorEvents = useSessionStore((s) => s.pauseOnMajorEvents);
+  const majorEventPauseNotice = useSessionStore(
+    (s) => s.majorEventPauseNotice,
+  );
+  const setPauseOnMajorEvents = useSessionStore(
+    (s) => s.setPauseOnMajorEvents,
+  );
   const finish = useSessionStore((s) => s.finish);
 
   useEffect(() => {
@@ -72,6 +79,28 @@ export default function ReplayControls({ onRequestReset }: Props) {
           </button>
         ))}
       </div>
+      <label
+        className="firewall-badge"
+        title={
+          mode === "explorer"
+            ? "Pause when a newly published high-importance event becomes visible"
+            : "Major-event auto-pause is locked outside Explorer mode"
+        }
+      >
+        <input
+          type="checkbox"
+          checked={pauseOnMajorEvents}
+          onChange={(event) => setPauseOnMajorEvents(event.target.checked)}
+          disabled={mode !== "explorer" || isFinished}
+          aria-label="Auto-pause on major events"
+        />
+        Major-event pause
+      </label>
+      {majorEventPauseNotice ? (
+        <div className="firewall-badge" role="status" aria-live="polite">
+          Paused for major event: {majorEventPauseNotice.title}
+        </div>
+      ) : null}
       <div className="firewall-badge" title="Information firewall is active">
         <span className="dot mixed" /> Firewall{" "}
         {restrictedReplay ? "active" : `${progressPct}%`}

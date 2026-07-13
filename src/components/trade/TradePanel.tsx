@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import {
+  selectSnapshot,
   type BrokerMode,
   useSessionStore,
 } from "../../store/sessionStore";
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
 import type {
+  DecisionPlan,
   MarginSnapshot,
+  MarketEvent,
   OrderType,
   RiskSnapshot,
   TimeInForce,
@@ -46,6 +49,8 @@ type TicketOrderType = OrderType | "bracket";
 
 type Props = {
   tradablePrice?: TradablePrice;
+  tickSize?: number;
+  pricePrecision?: number;
   currency?: string;
   cash: number;
   positionsValue: number;
@@ -71,6 +76,8 @@ function signedPct(value: number): string {
 
 export default function TradePanel({
   tradablePrice,
+  tickSize,
+  pricePrecision,
   currency = "USD",
   cash,
   positionsValue,
@@ -96,6 +103,10 @@ export default function TradePanel({
   const fills = useSessionStore((s) => s.fills);
   const orders = useSessionStore((s) => s.orders);
   const positionsBySymbol = useSessionStore((s) => s.portfolio.positions);
+  const scenarioEvents = useSessionStore((s) => s.scenario.events);
+  const currentReplayTime = useSessionStore(
+    (s) => selectSnapshot(s).currentTime,
+  );
 
   const [quantity, setQuantity] = useState<string>("0.05");
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -106,7 +117,11 @@ export default function TradePanel({
   // has no remaining same-session candle to execute against. GTC is the safe
   // default while DAY remains available for deliberate session-only orders.
   const [timeInForce, setTimeInForce] = useState<TimeInForce>("gtc");
-  const [note, setNote] = useState<string>("");
+  const [thesis, setThesis] = useState<string>("");
+  const [invalidation, setInvalidation] = useState<string>("");
+  const [exitPlan, setExitPlan] = useState<string>("");
+  const [acceptedRisk, setAcceptedRisk] = useState<string>("");
+  const [linkedEventIds, setLinkedEventIds] = useState<string[]>([]);
   const [inputError, setInputError] = useState<string>();
 
   const totalReturn = useMemo(
@@ -131,9 +146,23 @@ export default function TradePanel({
         .sort((a, b) => a.symbol.localeCompare(b.symbol)),
     [positionsBySymbol],
   );
+  const visibleDecisionEvents = useMemo(
+    () =>
+      scenarioEvents.filter(
+        (event) =>
+          Date.parse(event.publishedAt) <= Date.parse(currentReplayTime),
+      ),
+    [currentReplayTime, scenarioEvents],
+  );
+  const seriousDecisionMode = scenarioMode !== "explorer";
   const position = positionsBySymbol[symbol];
   const heldQty = position?.quantity ?? 0;
   const marketPrice = tradablePrice?.price ?? position?.marketPrice;
+  const quotePrecision = resolvePricePrecision(
+    pricePrecision,
+    tickSize,
+    marketPrice,
+  );
   const hasTriggerPrice = orderType !== "market" && orderType !== "bracket";
   const hasBracketPrices = orderType === "bracket";
   const notionalPrice =
@@ -203,7 +232,7 @@ export default function TradePanel({
             ? 1.05
             : 0.95
           : 1;
-    return String(Math.round(price * multiplier * 100) / 100);
+    return priceInputValue(price * multiplier, quotePrecision, tickSize);
   }
 
   function selectOrderType(nextType: TicketOrderType): void {
@@ -279,6 +308,32 @@ export default function TradePanel({
         return;
       }
     }
+    const decisionPlan = compactDecisionPlan({
+      thesis,
+      invalidation,
+      exitPlan,
+      acceptedRisk,
+      linkedEventIds: linkedEventIds.filter((id) =>
+        visibleDecisionEvents.some((event) => event.id === id),
+      ),
+    });
+    if (seriousDecisionMode && !decisionPlan?.thesis) {
+      clearRejection();
+      setInputError("This mode requires a concise decision thesis.");
+      return;
+    }
+    if (
+      seriousDecisionMode &&
+      !decisionPlan?.invalidation &&
+      !decisionPlan?.exitPlan &&
+      !decisionPlan?.acceptedRisk
+    ) {
+      clearRejection();
+      setInputError(
+        "Add an invalidation, exit plan, or accepted-risk statement for this mode.",
+      );
+      return;
+    }
     setInputError(undefined);
     const result = (() => {
       if (orderType === "market") {
@@ -288,7 +343,8 @@ export default function TradePanel({
           type: "market",
           quantity: qty,
           timeInForce,
-          note: note.trim() || undefined,
+          note: decisionPlan?.thesis,
+          decisionPlan,
         });
       }
       if (orderType === "limit") {
@@ -299,7 +355,8 @@ export default function TradePanel({
           quantity: qty,
           limitPrice: Number(limitPrice),
           timeInForce,
-          note: note.trim() || undefined,
+          note: decisionPlan?.thesis,
+          decisionPlan,
         });
       }
       if (orderType === "bracket") {
@@ -310,7 +367,8 @@ export default function TradePanel({
           stopPrice: Number(limitPrice),
           targetPrice: Number(targetPrice),
           timeInForce,
-          note: note.trim() || undefined,
+          note: decisionPlan?.thesis,
+          decisionPlan,
         });
       }
       return submitPendingOrder({
@@ -320,11 +378,16 @@ export default function TradePanel({
         quantity: qty,
         triggerPrice: Number(limitPrice),
         timeInForce,
-        note: note.trim() || undefined,
+        note: decisionPlan?.thesis,
+        decisionPlan,
       });
     })();
     if (result.ok) {
-      setNote("");
+      setThesis("");
+      setInvalidation("");
+      setExitPlan("");
+      setAcceptedRisk("");
+      setLinkedEventIds([]);
     }
   };
 
@@ -411,11 +474,19 @@ export default function TradePanel({
                     />
                     <Metric
                       label="Avg"
-                      value={formatCurrency(candidate.averagePrice, currency)}
+                      value={formatQuotePrice(
+                        candidate.averagePrice,
+                        currency,
+                        quotePrecision,
+                      )}
                     />
                     <Metric
                       label="Mark"
-                      value={formatCurrency(candidate.marketPrice, currency)}
+                      value={formatQuotePrice(
+                        candidate.marketPrice,
+                        currency,
+                        quotePrecision,
+                      )}
                     />
                     <Metric
                       label="Unrealized"
@@ -484,7 +555,11 @@ export default function TradePanel({
           <span className="panel-title">Order ticket</span>
           <span className="panel-meta">
             {tradablePrice
-              ? `${formatCurrency(tradablePrice.price, currency)} mark`
+              ? `${formatQuotePrice(
+                  tradablePrice.price,
+                  currency,
+                  quotePrecision,
+                )} mark`
               : "No quote yet"}
           </span>
         </div>
@@ -582,13 +657,21 @@ export default function TradePanel({
               type="number"
               inputMode="decimal"
               min="0"
-              step="any"
+              step={tickSize ?? "any"}
               value={limitPrice}
               onChange={(e) => {
                 setLimitPrice(e.target.value);
                 setInputError(undefined);
               }}
-              placeholder={tradablePrice ? String(Math.round(tradablePrice.price)) : "0"}
+              placeholder={
+                tradablePrice
+                  ? priceInputValue(
+                      tradablePrice.price,
+                      quotePrecision,
+                      tickSize,
+                    )
+                  : "0"
+              }
               disabled={isFinished}
             />
           </div>
@@ -602,7 +685,7 @@ export default function TradePanel({
                 type="number"
                 inputMode="decimal"
                 min="0"
-                step="any"
+                step={tickSize ?? "any"}
                 value={limitPrice}
                 onChange={(e) => {
                   setLimitPrice(e.target.value);
@@ -619,7 +702,7 @@ export default function TradePanel({
                 type="number"
                 inputMode="decimal"
                 min="0"
-                step="any"
+                step={tickSize ?? "any"}
                 value={targetPrice}
                 onChange={(e) => {
                   setTargetPrice(e.target.value);
@@ -663,14 +746,128 @@ export default function TradePanel({
             currency={currency}
           />
         </div>
+        <div className="broker-block">
+          <div className="broker-head">
+            <span>Decision plan</span>
+            <small id="decision-plan-help">
+              {seriousDecisionMode
+                ? "Thesis and one risk control are required in this mode."
+                : "Optional guided evidence for your post-game review."}
+            </small>
+          </div>
+        </div>
         <textarea
+          id="decision-thesis"
           className="note-input"
-          aria-label="Decision note"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="Decision note: why this trade, and what would invalidate it?"
+          aria-label="Decision thesis"
+          aria-describedby="decision-plan-help"
+          value={thesis}
+          onChange={(event) => {
+            setThesis(event.target.value);
+            setInputError(undefined);
+          }}
+          placeholder={
+            seriousDecisionMode
+              ? "State the decision thesis and evidence."
+              : "What do you expect, and why?"
+          }
           disabled={isFinished}
         />
+        <div className="field-row">
+          <label htmlFor="decision-invalidation">Invalidation</label>
+          <input
+            id="decision-invalidation"
+            value={invalidation}
+            onChange={(event) => {
+              setInvalidation(event.target.value);
+              setInputError(undefined);
+            }}
+            placeholder={
+              seriousDecisionMode
+                ? "Condition that invalidates the thesis"
+                : "What would prove the idea wrong?"
+            }
+            disabled={isFinished}
+          />
+        </div>
+        <div className="field-row">
+          <label htmlFor="decision-exit-plan">Exit plan</label>
+          <input
+            id="decision-exit-plan"
+            value={exitPlan}
+            onChange={(event) => {
+              setExitPlan(event.target.value);
+              setInputError(undefined);
+            }}
+            placeholder={
+              seriousDecisionMode
+                ? "Target, stop, or exit protocol"
+                : "How will you exit if right or wrong?"
+            }
+            disabled={isFinished}
+          />
+        </div>
+        <div className="field-row">
+          <label htmlFor="decision-accepted-risk">Accepted risk</label>
+          <input
+            id="decision-accepted-risk"
+            value={acceptedRisk}
+            onChange={(event) => {
+              setAcceptedRisk(event.target.value);
+              setInputError(undefined);
+            }}
+            placeholder={
+              seriousDecisionMode
+                ? "Maximum loss or risk budget"
+                : "Example: $100, 1%, or one stop-out"
+            }
+            disabled={isFinished}
+          />
+        </div>
+        <div className="broker-block">
+          <div className="broker-head">
+            <span>Visible-event links</span>
+            <small>{linkedEventIds.length} selected · optional</small>
+          </div>
+          {visibleDecisionEvents.length > 0 ? (
+            <div
+              className="ticket-summary"
+              role="group"
+              aria-label="Visible events linked to this decision"
+            >
+              {visibleDecisionEvents.map((event, index) => (
+                <label className="row" key={event.id}>
+                  <span>
+                    {decisionEventLabel(
+                      event,
+                      index,
+                      scenarioMode === "blind" || scenarioMode === "challenge",
+                    )}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={linkedEventIds.includes(event.id)}
+                    onChange={() =>
+                      setLinkedEventIds((current) =>
+                        current.includes(event.id)
+                          ? current.filter((id) => id !== event.id)
+                          : [...current, event.id],
+                      )
+                    }
+                    disabled={isFinished}
+                    aria-label={`Link ${decisionEventLabel(
+                      event,
+                      index,
+                      scenarioMode === "blind" || scenarioMode === "challenge",
+                    )}`}
+                  />
+                </label>
+              ))}
+            </div>
+          ) : (
+            <small>No published event is visible at this replay time.</small>
+          )}
+        </div>
         <button
           className={`place ${side === "buy" ? "place-buy" : "place-sell"}`}
           onClick={placeOrder}
@@ -764,4 +961,85 @@ function Row({
       </strong>
     </div>
   );
+}
+
+function compactDecisionPlan(plan: DecisionPlan): DecisionPlan | undefined {
+  const compacted: DecisionPlan = {
+    thesis: plan.thesis?.trim() || undefined,
+    invalidation: plan.invalidation?.trim() || undefined,
+    exitPlan: plan.exitPlan?.trim() || undefined,
+    acceptedRisk: plan.acceptedRisk?.trim() || undefined,
+    linkedEventIds:
+      plan.linkedEventIds && plan.linkedEventIds.length > 0
+        ? [...new Set(plan.linkedEventIds)]
+        : undefined,
+  };
+  return Object.values(compacted).some((value) => value !== undefined)
+    ? compacted
+    : undefined;
+}
+
+function decisionEventLabel(
+  event: MarketEvent,
+  index: number,
+  masked: boolean,
+): string {
+  if (!masked) return event.title;
+  const date = new Date(event.publishedAt);
+  const dateLabel = Number.isNaN(date.getTime())
+    ? "published"
+    : date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC",
+      });
+  return `Visible event ${index + 1} · ${event.type.replaceAll("_", " ")} · ${dateLabel}`;
+}
+
+function resolvePricePrecision(
+  explicitPrecision: number | undefined,
+  tickSize: number | undefined,
+  price: number | undefined,
+): number {
+  if (Number.isInteger(explicitPrecision)) {
+    return Math.max(0, Math.min(8, explicitPrecision!));
+  }
+  if (tickSize !== undefined && Number.isFinite(tickSize) && tickSize > 0) {
+    const text = tickSize.toString().toLowerCase();
+    const [coefficient, exponentText] = text.split("e");
+    const coefficientDecimals = coefficient.split(".")[1]?.length ?? 0;
+    const exponent = exponentText ? Number(exponentText) : 0;
+    return Math.max(0, Math.min(8, coefficientDecimals - exponent));
+  }
+  return price !== undefined && Math.abs(price) < 1 ? 5 : 2;
+}
+
+function priceInputValue(
+  value: number,
+  precision: number,
+  tickSize?: number,
+): string {
+  const snapped =
+    tickSize !== undefined && Number.isFinite(tickSize) && tickSize > 0
+      ? Math.round(value / tickSize) * tickSize
+      : value;
+  return snapped.toFixed(precision);
+}
+
+function formatQuotePrice(
+  value: number,
+  currency: string,
+  precision: number,
+): string {
+  if (!Number.isFinite(value)) return "—";
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency.trim().toUpperCase() || "USD",
+      minimumFractionDigits: precision,
+      maximumFractionDigits: precision,
+    }).format(value);
+  } catch {
+    return `${currency.trim().toUpperCase() || "USD"} ${value.toFixed(precision)}`;
+  }
 }

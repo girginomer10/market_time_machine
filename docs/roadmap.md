@@ -1,8 +1,29 @@
 # Roadmap
 
-This roadmap describes the full product direction, not only the first MVP.
+This roadmap separates the shipped Local Lab v1 product from optional hosted
+platform expansion. Local Lab v1 is complete as a single-user, local-first
+product; later phases do not block that release.
 
-## Phase 0: Product Foundation
+## Release Status
+
+Shipped in Local Lab v1:
+
+- Product foundation and information firewall
+- Scenario library, onboarding, briefing, and one rights-reviewed ECB hero lab
+- Event-aware replay and realistic broker simulation
+- Structured decision planning and chronological post-game learning report
+- Local progress history, repeat-run comparison, print/share/JSON export
+- Session backup/restore and validated browser scenario-package import
+- Installable offline PWA, CI release gate, and manual static deployment
+
+Future hosted platform work:
+
+- Accounts and cross-device sync
+- Server-enforced anti-cheat and leaderboards
+- Educator/team cohorts and managed assignments
+- Managed market-data services, payments, and broker connectivity
+
+## Phase 0: Product Foundation — Shipped
 
 Goal:
 
@@ -23,15 +44,16 @@ Success criteria:
 - A developer can implement the first version without inventing core concepts
 - A scenario author can see how future leakage is prevented
 
-## Phase 1: Local Financial History Lab
+## Phase 1: Local Financial History Lab — Shipped
 
 Goal:
 
 Build a complete local replay experience for one high-quality global scenario.
 
-Recommended first scenario:
+Shipped onboarding scenario:
 
-- Bitcoin 2020-2021
+- Brexit Referendum: EUR/GBP 2016, using ECB daily reference-rate observations
+  with explicit derived-field disclosure and official UK event sources
 
 Deliverables:
 
@@ -42,17 +64,19 @@ Deliverables:
 - Market, limit, stop-loss, take-profit, and bracket/OCO orders with working-order edit/cancel controls
 - Cash, positions, and portfolio value
 - Trade journal
-- Basic post-game report
+- Structured thesis, invalidation, exit, accepted-risk, and event links
+- Chronological post-game report with print/share/JSON export
 - Buy-and-hold benchmark
+- Local completed-run history and repeat-attempt comparison
 
 Success criteria:
 
 - A user can complete a replay without seeing future candles
 - Trades are saved in session state
 - Final report compares user performance with benchmark
-- The experience is demoable as a GIF or short video
+- The production package is installable and usable offline after first load
 
-## Phase 2: Event-Aware Replay
+## Phase 2: Event-Aware Replay — Shipped
 
 Goal:
 
@@ -73,7 +97,7 @@ Success criteria:
 - Event text avoids hindsight
 - User can see which visible events surrounded each trade
 
-## Phase 3: Broker Realism
+## Phase 3: Broker Realism — Shipped
 
 Goal:
 
@@ -93,10 +117,10 @@ Deliverables:
 Success criteria:
 
 - Trade outcomes differ between ideal, realistic, and harsh execution modes
-- Professional mode can reject invalid orders
+- Realistic Practice can reject invalid orders
 - Report includes fees and slippage drag
 
-## Phase 4: Advanced Reporting
+## Phase 4: Advanced Reporting — Shipped For Local v1
 
 Goal:
 
@@ -110,7 +134,7 @@ Deliverables:
 - Behavioral flags
 - Decision replay
 - Journal consistency analysis
-- Shareable report page
+- Native share/clipboard summary, print/PDF, and report JSON export
 
 Success criteria:
 
@@ -118,7 +142,7 @@ Success criteria:
 - Behavioral flags are evidence-based
 - Users receive specific practice recommendations
 
-## Phase 5: Open Scenario Ecosystem
+## Phase 5: Open Scenario Ecosystem — Shipped For Local v1
 
 Goal:
 
@@ -132,26 +156,30 @@ Deliverables:
 - Source and license checks
 - Scenario preview page
 - Scenario quality checklist
+- Validated browser import for complete scenario-package JSON
+- Reproducible ECB and local licensed-data import scripts
 
 Success criteria:
 
-- Contributors can submit scenarios without modifying core code
+- Users can import validated packages without modifying core code
+- Bundled scenarios require explicit allowlisting and rights review
 - Reviewers can detect future leakage and data issues
 - The scenario library grows across asset classes and regions
 
-## Phase 6: Challenge Mode
+## Phase 6: Hosted Challenge Platform — Future
 
 Goal:
 
-Create competitive, repeatable historical challenges.
+Turn the shipped local blind/challenge practice modes into secure, competitive,
+repeatable hosted challenges.
 
 Deliverables:
 
-- Challenge configuration
+- Server-owned challenge configuration and future-data delivery
 - Locked initial capital and rules
 - Leaderboards
 - Shareable results
-- Blind mode
+- Reuse the shipped blind/local-challenge interaction model
 - Server-side scoring option
 
 Success criteria:
@@ -160,7 +188,7 @@ Success criteria:
 - Rankings are based on risk-aware scoring, not only return
 - Future data is protected in hosted challenges
 
-## Phase 7: Professional Training Platform
+## Phase 7: Professional Training Platform — Future
 
 Goal:
 
@@ -182,7 +210,7 @@ Success criteria:
 - A team lead can compare decision behavior across users
 - Reports can be exported for review
 
-## Phase 8: Research Lab
+## Phase 8: Research Lab — Future
 
 Goal:
 

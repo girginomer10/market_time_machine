@@ -8,6 +8,18 @@ The product hides the future, reveals only historically available information, s
 
 The goal is to make historical market learning experiential instead of passive.
 
+## Local Lab v1 Product Boundary
+
+Local Lab v1 is the complete single-user, local-first product. It includes the
+scenario library and briefing, replay and trading, structured decision plans,
+post-game learning report, local run history, scenario/session portability,
+and installable offline delivery. It requires no account or server.
+
+Hosted accounts, server-enforced anti-cheat, leaderboards, cohort management,
+payments, managed market-data services, and broker connectivity are a separate
+future platform scope. The local product must never imply that its blind or
+challenge modes prevent a technical user from inspecting bundled future data.
+
 ## Product Thesis
 
 Most investors study history after knowing the outcome. That creates hindsight bias.
@@ -57,7 +69,7 @@ Primary value:
 - Build custom scenario packs
 - Teach market regimes interactively
 
-### Professional Training Teams
+### Professional Training Teams (Future Hosted Platform)
 
 Prop firms, analyst training programs, and investment teams.
 
@@ -85,21 +97,34 @@ Characteristics:
 
 This mode should feel like an interactive financial history challenge.
 
-### Professional Training Mode
+### Realistic Practice Mode
 
-Professional Training Mode is a serious simulation environment.
+Realistic Practice is the serious single-user local mode.
 
 Characteristics:
 
 - Realistic broker assumptions
-- Strict session rules
-- Server-side scoring
-- Team or cohort management
+- Locked scenario broker rules
+- Required thesis plus risk/exit planning for each order
 - Auditable trade history
-- Exportable reports
-- Scenario locking and anti-cheat controls
+- Exportable, printable reports
+- Full event and source context
 
-This mode should feel like a lightweight training terminal.
+It should feel like a lightweight training terminal without claiming hosted
+security or team administration.
+
+### Blind Replay
+
+Blind Replay hides the scenario identity and ending during the session, locks
+broker assumptions, and disables skipping. It is a self-test on the local
+device, not secure anti-cheat.
+
+### Local Challenge
+
+Local Challenge combines locked rules, structured decision plans, masked
+scenario identity, and full completion. It creates a repeatable local practice
+format. Competitive rankings and server-side future-data protection belong to
+the hosted platform.
 
 ## Scenario Types
 
@@ -182,9 +207,15 @@ The product must preserve uncertainty. The user should never see a chart range, 
 
 ### 3. Trading and Journaling
 
-Every trade can include a note.
+Every trade can capture a structured decision plan:
 
-Good journal prompts:
+- Thesis
+- Invalidation condition
+- Exit plan
+- Accepted risk
+- Links to events already visible at submission time
+
+Users can also add standalone journal notes. Good prompts include:
 
 - Why are you entering?
 - What would invalidate this trade?
@@ -207,6 +238,11 @@ The report should explain:
 - Which events influenced the user
 - Which behavioral patterns appeared
 - What the user should replay next
+
+The user can print/save the report as PDF, share a concise text summary through
+the operating system or clipboard, export report JSON, and revisit bounded
+completed-run history on the same device. Repeat attempts show score and return
+deltas against the previous run of that scenario.
 
 ## Differentiators
 
@@ -252,7 +288,6 @@ Secondary metrics:
 - Replay completion rate
 - Percentage of trades with journal notes
 - Number of scenarios replayed per user
-- Report shares
+- User-initiated report shares or exports
 - Challenge participation
 - Scenario contributions accepted
-
