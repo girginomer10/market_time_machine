@@ -16,6 +16,7 @@ type Props = {
   pricePrecision?: number;
   onClose: () => void;
   onReset: () => void;
+  onChooseNextPractice?: () => void;
 };
 
 function toneFor(value: number): "pos" | "neg" | "neutral" {
@@ -36,6 +37,7 @@ export default function PostGameReport({
   pricePrecision = 2,
   onClose,
   onReset,
+  onChooseNextPractice,
 }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
@@ -437,9 +439,22 @@ export default function PostGameReport({
             <button className="btn" type="button" onClick={onClose}>
               Return to lab
             </button>
-            <button className="btn primary" type="button" onClick={onReset}>
+            <button
+              className={onChooseNextPractice ? "btn" : "btn primary"}
+              type="button"
+              onClick={onReset}
+            >
               Replay scenario
             </button>
+            {onChooseNextPractice ? (
+              <button
+                className="btn primary"
+                type="button"
+                onClick={onChooseNextPractice}
+              >
+                Choose next practice
+              </button>
+            ) : null}
           </div>
         </div>
       </div>

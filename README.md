@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/girginomer10/market_time_machine/actions/workflows/ci.yml/badge.svg)](https://github.com/girginomer10/market_time_machine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-Local%20Lab%20v1-2E8B57.svg)](#project-status)
+[![Status](https://img.shields.io/badge/status-V2%20Preview-7BB7E0.svg)](#v2-personal-decision-gym-preview)
 
 Market Time Machine is an open source financial history lab for replaying past markets without seeing the future.
 
@@ -37,6 +37,23 @@ Hosted-platform boundaries:
 - Hosted anti-cheat challenge mode
 - Institutional-grade market data
 - Server-side accounts, leaderboards, or cohorts
+
+## V2: Personal Decision Gym Preview
+
+V2 development has started on top of the completed Local Lab v1. Its purpose is
+to turn one-off replays into deliberate practice: report evidence becomes one
+focused next exercise, and progress is based on observable decision process
+rather than profit badges.
+
+The first preview adds a Local Practice Coach to the scenario library. It gives
+new users a baseline assignment, turns the latest report's priority
+recommendation into a prepared next briefing, shows supported current/target
+values, and tracks three Decision Foundations milestones locally. It does not
+create a cross-scenario skill score or send journal content anywhere.
+
+See [V2 Product Definition](docs/v2-personal-decision-gym.md) for the product
+thesis, non-goals, success criteria, first Event Discipline drill, and delivery
+sequence.
 
 ## Quick Start
 
@@ -184,6 +201,7 @@ Important source areas:
 ## Documentation
 
 - [Product Design](docs/product-design.md)
+- [V2 Product Definition](docs/v2-personal-decision-gym.md)
 - [Architecture](docs/architecture.md)
 - [Data and Scenario Standard](docs/data-and-scenarios.md)
 - [Scenario Authoring](docs/scenario-authoring.md)

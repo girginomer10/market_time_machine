@@ -20,6 +20,30 @@ payments, managed market-data services, and broker connectivity are a separate
 future platform scope. The local product must never imply that its blind or
 challenge modes prevent a technical user from inspecting bundled future data.
 
+## V2 Product Boundary: Personal Decision Gym
+
+V2 keeps the local, private architecture and adds a deliberate-practice layer.
+It connects completed-run evidence to one focused next exercise, then measures
+only the process signals that the simulator can actually observe.
+
+V2 must:
+
+- state why a practice was recommended and identify its source run;
+- show a current value and target only when the report supports both;
+- label every coaching rubric with a version;
+- leave missing or inapplicable evidence unassessed rather than treating it as
+  poor performance;
+- keep the existing report score scoped to a run instead of claiming it is a
+  durable cross-scenario skill rating;
+- preserve active-session confirmations and the information firewall;
+- derive the first coach view from local history without adding telemetry or a
+  second copy of sensitive reports.
+
+The first V2 slice is the Local Practice Coach and Decision Foundations track.
+The next slice is a versioned Event Discipline drill with high-importance event
+checkpoints. The complete definition is in
+[V2 Product Definition](v2-personal-decision-gym.md).
+
 ## Product Thesis
 
 Most investors study history after knowing the outcome. That creates hindsight bias.

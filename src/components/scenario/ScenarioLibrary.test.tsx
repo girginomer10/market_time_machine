@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { listScenarios } from "../../data/scenarios";
+import { buildPracticeCoachPlan } from "../../domain/coaching/practiceCoach";
 import type { ScenarioPackage } from "../../types";
 import ScenarioLibrary from "./ScenarioLibrary";
 
@@ -113,6 +114,56 @@ describe("ScenarioLibrary", () => {
     );
 
     expect(onStart).toHaveBeenCalledWith("qqq-rate-hike-2022", "challenge");
+  });
+
+  it("prepares the coach assignment in the existing briefing before start", () => {
+    const available = scenarios();
+    const practicePlan = buildPracticeCoachPlan([], available)!;
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+    renderLibrary({ practicePlan });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review first practice" }),
+    );
+
+    expect(document.getElementById("briefing-title")).toHaveFocus();
+    expect(screen.getByRole("radio", { name: /Explorer/ })).toBeChecked();
+    raf.mockRestore();
+  });
+
+  it("keeps an active replay intact while the coach only prepares a briefing", () => {
+    const available = scenarios();
+    const practicePlan = buildPracticeCoachPlan([], available)!;
+    const onStart = vi.fn();
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+    renderLibrary({
+      practicePlan,
+      activeStatus: "paused",
+      activeProgressPct: 37,
+      hasActiveSession: true,
+      onStart,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review first practice" }),
+    );
+
+    expect(onStart).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Continue active replay" }),
+    ).toBeInTheDocument();
+    expect(document.getElementById("briefing-title")).toHaveFocus();
+    raf.mockRestore();
   });
 
   it("surfaces a saved replay and local scenario import", () => {

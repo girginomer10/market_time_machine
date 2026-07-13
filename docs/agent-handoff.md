@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-07-13 19:02 +03 - Codex
+
+- Task: Defined V2 as the local-first Personal Decision Gym and started it with a working Local Practice Coach vertical slice.
+- Changed: Added a deterministic coaching domain that turns report evidence into a focused next practice; introduced the Decision Foundations milestones, first-run baseline, measurable targets, source/sample/rubric provenance, safe scenario fallback, coach UI, report-to-practice CTA, and briefing focus handoff; hardened malformed v1 recommendation data and kept historical-report actions from pointing at a newer run; documented the V2 user, product loop, boundaries, success criteria, architecture, privacy posture, and delivery sequence.
+- Verified: `npm run check` passed lint, 409/409 tests across 32 files, TypeScript, production build, restricted-data scan, bundle-license validation, and PWA asset validation; `npm audit` reported 0 vulnerabilities; `git diff --check` passed. In-app browser QA covered the clean first-run coach, EUR/GBP Explorer briefing focus, replay-to-report-to-next-practice loop, source evidence and target rendering, 390x844 responsive layout with no horizontal overflow, and an empty warning/error console.
+- Memory: none; no repo semantic memory is installed. Durable V2 decisions are captured in `docs/v2-personal-decision-gym.md` and the updated product, roadmap, architecture, and privacy docs.
+- Next: Build the EUR/GBP Brexit Event Discipline drill with required pre-trade plans, high-importance checkpoints, Hold/Reduce/Exit/Wait decisions, a process-only rubric, and comparable-attempt evidence; then add a versioned evidence ledger and confidence-aware practice tracks.
+
 ## 2026-07-13 17:44 +03 - Codex
 
 - Task: Completed Market Time Machine Local Lab v1 as an end-to-end local-first product, beyond bug remediation.

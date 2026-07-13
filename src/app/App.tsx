@@ -33,6 +33,7 @@ import {
   removeCompletedRun,
   type CompletedRun,
 } from "../domain/history/runHistory";
+import { buildPracticeCoachPlan } from "../domain/coaching/practiceCoach";
 import { eventCoverageSummary } from "../domain/scenario/eventCoverage";
 import { selectSnapshot, useSessionStore } from "../store/sessionStore";
 import type { Candle, ReplayStatus, ScenarioMode } from "../types";
@@ -176,6 +177,10 @@ export default function App() {
   );
   const primaryPricePrecision = decimalPlacesForTickSize(
     primaryInstrument?.tickSize,
+  );
+  const practicePlan = useMemo(
+    () => buildPracticeCoachPlan(runHistory, scenarios),
+    [runHistory, scenarios],
   );
 
   useEffect(() => {
@@ -476,6 +481,13 @@ export default function App() {
     setReportOpen(Boolean(report));
   };
 
+  const chooseNextPractice = () => {
+    setReportOpen(false);
+    setHistoricalRun(undefined);
+    setLibraryCanClose(false);
+    setLibraryOpen(true);
+  };
+
   const downloadSession = () => {
     const serialized = exportSession();
     const blob = new Blob([serialized], { type: "application/json" });
@@ -591,22 +603,25 @@ export default function App() {
           hasActiveSession={sessionHasProgress}
           hideActiveIdentity={restrictedReplay}
           history={
-            <RunHistory
-              runs={runHistory}
-              onViewReport={setHistoricalRun}
-              onReplay={(run) => {
-                setHistoricalRun(undefined);
-                requestStart(run.scenarioId, run.mode);
-              }}
-              onRemove={(run) => {
-                setRunHistory(removeCompletedRun(run.id));
-              }}
-              onExport={downloadRunHistory}
-              onClear={() =>
-                setPendingConfirmation({ kind: "clear-history" })
-              }
-            />
+            runHistory.length > 0 ? (
+              <RunHistory
+                runs={runHistory}
+                onViewReport={setHistoricalRun}
+                onReplay={(run) => {
+                  setHistoricalRun(undefined);
+                  requestStart(run.scenarioId, run.mode);
+                }}
+                onRemove={(run) => {
+                  setRunHistory(removeCompletedRun(run.id));
+                }}
+                onExport={downloadRunHistory}
+                onClear={() =>
+                  setPendingConfirmation({ kind: "clear-history" })
+                }
+              />
+            ) : undefined
           }
+          practicePlan={practicePlan}
           sessionMessage={sessionMessage}
           scenarioMessage={scenarioMessage?.text}
           scenarioMessageKind={scenarioMessage?.kind}
@@ -628,6 +643,10 @@ export default function App() {
           onRestore={restoreSession}
           onImportScenario={importUserScenario}
           onRemoveScenario={requestRemoveScenario}
+          onViewPracticeSource={(runId) => {
+            const source = runHistory.find((run) => run.id === runId);
+            if (source) setHistoricalRun(source);
+          }}
           onClearSavedSession={() => {
             clearSavedSession();
             setSessionMessage("Browser save cleared for this session.");
@@ -919,6 +938,7 @@ export default function App() {
           pricePrecision={primaryPricePrecision}
           onClose={() => setReportOpen(false)}
           onReset={resetSession}
+          onChooseNextPractice={chooseNextPractice}
         />
       ) : null}
       {pendingDialog}

@@ -22,6 +22,10 @@ the session. Journal notes may contain sensitive personal reasoning. Do not use
 real brokerage identifiers, credentials, account numbers, private financial
 records, or secrets in notes. Exported JSON is not encrypted.
 
+The V2 Local Practice Coach adds no new storage key in its first preview. It is
+recomputed from the bounded completed-run history already listed above. Clearing
+or removing history therefore also removes the evidence used by the coach.
+
 Clearing the browser save removes only the persisted active session, not the
 current in-memory replay, completed-run history, imported scenarios, or the
 PWA's static offline cache. Use the browser's site-data controls when the entire

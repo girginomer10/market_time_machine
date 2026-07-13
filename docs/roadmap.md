@@ -23,6 +23,35 @@ Future hosted platform work:
 - Educator/team cohorts and managed assignments
 - Managed market-data services, payments, and broker connectivity
 
+## V2: Personal Decision Gym — In Progress
+
+Goal:
+
+Turn completed replays into a local, evidence-backed deliberate-practice loop.
+
+Started in the V2 preview:
+
+- Local Practice Coach on the scenario-library home
+- First-run baseline assignment
+- Latest-report evidence translated into one focused next practice
+- Supported current/target measures instead of invented skill claims
+- Decision Foundations milestones derived from existing local history
+- Report-to-coach handoff and safe briefing preparation
+- Versioned `practice-coach-v1` rubric label
+
+Next increments:
+
+1. EUR/GBP Event Discipline drill with plan requirements and event checkpoints
+2. Drill-specific process scoring and targeted retry comparison
+3. Versioned local evidence observations with confidence and trend
+4. A compact long-horizon practice ledger and export migration
+5. Validated practice tracks across multiple source-reviewed scenarios
+
+Success criteria and non-goals are defined in
+[V2 Product Definition](v2-personal-decision-gym.md). Hosted accounts,
+leaderboards, teams, and anti-cheat remain later platform work rather than V2
+local-product prerequisites.
+
 ## Phase 0: Product Foundation — Shipped
 
 Goal:

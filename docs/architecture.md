@@ -52,6 +52,12 @@ Report Engine
   -> behavioral flags
   -> benchmark comparison
 
+Practice Coach
+  -> completed-run evidence
+  -> deterministic next practice
+  -> local milestones
+  -> versioned rubric
+
 Frontend
   -> chart
   -> timeline
@@ -59,6 +65,7 @@ Frontend
   -> portfolio monitor
   -> journal
   -> report
+  -> practice coach
 ```
 
 ## Open Source Local Architecture
@@ -304,4 +311,3 @@ Requires:
 - Exportable reports
 - Scenario locking
 - Audit trail
-

@@ -109,6 +109,23 @@ describe("PostGameReport", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("hands the finished report into the next-practice loop", () => {
+    const onChooseNextPractice = vi.fn();
+    render(
+      <PostGameReport
+        report={neutralReport}
+        onClose={vi.fn()}
+        onReset={vi.fn()}
+        onChooseNextPractice={onChooseNextPractice}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose next practice" }),
+    );
+    expect(onChooseNextPractice).toHaveBeenCalledTimes(1);
+  });
+
   it("reports closed trades separately from executions", () => {
     render(
       <PostGameReport

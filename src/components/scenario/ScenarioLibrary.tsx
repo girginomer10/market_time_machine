@@ -7,6 +7,8 @@ import {
   type ReactNode,
 } from "react";
 import { replayTimeline } from "../../domain/replay/engine";
+import type { PracticeCoachPlan } from "../../domain/coaching/practiceCoach";
+import PracticeCoach from "../coaching/PracticeCoach";
 import type {
   ReplayStatus,
   ScenarioMode,
@@ -27,6 +29,7 @@ type Props = {
   hasActiveSession: boolean;
   hideActiveIdentity?: boolean;
   history?: ReactNode;
+  practicePlan?: PracticeCoachPlan;
   sessionMessage?: string;
   scenarioMessage?: string;
   scenarioMessageKind?: "status" | "error";
@@ -38,6 +41,7 @@ type Props = {
   onRestore: (event: ChangeEvent<HTMLInputElement>) => void;
   onImportScenario: (event: ChangeEvent<HTMLInputElement>) => void;
   onRemoveScenario: (scenarioId: string, title: string) => void;
+  onViewPracticeSource?: (runId: string) => void;
   onClearSavedSession: () => void;
 };
 
@@ -50,6 +54,7 @@ export default function ScenarioLibrary({
   hasActiveSession,
   hideActiveIdentity = false,
   history,
+  practicePlan,
   sessionMessage,
   scenarioMessage,
   scenarioMessageKind = "status",
@@ -61,6 +66,7 @@ export default function ScenarioLibrary({
   onRestore,
   onImportScenario,
   onRemoveScenario,
+  onViewPracticeSource,
   onClearSavedSession,
 }: Props) {
   const [selectedScenarioId, setSelectedScenarioId] = useState(
@@ -72,6 +78,7 @@ export default function ScenarioLibrary({
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
   const scenarioInputRef = useRef<HTMLInputElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
+  const briefingTitleRef = useRef<HTMLHeadingElement | null>(null);
   const userScenarioIdSet = useMemo(
     () => new Set(userScenarioIds),
     [userScenarioIds],
@@ -97,6 +104,22 @@ export default function ScenarioLibrary({
   function chooseScenario(candidate: ScenarioPackage): void {
     setSelectedScenarioId(candidate.meta.id);
     setSelectedMode(supportedMode(candidate, selectedMode));
+  }
+
+  function preparePractice(plan: PracticeCoachPlan): void {
+    const candidate = scenarios.find(
+      (scenario) => scenario.meta.id === plan.scenarioId,
+    );
+    if (!candidate) return;
+    setSelectedScenarioId(candidate.meta.id);
+    setSelectedMode(supportedMode(candidate, plan.mode));
+    window.requestAnimationFrame(() => {
+      briefingTitleRef.current?.focus();
+      briefingTitleRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
   }
 
   const activeTitle = hideActiveIdentity
@@ -195,6 +218,14 @@ export default function ScenarioLibrary({
           </section>
         ) : null}
 
+        {practicePlan ? (
+          <PracticeCoach
+            plan={practicePlan}
+            onPrepare={() => preparePractice(practicePlan)}
+            onViewSource={onViewPracticeSource}
+          />
+        ) : null}
+
         {history ? <div className="library-history-card">{history}</div> : null}
 
         <section className="library-section" aria-labelledby="scenario-list-title">
@@ -265,7 +296,9 @@ export default function ScenarioLibrary({
         <section className="briefing-card" aria-labelledby="briefing-title">
           <div className="briefing-copy">
             <span className="library-step">Step 2 · Briefing</span>
-            <h2 id="briefing-title">{selectedScenario.meta.title}</h2>
+            <h2 id="briefing-title" ref={briefingTitleRef} tabIndex={-1}>
+              {selectedScenario.meta.title}
+            </h2>
             <p>
               {selectedScenario.meta.description ?? selectedScenario.meta.subtitle}
             </p>

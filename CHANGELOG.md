@@ -4,6 +4,18 @@ All notable changes to Market Time Machine will be tracked here.
 
 The project follows a lightweight changelog for the local-first product.
 
+## Unreleased - Personal Decision Gym v2 Preview
+
+- Defined V2 as a local deliberate-practice product that connects replay
+  evidence to one focused next exercise without accounts, telemetry, or AI
+  grading.
+- Added the first Local Practice Coach slice with a baseline assignment,
+  report-derived next practice, supported current/target measures, rubric
+  version, and three evidence-based Decision Foundations milestones.
+- Connected finished reports back to the next-practice loop and made coach CTAs
+  prepare the existing scenario briefing rather than silently starting or
+  replacing a replay.
+
 ## 0.2.0 - Local Lab v1 - 2026-07-13
 
 - Completed the first-run product journey with a scenario library, product

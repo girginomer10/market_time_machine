@@ -279,11 +279,30 @@ describe("App scenario library journey", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Clear history" }));
 
     expect(
-      screen.getByText("Your first completed replay will appear here."),
+      screen.getByRole("button", { name: "Review first practice" }),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Export history" }),
+    ).not.toBeInTheDocument();
     expect(
       window.localStorage.getItem("market-time-machine.run-history.v1"),
     ).toBeNull();
+  });
+
+  it("keeps next-practice coaching tied to the latest report", async () => {
+    useSessionStore.getState().finish();
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "View report" }));
+
+    expect(
+      screen.getByRole("dialog", {
+        name: "Brexit Referendum: EUR/GBP 2016",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Choose next practice" }),
+    ).not.toBeInTheDocument();
   });
 
   it("removes an imported lab after explicit confirmation", () => {
