@@ -9,6 +9,7 @@ import type {
   ScenarioPackage,
 } from "../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../types/scenario";
+import { compareTimestamps } from "../replay/timestamps";
 import {
   validateScenarioPackage,
   type ValidationIssue,
@@ -31,16 +32,19 @@ export function assembleScenario(raw: RawScenarioFiles): ScenarioPackage {
   const sortedCandles = [...raw.candles].sort((a, b) => {
     const symbolOrder = a.symbol.localeCompare(b.symbol);
     if (symbolOrder !== 0) return symbolOrder;
-    return a.closeTime.localeCompare(b.closeTime);
+    return compareTimestamps(a.closeTime, b.closeTime);
   });
   const sortedEvents = [...(raw.events ?? [])].sort((a, b) =>
-    a.publishedAt.localeCompare(b.publishedAt),
+    compareTimestamps(a.publishedAt, b.publishedAt),
   );
   const sortedIndicators = [...(raw.indicators ?? [])].sort((a, b) =>
-    a.availableAt.localeCompare(b.availableAt),
+    compareTimestamps(a.availableAt, b.availableAt),
   );
   const sortedBenchmarks = [...(raw.benchmarks ?? [])].sort((a, b) =>
-    a.time.localeCompare(b.time),
+    compareTimestamps(a.time, b.time),
+  );
+  const sortedCorporateActions = [...(raw.corporateActions ?? [])].sort(
+    (a, b) => compareTimestamps(a.effectiveAt, b.effectiveAt),
   );
 
   return {
@@ -52,7 +56,7 @@ export function assembleScenario(raw: RawScenarioFiles): ScenarioPackage {
     benchmarks: sortedBenchmarks,
     broker: raw.broker,
     marketCalendar: raw.marketCalendar,
-    corporateActions: raw.corporateActions ?? [],
+    corporateActions: sortedCorporateActions,
   };
 }
 

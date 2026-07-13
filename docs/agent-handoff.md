@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-07-13 16:36 +03 - Codex
+
+- Task: Completed the repo-wide remediation of replay, execution, portfolio, analytics, reporting, persistence, data import, and UI behavior after a full functional audit.
+- Changed: Rebuilt replay around a unified multi-symbol timeline; completed partial-fill, liquidity, order-lifecycle, margin, financing, and corporate-action handling; made persisted sessions validated and canonically recomputed; added Explorer/Professional/Challenge behavior and safe confirmations; expanded report scoring, diagnostics, recommendations, and provenance; hardened scenario/import validation; and isolated local licensed scenarios from production bundles.
+- Verified: `npm run check` passed lint, 359/359 tests across 26 files, TypeScript, the Vite production build, and the bundle-license scan; `git diff --check` passed. In-app browser QA covered market fill, stepping, journal entry, reset cancellation/confirmation, Challenge masking and locks, full replay completion, report contents, desktop/mobile layouts at 1440x900 and 390x844, zero horizontal overflow, and an empty warning/error console.
+- Memory: none; no repo semantic memory is installed. Durable lessons are captured here: use one chronological timeline across symbols, never trust persisted derived state, and keep non-redistributable scenario modules behind a production build boundary.
+- Next: No known release blocker. Optional follow-ups are adding a properly licensed full-resolution market-data pack and running the browser flow in CI.
+
 ## 2026-05-07 23:39 - Codex
 
 - Task: Completed curated event/news attribution coverage for the BTC scenario and made event sourcing visible in the app.

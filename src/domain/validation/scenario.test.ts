@@ -7,6 +7,7 @@ import {
   validateBroker,
   validateCandles,
   validateEvents,
+  validateMarketCalendar,
   validateScenarioPackage,
 } from "./scenario";
 
@@ -136,6 +137,73 @@ describe("validateScenarioPackage", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["open", Number.POSITIVE_INFINITY],
+    ["high", Number.NaN],
+    ["low", 0],
+    ["close", -1],
+  ] as const)("flags non-finite or non-positive candle %s", (field, value) => {
+    const pkg = makeScenario();
+    pkg.candles[0][field] = value;
+    const result = validateScenarioPackage(pkg);
+
+    expect(
+      result.errors.some(
+        (issue) =>
+          issue.code === "candles.ohlc_value_invalid" &&
+          issue.path === `candles[0].${field}`,
+      ),
+    ).toBe(true);
+  });
+
+  it("flags invalid adjusted closes and non-finite volume", () => {
+    const pkg = makeScenario();
+    pkg.candles[0].adjustedClose = Number.POSITIVE_INFINITY;
+    pkg.candles[1].volume = Number.NaN;
+    const result = validateScenarioPackage(pkg);
+
+    expect(
+      result.errors.some(
+        (issue) => issue.code === "candles.adjusted_close_invalid",
+      ),
+    ).toBe(true);
+    expect(
+      result.errors.some((issue) => issue.code === "candles.volume_invalid"),
+    ).toBe(true);
+  });
+
+  it("flags non-finite scalar and record indicator values", () => {
+    const pkg = makeScenario();
+    pkg.indicators = [
+      {
+        symbol: pkg.meta.symbols[0],
+        name: "scalar",
+        time: pkg.candles[0].closeTime,
+        availableAt: pkg.candles[0].closeTime,
+        value: Number.POSITIVE_INFINITY,
+      },
+      {
+        symbol: pkg.meta.symbols[0],
+        name: "record",
+        time: pkg.candles[0].closeTime,
+        availableAt: pkg.candles[0].closeTime,
+        value: { valid: 1, invalid: Number.NaN },
+      },
+    ];
+    const result = validateScenarioPackage(pkg);
+
+    expect(
+      result.errors.filter(
+        (issue) => issue.code === "indicators.value_invalid",
+      ),
+    ).toHaveLength(2);
+    expect(
+      result.errors.some(
+        (issue) => issue.path === "indicators[1].value.invalid",
+      ),
+    ).toBe(true);
+  });
+
   it("flags events missing publishedAt", () => {
     const pkg = clone(makeScenario());
     (pkg.events[0] as Partial<MarketEvent>).publishedAt = undefined;
@@ -211,6 +279,71 @@ describe("validateScenarioPackage", () => {
       result.errors.some((i) => i.code === "broker.max_leverage_too_low"),
     ).toBe(true);
   });
+
+  it("flags corporate actions without valid economic terms", () => {
+    const pkg = clone(makeScenario());
+    pkg.corporateActions = [
+      {
+        symbol: pkg.meta.symbols[0],
+        type: "dividend",
+        effectiveAt: pkg.meta.startTime,
+      },
+      {
+        symbol: pkg.meta.symbols[0],
+        type: "split",
+        effectiveAt: pkg.meta.startTime,
+        ratio: Number.POSITIVE_INFINITY,
+      },
+    ];
+    const result = validateScenarioPackage(pkg);
+
+    expect(
+      result.errors.some(
+        (issue) => issue.code === "corporate_actions.dividend_amount_invalid",
+      ),
+    ).toBe(true);
+    expect(
+      result.errors.some(
+        (issue) => issue.code === "corporate_actions.split_ratio_invalid",
+      ),
+    ).toBe(true);
+  });
+
+  it("validates every provided corporate-action numeric field", () => {
+    const pkg = makeScenario();
+    pkg.corporateActions = [
+      {
+        symbol: pkg.meta.symbols[0],
+        type: "dividend",
+        effectiveAt: pkg.meta.startTime,
+        amount: 1,
+        ratio: Number.POSITIVE_INFINITY,
+      },
+      {
+        symbol: pkg.meta.symbols[0],
+        type: "split",
+        effectiveAt: pkg.meta.startTime,
+        ratio: 2,
+        amount: Number.NaN,
+      },
+    ];
+    const result = validateScenarioPackage(pkg);
+
+    expect(
+      result.errors.some(
+        (issue) =>
+          issue.code === "corporate_actions.split_ratio_invalid" &&
+          issue.path === "corporateActions[0].ratio",
+      ),
+    ).toBe(true);
+    expect(
+      result.errors.some(
+        (issue) =>
+          issue.code === "corporate_actions.dividend_amount_invalid" &&
+          issue.path === "corporateActions[1].amount",
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("validateCandles", () => {
@@ -258,6 +391,48 @@ describe("validateCandles", () => {
     ];
     const issues = validateCandles(candles, symbols, "1d");
     expect(issues.some((i) => i.code === "candles.negative_volume")).toBe(true);
+  });
+
+  it("tracks sort order independently for interleaved symbols", () => {
+    const candle = (
+      symbol: string,
+      openTime: string,
+      closeTime: string,
+    ): Candle => ({
+      symbol,
+      openTime,
+      closeTime,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100,
+      volume: 10,
+    });
+    const issues = validateCandles(
+      [
+        candle(
+          "X",
+          "2024-01-01T00:00:00Z",
+          "2024-01-02T00:00:00Z",
+        ),
+        candle(
+          "Y",
+          "2024-01-01T00:00:00Z",
+          "2024-01-02T00:00:00Z",
+        ),
+        candle(
+          "X",
+          "2023-12-31T00:00:00Z",
+          "2024-01-01T00:00:00Z",
+        ),
+      ],
+      new Set(["X", "Y"]),
+      "1d",
+    );
+
+    expect(issues.some((issue) => issue.code === "candles.not_sorted")).toBe(
+      true,
+    );
   });
 });
 
@@ -313,5 +488,89 @@ describe("validateBroker", () => {
     expect(issues.some((i) => i.code === "broker.slippage_bps_missing")).toBe(
       true,
     );
+  });
+
+  it.each([
+    ["fixedFee", -1, "broker.fixed_fee_invalid"],
+    ["slippageBps", -1, "broker.slippage_bps_invalid"],
+    ["borrowRateBps", -1, "broker.borrow_rate_invalid"],
+    ["commissionRateBps", Number.NaN, "broker.commission_negative"],
+    ["spreadBps", Number.POSITIVE_INFINITY, "broker.spread_negative"],
+    ["maxLeverage", Number.NaN, "broker.max_leverage_too_low"],
+  ] as const)("rejects invalid %s", (field, value, code) => {
+    const broker = {
+      ...makeScenario().broker,
+      [field]: value,
+    };
+    const issues = validateBroker(broker);
+
+    expect(issues.some((issue) => issue.code === code)).toBe(true);
+  });
+
+  it("requires a participation rate for volume-limited fills", () => {
+    const broker = {
+      ...makeScenario().broker,
+      partialFillPolicy: "volume_limited" as const,
+      maxParticipationRate: undefined,
+    };
+
+    expect(
+      validateBroker(broker).some(
+        (issue) => issue.code === "broker.max_participation_missing",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("validateMarketCalendar", () => {
+  it("rejects invalid timezone, session time, and holiday values", () => {
+    const meta = makeScenario().meta;
+    const issues = validateMarketCalendar(
+      {
+        id: "broken-calendar",
+        timezone: "Mars/Olympus_Mons",
+        sessions: [
+          { dayOfWeek: 1, open: "9:30", close: "25:00" },
+        ],
+        holidays: ["2024-02-30"],
+      },
+      meta,
+    );
+
+    expect(issues.some((issue) => issue.code === "calendar.timezone_invalid")).toBe(true);
+    expect(issues.some((issue) => issue.code === "calendar.time_invalid")).toBe(true);
+    expect(issues.some((issue) => issue.code === "calendar.holiday_invalid")).toBe(true);
+  });
+
+  it("rejects duplicate sessions and holidays", () => {
+    const meta = makeScenario().meta;
+    const issues = validateMarketCalendar(
+      {
+        id: "duplicate-calendar",
+        timezone: "UTC",
+        sessions: [
+          { dayOfWeek: 1, open: "09:30", close: "16:00" },
+          { dayOfWeek: 1, open: "09:30", close: "16:00" },
+        ],
+        holidays: ["2024-01-01", "2024-01-01"],
+      },
+      meta,
+    );
+
+    expect(issues.some((issue) => issue.code === "calendar.session_duplicate")).toBe(true);
+    expect(issues.some((issue) => issue.code === "calendar.holiday_duplicate")).toBe(true);
+  });
+
+  it("requires a calendar when market-hours enforcement is enabled", () => {
+    const scenario = clone(makeScenario());
+    scenario.broker.marketHoursEnforced = true;
+    scenario.marketCalendar = undefined;
+
+    const result = validateScenarioPackage(scenario);
+    expect(
+      result.errors.some(
+        (issue) => issue.code === "calendar.required_for_enforcement",
+      ),
+    ).toBe(true);
   });
 });

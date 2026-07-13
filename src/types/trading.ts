@@ -59,7 +59,9 @@ export type Fill = {
   price: number;
   referencePrice: number;
   commission: number;
+  /** Total monetary spread cost for the complete fill quantity. */
   spreadCost: number;
+  /** Per-unit price impact attributed to slippage. */
   slippage: number;
   totalCost: number;
   reason?: FillReason;
@@ -122,7 +124,9 @@ export type AuditEventType =
   | "margin_call"
   | "forced_liquidation"
   | "borrow_cost"
-  | "tif_expired";
+  | "tif_expired"
+  | "corporate_action"
+  | "session_restored";
 
 export type AuditEvent = {
   id: string;

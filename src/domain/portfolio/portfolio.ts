@@ -1,4 +1,5 @@
 import type {
+  CorporateAction,
   Fill,
   PortfolioSnapshot,
   Position,
@@ -129,6 +130,49 @@ export function applyFinancingCost(
     cash: state.cash - amount,
     realizedPnl: state.realizedPnl - amount,
     financingPaid: state.financingPaid + amount,
+  };
+}
+
+export function applyCorporateAction(
+  state: PortfolioState,
+  action: CorporateAction,
+): PortfolioState {
+  const position = state.positions[action.symbol];
+  if (!position || Math.abs(position.quantity) <= 1e-9) return state;
+
+  if (action.type === "split") {
+    const ratio = action.ratio;
+    if (ratio === undefined || !Number.isFinite(ratio) || ratio <= 0) {
+      return state;
+    }
+    const quantity = position.quantity * ratio;
+    const averagePrice = position.averagePrice / ratio;
+    const marketPrice = position.marketPrice / ratio;
+    return {
+      ...state,
+      positions: {
+        ...state.positions,
+        [action.symbol]: {
+          ...position,
+          quantity,
+          averagePrice,
+          marketPrice,
+          marketValue: quantity * marketPrice,
+          unrealizedPnl: (marketPrice - averagePrice) * quantity,
+        },
+      },
+    };
+  }
+
+  const amount = action.amount;
+  if (amount === undefined || !Number.isFinite(amount) || amount <= 0) {
+    return state;
+  }
+  const cashDelta = position.quantity * amount;
+  return {
+    ...state,
+    cash: state.cash + cashDelta,
+    realizedPnl: state.realizedPnl + cashDelta,
   };
 }
 

@@ -9,6 +9,7 @@ export const REJECTION_REASONS = {
   INVALID_QUANTITY: "Invalid quantity",
   NO_TRADABLE_PRICE: "No tradable price at current replay time",
   INSTRUMENT_NOT_TRADABLE: "Instrument not tradable",
+  INVALID_ACCOUNT_STATE: "Invalid account state",
   MARKET_CLOSED: "Market closed",
   QUANTITY_BELOW_LOT_SIZE: "Quantity below lot size",
   INSUFFICIENT_CASH: "Insufficient cash",
@@ -54,14 +55,15 @@ export function normalizeQuantity(
     return 0;
   }
   const lotSize = instrument?.lotSize;
-  const allowFractional = instrument?.allowFractional ?? broker.allowFractional;
+  const allowFractional =
+    broker.allowFractional && (instrument?.allowFractional ?? true);
   if (allowFractional && (!lotSize || lotSize <= 0)) {
     return quantity;
   }
   if (lotSize && lotSize > 0) {
-    return Math.floor(quantity / lotSize) * lotSize;
+    return Math.floor(quantity / lotSize + QUANTITY_EPSILON) * lotSize;
   }
-  return Math.floor(quantity);
+  return Math.floor(quantity + QUANTITY_EPSILON);
 }
 
 export function checkLotSize(normalizedQuantity: number): ValidationResult {
@@ -76,6 +78,19 @@ export type BuyingPowerInputs = {
   notional: number;
   fees: number;
   broker: BrokerConfig;
+  accountEquity?: number;
+  positionsGrossNotional?: number;
+  reservedGrossNotional?: number;
+  grossNotionalDelta?: number;
+};
+
+export type AccountLeverageInputs = {
+  accountEquity: number;
+  positionsGrossNotional: number;
+  reservedGrossNotional?: number;
+  grossNotionalDelta: number;
+  fees: number;
+  broker: BrokerConfig;
 };
 
 export function buyingPower(cash: number, broker: BrokerConfig): number {
@@ -83,8 +98,74 @@ export function buyingPower(cash: number, broker: BrokerConfig): number {
   return Math.max(0, cash) * leverage;
 }
 
+export function checkAccountLeverage(
+  inputs: AccountLeverageInputs,
+): ValidationResult {
+  const {
+    accountEquity,
+    positionsGrossNotional,
+    reservedGrossNotional = 0,
+    grossNotionalDelta,
+    fees,
+    broker,
+  } = inputs;
+  if (
+    !Number.isFinite(accountEquity) ||
+    !Number.isFinite(positionsGrossNotional) ||
+    positionsGrossNotional < 0 ||
+    !Number.isFinite(reservedGrossNotional) ||
+    reservedGrossNotional < 0 ||
+    !Number.isFinite(grossNotionalDelta) ||
+    !Number.isFinite(fees) ||
+    fees < 0
+  ) {
+    return rejection("INVALID_ACCOUNT_STATE");
+  }
+
+  const currentCommittedGross =
+    positionsGrossNotional + reservedGrossNotional;
+  const projectedPositionsGross = Math.max(
+    0,
+    positionsGrossNotional + grossNotionalDelta,
+  );
+  const projectedCommittedGross =
+    projectedPositionsGross + reservedGrossNotional;
+  if (projectedCommittedGross <= currentCommittedGross + QUANTITY_EPSILON) {
+    return ok;
+  }
+
+  const leverage = Math.max(1, broker.maxLeverage || 1);
+  const equityAfterFees = Math.max(0, accountEquity - fees);
+  const maximumGross = equityAfterFees * leverage;
+  if (projectedCommittedGross <= maximumGross + QUANTITY_EPSILON) {
+    return ok;
+  }
+  return rejection(leverage <= 1 ? "INSUFFICIENT_CASH" : "EXCEEDS_LEVERAGE");
+}
+
 export function checkBuyingPower(inputs: BuyingPowerInputs): ValidationResult {
   const { cash, notional, fees, broker } = inputs;
+  const hasAccountContext =
+    inputs.accountEquity !== undefined ||
+    inputs.positionsGrossNotional !== undefined ||
+    inputs.reservedGrossNotional !== undefined ||
+    inputs.grossNotionalDelta !== undefined;
+  if (hasAccountContext) {
+    if (
+      inputs.accountEquity === undefined ||
+      inputs.positionsGrossNotional === undefined
+    ) {
+      return rejection("INVALID_ACCOUNT_STATE");
+    }
+    return checkAccountLeverage({
+      accountEquity: inputs.accountEquity,
+      positionsGrossNotional: inputs.positionsGrossNotional,
+      reservedGrossNotional: inputs.reservedGrossNotional,
+      grossNotionalDelta: inputs.grossNotionalDelta ?? notional,
+      fees,
+      broker,
+    });
+  }
   const totalCost = notional + fees;
   if (totalCost <= cash + QUANTITY_EPSILON) {
     return ok;
@@ -132,11 +213,31 @@ export type LiquidityInputs = {
   referencePrice: number;
   candleVolumeNotional?: number;
   maxParticipationRate?: number;
+  /** Remaining executable notional for this candle after prior fills. */
+  availableCandleLiquidityNotional?: number;
 };
 
 export function checkLiquidity(inputs: LiquidityInputs): ValidationResult {
-  const { quantity, referencePrice, candleVolumeNotional, maxParticipationRate } =
-    inputs;
+  const {
+    quantity,
+    referencePrice,
+    candleVolumeNotional,
+    maxParticipationRate,
+    availableCandleLiquidityNotional,
+  } = inputs;
+  if (availableCandleLiquidityNotional !== undefined) {
+    if (
+      !Number.isFinite(availableCandleLiquidityNotional) ||
+      availableCandleLiquidityNotional < 0
+    ) {
+      return rejection("EXCEEDS_LIQUIDITY_LIMIT");
+    }
+    const orderNotional = quantity * referencePrice;
+    return orderNotional <=
+      availableCandleLiquidityNotional + QUANTITY_EPSILON
+      ? ok
+      : rejection("EXCEEDS_LIQUIDITY_LIMIT");
+  }
   if (
     !candleVolumeNotional ||
     candleVolumeNotional <= 0 ||
@@ -156,9 +257,13 @@ export function checkLiquidity(inputs: LiquidityInputs): ValidationResult {
 export type TradabilityInputs = {
   hasPrice: boolean;
   marketOpen?: boolean;
+  instrumentTradable?: boolean;
 };
 
 export function checkTradability(inputs: TradabilityInputs): ValidationResult {
+  if (inputs.instrumentTradable === false) {
+    return rejection("INSTRUMENT_NOT_TRADABLE");
+  }
   if (!inputs.hasPrice) {
     return rejection("NO_TRADABLE_PRICE");
   }
@@ -182,7 +287,28 @@ export type MarketOrderValidationInputs = {
   marketOpen?: boolean;
   candleVolumeNotional?: number;
   maxParticipationRate?: number;
+  availableCandleLiquidityNotional?: number;
+  instrumentTradable?: boolean;
+  accountEquity?: number;
+  positionsGrossNotional?: number;
+  /** Gross exposure already reserved by other working orders. */
+  reservedGrossNotional?: number;
 };
+
+function grossNotionalDeltaForOrder(
+  side: OrderSide,
+  quantity: number,
+  price: number,
+  position?: Position,
+): number {
+  const currentQuantity = position?.quantity ?? 0;
+  const signedOrderQuantity = side === "buy" ? quantity : -quantity;
+  const currentGross = Math.abs(currentQuantity * price);
+  const projectedGross = Math.abs(
+    (currentQuantity + signedOrderQuantity) * price,
+  );
+  return projectedGross - currentGross;
+}
 
 export function validateMarketOrder(
   inputs: MarketOrderValidationInputs,
@@ -190,6 +316,7 @@ export function validateMarketOrder(
   const tradability = checkTradability({
     hasPrice: inputs.hasPrice,
     marketOpen: inputs.marketOpen,
+    instrumentTradable: inputs.instrumentTradable,
   });
   if (!tradability.ok) return tradability;
 
@@ -199,7 +326,40 @@ export function validateMarketOrder(
   const lot = checkLotSize(inputs.normalizedQuantity);
   if (!lot.ok) return lot;
 
-  if (inputs.side === "buy") {
+  const hasAccountContext =
+    inputs.accountEquity !== undefined ||
+    inputs.positionsGrossNotional !== undefined ||
+    inputs.reservedGrossNotional !== undefined;
+
+  if (inputs.side === "sell") {
+    const longShort = checkLongShortConstraint({
+      side: inputs.side,
+      quantity: inputs.normalizedQuantity,
+      position: inputs.position,
+      broker: inputs.broker,
+    });
+    if (!longShort.ok) return longShort;
+  }
+
+  if (hasAccountContext) {
+    const notionalPrice = inputs.executionPrice ?? inputs.referencePrice;
+    const power = checkBuyingPower({
+      cash: inputs.cash,
+      notional: inputs.normalizedQuantity * notionalPrice,
+      fees: inputs.fees,
+      broker: inputs.broker,
+      accountEquity: inputs.accountEquity,
+      positionsGrossNotional: inputs.positionsGrossNotional,
+      reservedGrossNotional: inputs.reservedGrossNotional,
+      grossNotionalDelta: grossNotionalDeltaForOrder(
+        inputs.side,
+        inputs.normalizedQuantity,
+        notionalPrice,
+        inputs.position,
+      ),
+    });
+    if (!power.ok) return power;
+  } else if (inputs.side === "buy") {
     const notionalPrice = inputs.executionPrice ?? inputs.referencePrice;
     const power = checkBuyingPower({
       cash: inputs.cash,
@@ -209,14 +369,6 @@ export function validateMarketOrder(
     });
     if (!power.ok) return power;
   } else {
-    const longShort = checkLongShortConstraint({
-      side: inputs.side,
-      quantity: inputs.normalizedQuantity,
-      position: inputs.position,
-      broker: inputs.broker,
-    });
-    if (!longShort.ok) return longShort;
-
     const held = Math.max(0, inputs.position?.quantity ?? 0);
     const shortQuantity = Math.max(0, inputs.normalizedQuantity - held);
     if (shortQuantity > QUANTITY_EPSILON) {
@@ -236,6 +388,8 @@ export function validateMarketOrder(
     referencePrice: inputs.referencePrice,
     candleVolumeNotional: inputs.candleVolumeNotional,
     maxParticipationRate: inputs.maxParticipationRate,
+    availableCandleLiquidityNotional:
+      inputs.availableCandleLiquidityNotional,
   });
   if (!liquidity.ok) return liquidity;
 

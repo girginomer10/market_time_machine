@@ -30,7 +30,8 @@
     "preview": "vite preview",
     "import:fred-sp500": "node scripts/import-fred-sp500.mjs",
     "import:ohlcv": "node scripts/import-local-ohlcv.mjs",
-    "check": "npm run lint && npm run test && npm run build",
+    "check": "npm run lint && npm run test && npm run build && npm run check:bundle-license",
+    "check:bundle-license": "node scripts/check-production-bundle.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest"

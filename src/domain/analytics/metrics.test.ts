@@ -125,6 +125,15 @@ describe("sharpeRatio / sortinoRatio", () => {
     expect(all).toBeDefined();
     expect(sortino).not.toBe(all);
   });
+
+  it("keeps downside risk defined with a single negative observation", () => {
+    const returns = [0.02, 0.01, -0.01];
+    const expectedDownsideDeviation = Math.sqrt(0.01 ** 2 / returns.length);
+    expect(sortinoRatio(returns, 252)).toBeCloseTo(
+      ((0.02 + 0.01 - 0.01) / returns.length / expectedDownsideDeviation) *
+        Math.sqrt(252),
+    );
+  });
 });
 
 describe("calmarRatio", () => {
@@ -144,5 +153,11 @@ describe("periodsPerYearForGranularity", () => {
 
   it("maps hourly to 8760", () => {
     expect(periodsPerYearForGranularity("1h")).toBe(365 * 24);
+  });
+
+  it("uses trading sessions for equities and ETFs", () => {
+    expect(periodsPerYearForGranularity("1d", "etf")).toBe(252);
+    expect(periodsPerYearForGranularity("1h", "equity")).toBe(252 * 6.5);
+    expect(periodsPerYearForGranularity("5m", "index")).toBe(252 * 78);
   });
 });

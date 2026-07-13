@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import AuditTrail from "./AuditTrail";
 import type { AuditEvent } from "../../types";
@@ -45,5 +45,25 @@ describe("AuditTrail", () => {
     render(<AuditTrail events={[]} />);
 
     expect(screen.getByText(/Replay audit events will appear/i)).toBeInTheDocument();
+  });
+
+  it("filters, searches, and progressively reveals the complete audit history", () => {
+    render(<AuditTrail events={events} limit={1} />);
+
+    expect(screen.getByText(/Showing 1 of 3 matching events/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Show 1 more/i }));
+    expect(screen.getByText(/Showing 2 of 3 matching events/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Event type"), {
+      target: { value: "risk" },
+    });
+    expect(screen.getByText(/Showing 1 of 1 matching events/i)).toBeInTheDocument();
+    expect(screen.getByText("Liquidation")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Search audit"), {
+      target: { value: "does-not-exist" },
+    });
+    expect(screen.getByText(/No audit events match/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Search audit")).toBeInTheDocument();
   });
 });

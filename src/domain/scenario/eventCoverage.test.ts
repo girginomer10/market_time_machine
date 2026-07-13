@@ -38,9 +38,11 @@ describe("eventCoverageSummary", () => {
 
     expect(summary.withSource).toBe(2);
     expect(summary.withSourceUrl).toBe(2);
+    expect(summary.fullySourcedCount).toBe(1);
     expect(summary.fullySourced).toBe(false);
     expect(summary.missingSourceIds).toEqual(["missing-source"]);
     expect(summary.missingSourceUrlIds).toEqual(["missing-url"]);
+    expect(summary.label).toBe("1/3 sourced");
   });
 
   it("treats an empty event set as complete", () => {

@@ -8,6 +8,7 @@ import {
 import {
   REJECTION_REASONS,
   buyingPower,
+  checkAccountLeverage,
   checkBuyingPower,
   checkLiquidity,
   checkLongShortConstraint,
@@ -66,6 +67,30 @@ describe("normalizeQuantity / checkLotSize", () => {
     expect(normalizeQuantity(2.7, IDEAL_BROKER_CONFIG)).toBeCloseTo(2.7, 10);
   });
 
+  it("honors the strictest fractional rule between broker and instrument", () => {
+    const instrument = {
+      symbol: "X",
+      name: "x",
+      assetClass: "equity" as const,
+      currency: "USD",
+      timezone: "UTC",
+      allowFractional: true,
+    };
+    expect(
+      normalizeQuantity(
+        2.7,
+        { ...IDEAL_BROKER_CONFIG, allowFractional: false },
+        instrument,
+      ),
+    ).toBe(2);
+    expect(
+      normalizeQuantity(2.7, IDEAL_BROKER_CONFIG, {
+        ...instrument,
+        allowFractional: false,
+      }),
+    ).toBe(2);
+  });
+
   it("snaps to lot size", () => {
     const broker = { ...IDEAL_BROKER_CONFIG, allowFractional: false };
     const q = normalizeQuantity(7, broker, {
@@ -77,6 +102,18 @@ describe("normalizeQuantity / checkLotSize", () => {
       lotSize: 5,
     });
     expect(q).toBe(5);
+  });
+
+  it("does not round an exact decimal lot multiple down", () => {
+    const q = normalizeQuantity(0.3, IDEAL_BROKER_CONFIG, {
+      symbol: "X",
+      name: "x",
+      assetClass: "crypto",
+      currency: "USD",
+      timezone: "UTC",
+      lotSize: 0.1,
+    });
+    expect(q).toBeCloseTo(0.3, 10);
   });
 
   it("checkLotSize fails when normalized rounds to zero", () => {
@@ -143,6 +180,45 @@ describe("buyingPower / checkBuyingPower", () => {
       broker: cashOnly,
     });
     expect(r.ok).toBe(false);
+  });
+
+  it("checks projected account gross rather than cash inflated by short proceeds", () => {
+    const r = checkAccountLeverage({
+      accountEquity: 1000,
+      positionsGrossNotional: 2000,
+      grossNotionalDelta: 6000,
+      fees: 0,
+      broker: { ...marginBroker, maxLeverage: 2 },
+    });
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("EXCEEDS_LEVERAGE");
+  });
+
+  it("includes reserved working-order exposure", () => {
+    const r = checkAccountLeverage({
+      accountEquity: 1000,
+      positionsGrossNotional: 500,
+      reservedGrossNotional: 1000,
+      grossNotionalDelta: 600,
+      fees: 0,
+      broker: { ...marginBroker, maxLeverage: 2 },
+    });
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("EXCEEDS_LEVERAGE");
+  });
+
+  it("allows a trade that reduces gross exposure during a deficit", () => {
+    expect(
+      checkAccountLeverage({
+        accountEquity: -100,
+        positionsGrossNotional: 1000,
+        grossNotionalDelta: -500,
+        fees: 1,
+        broker: marginBroker,
+      }).ok,
+    ).toBe(true);
   });
 });
 
@@ -224,6 +300,15 @@ describe("checkLiquidity", () => {
     });
     expect(r.ok).toBe(true);
   });
+
+  it("uses remaining per-candle liquidity when supplied", () => {
+    const r = checkLiquidity({
+      quantity: 3,
+      referencePrice: 100,
+      availableCandleLiquidityNotional: 250,
+    });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe("checkTradability", () => {
@@ -243,6 +328,16 @@ describe("checkTradability", () => {
     expect(
       checkTradability({ hasPrice: true, marketOpen: true }).ok,
     ).toBe(true);
+  });
+
+  it("rejects an explicitly non-tradable instrument", () => {
+    const r = checkTradability({
+      hasPrice: true,
+      marketOpen: true,
+      instrumentTradable: false,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("INSTRUMENT_NOT_TRADABLE");
   });
 });
 
@@ -323,5 +418,24 @@ describe("validateMarketOrder", () => {
     });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.code).toBe("EXCEEDS_LIQUIDITY_LIMIT");
+  });
+
+  it("rejects repeated short risk from account-level gross exposure", () => {
+    const r = validateMarketOrder({
+      side: "sell",
+      rawQuantity: 60,
+      normalizedQuantity: 60,
+      referencePrice: 100,
+      cash: 3000,
+      fees: 0,
+      position: makePosition(-20),
+      broker: { ...marginBroker, maxLeverage: 2 },
+      hasPrice: true,
+      accountEquity: 1000,
+      positionsGrossNotional: 2000,
+    });
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("EXCEEDS_LEVERAGE");
   });
 });

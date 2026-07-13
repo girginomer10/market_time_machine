@@ -15,6 +15,7 @@ import {
   marginPolicyFromBroker,
   marginSnapshot,
   marginUtilization,
+  rejectsNewOrdersForMarginCall,
   requiresLiquidation,
 } from "./margin";
 import { REALISTIC_BROKER_CONFIG } from "./executionModels";
@@ -145,6 +146,27 @@ describe("isMarginCall / requiresLiquidation helpers", () => {
       true,
     );
   });
+
+  it("enforces reject_new_orders only while that policy is in a margin call", () => {
+    const snapshot = marginSnapshot({
+      cash: 100,
+      positionsGrossNotional: 1000,
+      positionsNetValue: 100,
+      policy: REALISTIC_MARGIN_POLICY,
+    });
+    expect(
+      rejectsNewOrdersForMarginCall(
+        { ...REALISTIC_BROKER_CONFIG, marginCallPolicy: "reject_new_orders" },
+        snapshot,
+      ),
+    ).toBe(true);
+    expect(
+      rejectsNewOrdersForMarginCall(
+        { ...REALISTIC_BROKER_CONFIG, marginCallPolicy: "disabled" },
+        snapshot,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("borrowCostFor", () => {
@@ -192,6 +214,20 @@ describe("canOpenAdditionalNotional", () => {
       },
       10_000,
     );
+    expect(ok).toBe(false);
+  });
+
+  it("uses initial-margin headroom rather than maintenance headroom", () => {
+    const ok = canOpenAdditionalNotional(
+      {
+        cash: -400,
+        positionsGrossNotional: 1000,
+        positionsNetValue: 1000,
+        policy: REALISTIC_MARGIN_POLICY,
+      },
+      500,
+    );
+
     expect(ok).toBe(false);
   });
 });

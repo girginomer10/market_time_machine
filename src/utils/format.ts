@@ -1,12 +1,31 @@
-const currencyFormatter = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 2,
-});
+const currencyFormatters = new Map<string, Intl.NumberFormat>();
 
-export function formatCurrency(value: number): string {
+function currencyFormatter(currency: string): Intl.NumberFormat {
+  const normalized = currency.trim().toUpperCase() || "USD";
+  const cached = currencyFormatters.get(normalized);
+  if (cached) return cached;
+
+  let formatter: Intl.NumberFormat;
+  try {
+    formatter = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: normalized,
+      maximumFractionDigits: 2,
+    });
+  } catch {
+    formatter = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    });
+  }
+  currencyFormatters.set(normalized, formatter);
+  return formatter;
+}
+
+export function formatCurrency(value: number, currency = "USD"): string {
   if (!Number.isFinite(value)) return "—";
-  return currencyFormatter.format(value);
+  return currencyFormatter(currency).format(value);
 }
 
 export function formatNumber(value: number, decimals = 2): string {

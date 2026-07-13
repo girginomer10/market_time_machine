@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateScenarioPackage } from "../../domain/validation/scenario";
-import { listScenarios } from "./index";
+import { buildScenarioRegistry, listScenarios } from "./index";
 import { btc20202021Scenario } from "./btc-2020-2021";
 import { kreBankingCrisis2023Scenario } from "./kre-banking-crisis-2023";
 import { qqqRateHike2022Scenario } from "./qqq-rate-hike-2022";
@@ -22,6 +22,12 @@ describe("scenario registry", () => {
         `Scenario ${pkg.meta.id} reported errors:\n${errorSummary}`,
       ).toBe(true);
     }
+  });
+
+  it("rejects duplicate scenario ids instead of silently overwriting them", () => {
+    expect(() =>
+      buildScenarioRegistry([btc20202021Scenario, btc20202021Scenario]),
+    ).toThrow("Duplicate scenario id: btc-2020-2021");
   });
 });
 
@@ -102,6 +108,55 @@ describe("sp500-covid-2020 scenario", () => {
     ).toBeGreaterThan(Date.parse("2020-12-30T00:00:00.000Z"));
   });
 
+  it("does not create candles on U.S. market holidays", () => {
+    const candleDates = new Set(
+      sp500Covid2020Scenario.candles.map((candle) =>
+        candle.openTime.slice(0, 10),
+      ),
+    );
+    for (const holiday of [
+      "2020-01-20",
+      "2020-02-17",
+      "2020-04-10",
+      "2020-05-25",
+      "2020-07-03",
+      "2020-09-07",
+      "2020-11-26",
+      "2020-12-25",
+    ]) {
+      expect(candleDates.has(holiday)).toBe(false);
+    }
+    expect(sp500Covid2020Scenario.candles).toHaveLength(253);
+  });
+
+  it("declares an exchange-local market calendar", () => {
+    expect(sp500Covid2020Scenario.marketCalendar).toMatchObject({
+      id: "us-equities-2020",
+      timezone: "America/New_York",
+    });
+    expect(sp500Covid2020Scenario.marketCalendar?.sessions).toHaveLength(5);
+  });
+
+  it("computes RealizedVolatility10 from ten returns", () => {
+    const candles = sp500Covid2020Scenario.candles;
+    const first = sp500Covid2020Scenario.indicators.find(
+      (indicator) => indicator.name === "RealizedVolatility10",
+    );
+    expect(first?.time).toBe(candles[10].closeTime);
+    const returns = candles
+      .slice(0, 11)
+      .slice(1)
+      .map((candle, index) => candle.close / candles[index].close - 1);
+    const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+    const variance =
+      returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
+      (returns.length - 1);
+    expect(first?.value).toBeCloseTo(
+      Math.round(Math.sqrt(variance) * Math.sqrt(252) * 100 * 100) / 100,
+      6,
+    );
+  });
+
   it("includes official-source crisis, policy, macro, and vaccine events", () => {
     const types = new Set(sp500Covid2020Scenario.events.map((e) => e.type));
     expect(types.has("price_event")).toBe(true);
@@ -122,6 +177,7 @@ describe("sp500-covid-2020 scenario", () => {
       expect(candleTimes.has(point.time)).toBe(true);
     }
   });
+
 });
 
 describe("qqq-rate-hike-2022 scenario", () => {
@@ -161,6 +217,12 @@ describe("qqq-rate-hike-2022 scenario", () => {
     for (const point of qqqRateHike2022Scenario.benchmarks) {
       expect(candleTimes.has(point.time)).toBe(true);
     }
+  });
+
+  it("declares a 2022 U.S. equity calendar", () => {
+    expect(qqqRateHike2022Scenario.marketCalendar?.timezone).toBe(
+      "America/New_York",
+    );
   });
 });
 
@@ -206,5 +268,11 @@ describe("kre-banking-crisis-2023 scenario", () => {
     for (const point of kreBankingCrisis2023Scenario.benchmarks) {
       expect(candleTimes.has(point.time)).toBe(true);
     }
+  });
+
+  it("declares a 2023 U.S. equity calendar", () => {
+    expect(kreBankingCrisis2023Scenario.marketCalendar?.timezone).toBe(
+      "America/New_York",
+    );
   });
 });

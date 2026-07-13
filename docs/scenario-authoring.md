@@ -4,7 +4,7 @@ This guide is for contributors who want to add a historical scenario package to 
 
 ## Quick Start
 
-A scenario lives under `src/data/scenarios/<id>/index.ts` and exports a single `ScenarioPackage` produced by `assembleScenario`. The package is registered in `src/data/scenarios/index.ts`.
+A scenario lives under `src/data/scenarios/<id>/index.ts` and exports a single `ScenarioPackage` produced by `assembleScenario`. Shipped, redistribution-safe packages must also be added to the explicit production allowlist in `src/data/scenarios/index.ts`; local importer output is discovered separately in development only.
 
 Minimum required parts:
 
@@ -94,14 +94,20 @@ Important licensing notes:
 
 - FRED can provide access to `SP500`, but the series is marked as S&P Dow Jones Indices content with reproduction restrictions.
 - Generated files should stay local unless you have separate redistribution permission from the data owner.
-- A production bundle built while the generated scenario exists will include the generated data, so do not publish that bundle unless your use complies with the upstream terms.
+- Local licensed scenarios are discovered by the development server only. The normal production build aliases local discovery to an empty registry, and its release check verifies that `FRED:SP500` licensing markers are absent from `dist`.
 - The importer uses source close values only. Open/high/low are derived from adjacent closes and volume is set to `0`, so the generated scenario is useful for broad timing practice, not intraday execution realism.
+- Because open/high/low are derived rather than source observations, the generated package sets `meta.isSampleData = true`. The sample-data badge describes the derived candle construction; it does not imply that the FRED close observations are synthetic.
 
 Optional date range:
 
 ```sh
 npm run import:fred-sp500 -- --start=2020-01-02 --end=2020-12-31
 ```
+
+Custom ranges use a generic `S&P 500 FRED Replay` identity and keep only events
+inside the requested interval. Existing output is protected; use
+`--force=true` only when you intentionally want to replace it. Custom output
+paths may be git-visible, so always inspect `git status` before publishing.
 
 ## Local Licensed OHLCV Import
 
@@ -111,7 +117,13 @@ If you already have local-use or redistribution-safe OHLCV data, generate a giti
 npm run import:ohlcv -- --input=local-data/spy.csv --symbol=SPY --title="SPY Local Replay" --license="Licensed local use only"
 ```
 
-Input may be CSV or JSON. Rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`. The generated package includes source manifest metadata, an always-open local market calendar, professional broker assumptions, and an empty `corporateActions` array that can be filled later for splits or dividends.
+Input may be CSV or JSON. Rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`. The importer validates timestamps, positive OHLC values, OHLC relationships, duplicates, metadata, IDs, and output paths before writing atomically. The generated package includes source-manifest metadata, configurable asset class/granularity/currency/timezone/initial cash, professional broker assumptions, and an empty `corporateActions` array that can be filled later for splits or dividends.
+
+The importer deliberately does not invent a market calendar from a timezone.
+Generated scenarios set `marketHoursEnforced: false`; add a verified exchange
+calendar and enable enforcement only when the actual sessions and holidays are
+known. Pass `--force=true` to intentionally replace an existing generated
+scenario.
 
 Generated `src/data/scenarios/local-*/` folders are ignored by git. Keep them local unless the data owner grants explicit redistribution rights.
 

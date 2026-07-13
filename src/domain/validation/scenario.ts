@@ -10,6 +10,7 @@ import type {
   ScenarioPackage,
 } from "../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../types/scenario";
+import { timestampMs } from "../replay/timestamps";
 
 export type ValidationLevel = "error" | "warning";
 
@@ -33,8 +34,7 @@ const ISO_8601 =
 export function isIsoTimestamp(value: unknown): value is string {
   if (typeof value !== "string") return false;
   if (!ISO_8601.test(value)) return false;
-  const ms = Date.parse(value);
-  return Number.isFinite(ms);
+  return timestampMs(value) !== undefined;
 }
 
 const ADJECTIVE_RUN = "(?:\\w+\\s+){0,3}";
@@ -207,6 +207,20 @@ export function validateInstruments(
       });
     }
   }
+  for (let index = 0; index < instruments.length; index++) {
+    const instrument = instruments[index];
+    if (
+      instrument.tradable !== undefined &&
+      typeof instrument.tradable !== "boolean"
+    ) {
+      issues.push({
+        level: "error",
+        code: "instruments.tradable_invalid",
+        message: `Instrument ${instrument.symbol} tradable must be boolean`,
+        path: `instruments[${index}].tradable`,
+      });
+    }
+  }
   return issues;
 }
 
@@ -226,7 +240,7 @@ export function validateCandles(
     return issues;
   }
   const expectedMs = GRANULARITY_MS[granularity];
-  let prev: Candle | null = null;
+  const previousBySymbol = new Map<string, Candle>();
   for (let i = 0; i < candles.length; i++) {
     const c = candles[i];
     const path = `candles[${i}]`;
@@ -266,9 +280,40 @@ export function validateCandles(
         path,
       });
     }
+    const ohlcFields = [
+      ["open", c.open],
+      ["high", c.high],
+      ["low", c.low],
+      ["close", c.close],
+    ] as const;
+    const hasInvalidOhlc = ohlcFields.some(
+      ([, value]) => !Number.isFinite(value) || value <= 0,
+    );
+    for (const [field, value] of ohlcFields) {
+      if (!Number.isFinite(value) || value <= 0) {
+        issues.push({
+          level: "error",
+          code: "candles.ohlc_value_invalid",
+          message: `Candle ${field} must be a finite positive number`,
+          path: `${path}.${field}`,
+        });
+      }
+    }
     if (
-      !(c.high >= c.open && c.high >= c.close && c.high >= c.low) ||
-      !(c.low <= c.open && c.low <= c.close && c.low <= c.high)
+      c.adjustedClose !== undefined &&
+      (!Number.isFinite(c.adjustedClose) || c.adjustedClose <= 0)
+    ) {
+      issues.push({
+        level: "error",
+        code: "candles.adjusted_close_invalid",
+        message: "Candle adjustedClose must be a finite positive number",
+        path: `${path}.adjustedClose`,
+      });
+    }
+    if (
+      !hasInvalidOhlc &&
+      (!(c.high >= c.open && c.high >= c.close && c.high >= c.low) ||
+        !(c.low <= c.open && c.low <= c.close && c.low <= c.high))
     ) {
       issues.push({
         level: "error",
@@ -278,58 +323,64 @@ export function validateCandles(
         path,
       });
     }
-    if (c.volume < 0) {
+    if (!Number.isFinite(c.volume)) {
+      issues.push({
+        level: "error",
+        code: "candles.volume_invalid",
+        message: "Candle volume must be a finite non-negative number",
+        path: `${path}.volume`,
+      });
+    } else if (c.volume < 0) {
       issues.push({
         level: "error",
         code: "candles.negative_volume",
-        message: "Candle volume must be non-negative",
-        path,
+        message: "Candle volume must be a finite non-negative number",
+        path: `${path}.volume`,
       });
     }
+    const prev = previousBySymbol.get(c.symbol);
     if (prev) {
-      if (c.symbol === prev.symbol) {
-        if (
-          isIsoTimestamp(prev.closeTime) &&
-          isIsoTimestamp(c.closeTime) &&
-          Date.parse(c.closeTime) < Date.parse(prev.closeTime)
-        ) {
+      if (
+        isIsoTimestamp(prev.closeTime) &&
+        isIsoTimestamp(c.closeTime) &&
+        Date.parse(c.closeTime) < Date.parse(prev.closeTime)
+      ) {
+        issues.push({
+          level: "error",
+          code: "candles.not_sorted",
+          message: `Candles for ${c.symbol} are not sorted by closeTime`,
+          path,
+        });
+      }
+      if (
+        isIsoTimestamp(prev.closeTime) &&
+        isIsoTimestamp(c.openTime) &&
+        Date.parse(c.openTime) < Date.parse(prev.closeTime) - 1
+      ) {
+        issues.push({
+          level: "error",
+          code: "candles.overlap",
+          message: `Candles for ${c.symbol} overlap at index ${i}`,
+          path,
+        });
+      }
+      if (
+        expectedMs &&
+        isIsoTimestamp(prev.openTime) &&
+        isIsoTimestamp(c.openTime)
+      ) {
+        const delta = Date.parse(c.openTime) - Date.parse(prev.openTime);
+        if (delta > expectedMs * 2) {
           issues.push({
-            level: "error",
-            code: "candles.not_sorted",
-            message: `Candles for ${c.symbol} are not sorted by closeTime`,
+            level: "warning",
+            code: "candles.gap",
+            message: `Possible gap (${Math.round(delta / expectedMs)} intervals) between candles for ${c.symbol}`,
             path,
           });
-        }
-        if (
-          isIsoTimestamp(prev.closeTime) &&
-          isIsoTimestamp(c.openTime) &&
-          Date.parse(c.openTime) < Date.parse(prev.closeTime) - 1
-        ) {
-          issues.push({
-            level: "error",
-            code: "candles.overlap",
-            message: `Candles for ${c.symbol} overlap at index ${i}`,
-            path,
-          });
-        }
-        if (
-          expectedMs &&
-          isIsoTimestamp(prev.openTime) &&
-          isIsoTimestamp(c.openTime)
-        ) {
-          const delta = Date.parse(c.openTime) - Date.parse(prev.openTime);
-          if (delta > expectedMs * 2) {
-            issues.push({
-              level: "warning",
-              code: "candles.gap",
-              message: `Possible gap (${Math.round(delta / expectedMs)} intervals) between candles for ${c.symbol}`,
-              path,
-            });
-          }
         }
       }
     }
-    prev = c;
+    previousBySymbol.set(c.symbol, c);
   }
   return issues;
 }
@@ -550,6 +601,38 @@ export function validateIndicators(
         path: `${path}.symbol`,
       });
     }
+    if (typeof snap.value === "number") {
+      if (!Number.isFinite(snap.value)) {
+        issues.push({
+          level: "error",
+          code: "indicators.value_invalid",
+          message: "Indicator value must be finite",
+          path: `${path}.value`,
+        });
+      }
+    } else if (
+      !snap.value ||
+      typeof snap.value !== "object" ||
+      Array.isArray(snap.value)
+    ) {
+      issues.push({
+        level: "error",
+        code: "indicators.value_invalid",
+        message: "Indicator value must be a finite number or numeric record",
+        path: `${path}.value`,
+      });
+    } else {
+      for (const [key, value] of Object.entries(snap.value)) {
+        if (typeof value !== "number" || !Number.isFinite(value)) {
+          issues.push({
+            level: "error",
+            code: "indicators.value_invalid",
+            message: "Indicator record values must be finite numbers",
+            path: `${path}.value.${key}`,
+          });
+        }
+      }
+    }
   }
   return issues;
 }
@@ -573,27 +656,38 @@ export function validateBroker(broker: BrokerConfig): ValidationIssue[] {
       path: "broker.baseCurrency",
     });
   }
-  if (broker.commissionRateBps < 0) {
+  if (
+    !Number.isFinite(broker.commissionRateBps) ||
+    broker.commissionRateBps < 0
+  ) {
     issues.push({
       level: "error",
       code: "broker.commission_negative",
-      message: "Broker commissionRateBps must be non-negative",
+      message: "Broker commissionRateBps must be a finite non-negative number",
       path: "broker.commissionRateBps",
     });
   }
-  if (broker.spreadBps < 0) {
+  if (!Number.isFinite(broker.fixedFee) || broker.fixedFee < 0) {
+    issues.push({
+      level: "error",
+      code: "broker.fixed_fee_invalid",
+      message: "Broker fixedFee must be a finite non-negative number",
+      path: "broker.fixedFee",
+    });
+  }
+  if (!Number.isFinite(broker.spreadBps) || broker.spreadBps < 0) {
     issues.push({
       level: "error",
       code: "broker.spread_negative",
-      message: "Broker spreadBps must be non-negative",
+      message: "Broker spreadBps must be a finite non-negative number",
       path: "broker.spreadBps",
     });
   }
-  if (broker.maxLeverage < 1) {
+  if (!Number.isFinite(broker.maxLeverage) || broker.maxLeverage < 1) {
     issues.push({
       level: "error",
       code: "broker.max_leverage_too_low",
-      message: "Broker maxLeverage must be at least 1",
+      message: "Broker maxLeverage must be finite and at least 1",
       path: "broker.maxLeverage",
     });
   }
@@ -606,14 +700,99 @@ export function validateBroker(broker: BrokerConfig): ValidationIssue[] {
     });
   }
   if (
+    broker.slippageBps !== undefined &&
+    (!Number.isFinite(broker.slippageBps) || broker.slippageBps < 0)
+  ) {
+    issues.push({
+      level: "error",
+      code: "broker.slippage_bps_invalid",
+      message: "Broker slippageBps must be a finite non-negative number",
+      path: "broker.slippageBps",
+    });
+  }
+  if (
     broker.maxParticipationRate !== undefined &&
-    (broker.maxParticipationRate <= 0 || broker.maxParticipationRate > 1)
+    (!Number.isFinite(broker.maxParticipationRate) ||
+      broker.maxParticipationRate <= 0 ||
+      broker.maxParticipationRate > 1)
   ) {
     issues.push({
       level: "error",
       code: "broker.max_participation_invalid",
       message: "Broker maxParticipationRate must be greater than 0 and at most 1",
       path: "broker.maxParticipationRate",
+    });
+  }
+  if (
+    broker.partialFillPolicy === "volume_limited" &&
+    broker.maxParticipationRate === undefined
+  ) {
+    issues.push({
+      level: "error",
+      code: "broker.max_participation_missing",
+      message:
+        "partialFillPolicy=volume_limited requires maxParticipationRate",
+      path: "broker.maxParticipationRate",
+    });
+  }
+  if (
+    broker.borrowRateBps !== undefined &&
+    (!Number.isFinite(broker.borrowRateBps) || broker.borrowRateBps < 0)
+  ) {
+    issues.push({
+      level: "error",
+      code: "broker.borrow_rate_invalid",
+      message: "Broker borrowRateBps must be a finite non-negative number",
+      path: "broker.borrowRateBps",
+    });
+  }
+  if (
+    !["none", "fixed_bps", "volume_based", "volatility_based"].includes(
+      broker.slippageModel,
+    )
+  ) {
+    issues.push({
+      level: "error",
+      code: "broker.slippage_model_invalid",
+      message: "Broker slippageModel is not supported",
+      path: "broker.slippageModel",
+    });
+  }
+  if (
+    broker.partialFillPolicy !== undefined &&
+    !["disabled", "volume_limited"].includes(broker.partialFillPolicy)
+  ) {
+    issues.push({
+      level: "error",
+      code: "broker.partial_fill_policy_invalid",
+      message: "Broker partialFillPolicy is not supported",
+      path: "broker.partialFillPolicy",
+    });
+  }
+  if (
+    broker.stopFillPolicy !== undefined &&
+    !["trigger_price", "gap_open"].includes(broker.stopFillPolicy)
+  ) {
+    issues.push({
+      level: "error",
+      code: "broker.stop_fill_policy_invalid",
+      message: "Broker stopFillPolicy is not supported",
+      path: "broker.stopFillPolicy",
+    });
+  }
+  if (
+    broker.marginCallPolicy !== undefined &&
+    ![
+      "disabled",
+      "liquidate_on_threshold",
+      "reject_new_orders",
+    ].includes(broker.marginCallPolicy)
+  ) {
+    issues.push({
+      level: "error",
+      code: "broker.margin_call_policy_invalid",
+      message: "Broker marginCallPolicy is not supported",
+      path: "broker.marginCallPolicy",
     });
   }
   return issues;
@@ -645,7 +824,7 @@ export function validateMarketCalendar(
   }
   if (meta.marketCalendarId && calendar.id !== meta.marketCalendarId) {
     issues.push({
-      level: "warning",
+      level: "error",
       code: "calendar.id_mismatch",
       message: "meta.marketCalendarId does not match marketCalendar.id",
       path: "meta.marketCalendarId",
@@ -658,6 +837,84 @@ export function validateMarketCalendar(
       message: "Market calendar has no sessions; broker market-hours checks may reject orders",
       path: "marketCalendar.sessions",
     });
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: calendar.timezone }).format(
+      new Date(0),
+    );
+  } catch {
+    issues.push({
+      level: "error",
+      code: "calendar.timezone_invalid",
+      message: "Market calendar timezone must be a valid IANA timezone",
+      path: "marketCalendar.timezone",
+    });
+  }
+  const sessionKeys = new Set<string>();
+  for (let index = 0; index < calendar.sessions.length; index++) {
+    const session = calendar.sessions[index];
+    const path = `marketCalendar.sessions[${index}]`;
+    if (
+      !Number.isInteger(session.dayOfWeek) ||
+      session.dayOfWeek < 0 ||
+      session.dayOfWeek > 6
+    ) {
+      issues.push({
+        level: "error",
+        code: "calendar.day_invalid",
+        message: "Market calendar dayOfWeek must be an integer from 0 to 6",
+        path: `${path}.dayOfWeek`,
+      });
+    }
+    for (const [field, value] of [
+      ["open", session.open],
+      ["close", session.close],
+    ] as const) {
+      if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+        issues.push({
+          level: "error",
+          code: "calendar.time_invalid",
+          message: `Market calendar ${field} must use 24-hour HH:MM format`,
+          path: `${path}.${field}`,
+        });
+      }
+    }
+    const key = `${session.dayOfWeek}:${session.open}:${session.close}`;
+    if (sessionKeys.has(key)) {
+      issues.push({
+        level: "error",
+        code: "calendar.session_duplicate",
+        message: "Market calendar sessions must be unique",
+        path,
+      });
+    }
+    sessionKeys.add(key);
+  }
+  const holidays = new Set<string>();
+  for (let index = 0; index < (calendar.holidays ?? []).length; index++) {
+    const holiday = calendar.holidays![index];
+    const parsed = new Date(`${holiday}T00:00:00.000Z`);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(holiday) ||
+      Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString().slice(0, 10) !== holiday
+    ) {
+      issues.push({
+        level: "error",
+        code: "calendar.holiday_invalid",
+        message: "Market calendar holidays must be real YYYY-MM-DD dates",
+        path: `marketCalendar.holidays[${index}]`,
+      });
+    }
+    if (holidays.has(holiday)) {
+      issues.push({
+        level: "error",
+        code: "calendar.holiday_duplicate",
+        message: "Market calendar holidays must be unique",
+        path: `marketCalendar.holidays[${index}]`,
+      });
+    }
+    holidays.add(holiday);
   }
   return issues;
 }
@@ -686,12 +943,30 @@ export function validateCorporateActions(
         path: `${path}.effectiveAt`,
       });
     }
-    if (action.type === "split" && (!action.ratio || action.ratio <= 0)) {
+    if (
+      (action.type === "split" && action.ratio === undefined) ||
+      (action.ratio !== undefined &&
+        (!Number.isFinite(action.ratio) || action.ratio <= 0))
+    ) {
       issues.push({
         level: "error",
         code: "corporate_actions.split_ratio_invalid",
-        message: "Split corporate actions require a positive ratio",
+        message:
+          "Corporate action ratio must be a finite positive number, and splits require it",
         path: `${path}.ratio`,
+      });
+    }
+    if (
+      (action.type === "dividend" && action.amount === undefined) ||
+      (action.amount !== undefined &&
+        (!Number.isFinite(action.amount) || action.amount <= 0))
+    ) {
+      issues.push({
+        level: "error",
+        code: "corporate_actions.dividend_amount_invalid",
+        message:
+          "Corporate action amount must be a finite positive number, and dividends require it",
+        path: `${path}.amount`,
       });
     }
   }
@@ -713,6 +988,15 @@ export function validateScenarioPackage(
   issues.push(...validateIndicators(pkg.indicators, knownSymbols));
   issues.push(...validateBroker(pkg.broker));
   issues.push(...validateMarketCalendar(pkg.marketCalendar, pkg.meta));
+  if (pkg.broker.marketHoursEnforced && !pkg.marketCalendar) {
+    issues.push({
+      level: "error",
+      code: "calendar.required_for_enforcement",
+      message:
+        "A market calendar is required when broker market-hours enforcement is enabled",
+      path: "marketCalendar",
+    });
+  }
   issues.push(...validateCorporateActions(pkg.corporateActions, knownSymbols));
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");

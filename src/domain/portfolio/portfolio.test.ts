@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyCorporateAction,
   applyFill,
   emptyPortfolio,
   markToMarket,
@@ -37,6 +38,15 @@ describe("portfolio engine", () => {
     expect(p.cash).toBeCloseTo(1000 - 500 - 5, 6);
     expect(p.positions.TEST.quantity).toBe(5);
     expect(p.positions.TEST.averagePrice).toBe(100);
+  });
+
+  it("aggregates total spread cost without treating it as per-unit", () => {
+    const p = applyFill(
+      emptyPortfolio(1000),
+      makeFill({ quantity: 5, commission: 1, spreadCost: 2.5 }),
+    );
+
+    expect(p.feesPaid).toBeCloseTo(3.5, 6);
   });
 
   it("computes weighted average price across multiple buys", () => {
@@ -98,6 +108,61 @@ describe("portfolio engine", () => {
     expect(p.realizedPnl).toBeCloseTo(20, 6);
     expect(p.positions.TEST.quantity).toBe(-1);
     expect(p.positions.TEST.averagePrice).toBe(100);
+  });
+
+  it("adjusts quantity and basis across a split without changing value", () => {
+    let p = applyFill(
+      emptyPortfolio(1000),
+      makeFill({ quantity: 2, price: 100, commission: 0 }),
+    );
+    p = applyCorporateAction(p, {
+      symbol: "TEST",
+      type: "split",
+      effectiveAt: "2024-01-02T00:00:00Z",
+      ratio: 2,
+    });
+
+    expect(p.positions.TEST.quantity).toBe(4);
+    expect(p.positions.TEST.averagePrice).toBe(50);
+    expect(p.positions.TEST.marketPrice).toBe(50);
+    expect(p.positions.TEST.marketValue).toBe(200);
+  });
+
+  it("credits long dividends and charges short dividends", () => {
+    const long = applyCorporateAction(
+      applyFill(
+        emptyPortfolio(1000),
+        makeFill({ quantity: 2, price: 100, commission: 0 }),
+      ),
+      {
+        symbol: "TEST",
+        type: "dividend",
+        effectiveAt: "2024-01-02T00:00:00Z",
+        amount: 3,
+      },
+    );
+    const short = applyCorporateAction(
+      applyFill(
+        emptyPortfolio(1000),
+        makeFill({
+          side: "sell",
+          quantity: 2,
+          price: 100,
+          commission: 0,
+        }),
+      ),
+      {
+        symbol: "TEST",
+        type: "dividend",
+        effectiveAt: "2024-01-02T00:00:00Z",
+        amount: 3,
+      },
+    );
+
+    expect(long.cash).toBe(806);
+    expect(long.realizedPnl).toBe(6);
+    expect(short.cash).toBe(1194);
+    expect(short.realizedPnl).toBe(-6);
   });
 
   it("marks open positions to last visible price", () => {

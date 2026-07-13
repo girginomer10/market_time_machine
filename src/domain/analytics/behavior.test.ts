@@ -3,8 +3,12 @@ import type { Candle, Fill } from "../../types";
 import {
   defaultDetectorParams,
   detectAllBehavioralFlags,
+  detectDipCatching,
   detectEarlyProfitTake,
+  detectExcessiveLeverage,
   detectFomoBuy,
+  detectHoldingLoser,
+  detectNewsOverreaction,
   detectOvertrading,
   detectPanicSell,
 } from "./behavior";
@@ -270,6 +274,107 @@ describe("detectEarlyProfitTake", () => {
   });
 });
 
+describe("additional behavioral detectors", () => {
+  it("flags catching a falling knife after a drawdown", () => {
+    const candles = [
+      priceCandle("2020-01-01", 100),
+      priceCandle("2020-01-02", 90),
+      priceCandle("2020-01-03", 80),
+      priceCandle("2020-01-04", 70),
+    ];
+    const fill = makeFill({
+      id: "dip",
+      side: "buy",
+      time: "2020-01-03",
+      price: 80,
+      quantity: 1,
+    });
+    expect(
+      detectDipCatching({
+        fill,
+        candlesForSymbol: candles,
+        params: {
+          priorDrawdownThreshold: 0.1,
+          furtherLossThreshold: 0.05,
+          lookbackCandles: 3,
+          lookaheadCandles: 2,
+        },
+      })?.type,
+    ).toBe("dip_catching");
+  });
+
+  it("flags a material loser held for many candles", () => {
+    const candles = Array.from({ length: 15 }, (_, index) =>
+      priceCandle(`2020-01-${String(index + 1).padStart(2, "0")}`, 100 - index),
+    );
+    const closingFill = makeFill({
+      id: "loser",
+      side: "sell",
+      time: "2020-01-15",
+      price: 86,
+      quantity: 1,
+    });
+    expect(
+      detectHoldingLoser({
+        closingFill,
+        realizedReturn: -0.14,
+        entryTime: "2020-01-01",
+        candlesForSymbol: candles,
+      })?.type,
+    ).toBe("holding_loser");
+  });
+
+  it("flags a high-importance news trade that reverses", () => {
+    const candles = [
+      priceCandle("2020-01-01", 100),
+      priceCandle("2020-01-02", 110),
+      priceCandle("2020-01-03", 100),
+    ];
+    const fill = makeFill({
+      id: "news-buy",
+      side: "buy",
+      time: "2020-01-02",
+      price: 110,
+      quantity: 1,
+    });
+    const flag = detectNewsOverreaction({
+      fill,
+      candlesForSymbol: candles,
+      events: [
+        {
+          id: "event",
+          happenedAt: "2020-01-02",
+          publishedAt: "2020-01-02",
+          title: "Major announcement",
+          type: "news",
+          summary: "New information",
+          affectedSymbols: ["BTC"],
+          importance: 5,
+        },
+      ],
+      params: {
+        minImportance: 4,
+        reactionWindowCandles: 1,
+        reversalThreshold: 0.05,
+        lookaheadCandles: 1,
+      },
+    });
+    expect(flag?.type).toBe("news_overreaction");
+  });
+
+  it("flags repeated leverage above the configured threshold", () => {
+    const fills = [
+      makeFill({ id: "lev", side: "buy", time: "2020-01-01", price: 100, quantity: 1 }),
+    ];
+    expect(
+      detectExcessiveLeverage({
+        fills,
+        leverageByFill: new Map([["lev", 3]]),
+      })?.type,
+    ).toBe("excessive_leverage");
+  });
+});
+
 describe("detectOvertrading", () => {
   const baseFills: Fill[] = Array.from({ length: 20 }, (_, i) =>
     makeFill({
@@ -334,6 +439,7 @@ describe("detectAllBehavioralFlags", () => {
       priceCandle("2020-01-08", 115),
     ];
     const fills: Fill[] = [
+      makeFill({ id: "b1", side: "buy", time: "2020-01-01", price: 100, quantity: 1 }),
       makeFill({ id: "s1", side: "sell", time: "2020-01-04", price: 85, quantity: 1 }),
     ];
     const candlesBySymbol = new Map<string, Candle[]>();
@@ -350,5 +456,27 @@ describe("detectAllBehavioralFlags", () => {
       realizedTradeReturns: new Map([["s1", 0]]),
     });
     expect(flags.some((f) => f.type === "panic_sell")).toBe(true);
+  });
+
+  it("does not classify a short opening as a panic sale", () => {
+    const candles = [
+      priceCandle("2020-01-01", 100),
+      priceCandle("2020-01-02", 80),
+      priceCandle("2020-01-03", 100),
+    ];
+    const fills = [
+      makeFill({ id: "short", side: "sell", time: "2020-01-02", price: 80, quantity: 1 }),
+    ];
+    const flags = detectAllBehavioralFlags({
+      fills,
+      candlesBySymbol: new Map([["BTC", candles]]),
+      totalCandleCount: candles.length,
+      feesPaid: 0,
+      slippagePaid: 0,
+      initialEquity: 1000,
+      excessReturn: 0,
+      realizedTradeReturns: new Map(),
+    });
+    expect(flags.some((flag) => flag.type === "panic_sell")).toBe(false);
   });
 });

@@ -1,102 +1,177 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import {
+  access,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import process from "node:process";
 
-const args = parseArgs(process.argv.slice(2));
+const ASSET_CLASSES = new Set([
+  "crypto",
+  "equity",
+  "index",
+  "fx",
+  "commodity",
+  "rates",
+  "etf",
+]);
+const GRANULARITIES = new Set(["1m", "5m", "15m", "1h", "4h", "1d"]);
+const PRICE_ADJUSTMENTS = new Set(["raw", "split_adjusted", "total_return"]);
 
-if (!args.input || !args.symbol) {
-  throw new Error(
-    "Usage: npm run import:ohlcv -- --input=path.csv --symbol=SPY --title=\"SPY Local\" --license=\"Licensed local use\"",
+export async function main(rawArgs = process.argv.slice(2)) {
+  const args = parseArgs(rawArgs);
+  if (!args.input || !args.symbol) {
+    throw new Error(
+      "Usage: npm run import:ohlcv -- --input=path.csv --symbol=SPY --title=\"SPY Local\" --license=\"Licensed local use\"",
+    );
+  }
+
+  const inputPath = resolve(process.cwd(), args.input);
+  const symbol = normalizeSymbol(args.symbol);
+  const id = normalizeScenarioId(args.id ?? `local-${symbol}`);
+  const scenariosRoot = resolve(process.cwd(), "src/data/scenarios");
+  const defaultOutDir = resolve(scenariosRoot, id);
+  const outDir = resolve(process.cwd(), args.out ?? defaultOutDir);
+  assertSafeOutputDirectory(outDir, scenariosRoot);
+  const title = args.title ?? `${symbol} Local OHLCV Replay`;
+  const license =
+    args.license ??
+    "Local user-provided data; redistribution rights are not asserted by this repository.";
+  const generatedAt = new Date().toISOString();
+  const sourceName = args.source ?? basename(inputPath);
+  const priceAdjustment = validateChoice(
+    args.adjustment ?? "raw",
+    PRICE_ADJUSTMENTS,
+    "adjustment",
   );
+  const assetClass = validateChoice(
+    args.assetClass ?? "etf",
+    ASSET_CLASSES,
+    "assetClass",
+  );
+  const granularity = validateChoice(
+    args.granularity ?? "1d",
+    GRANULARITIES,
+    "granularity",
+  );
+  const currency = normalizeCurrency(args.currency ?? "USD");
+  const timezone = normalizeTimezone(args.timezone?.trim() || "UTC");
+  const initialCash = args.initialCash
+    ? positiveNumber(args.initialCash, "initialCash")
+    : 10_000;
+
+  const raw = await readFile(inputPath, "utf8");
+  const records = inputPath.toLowerCase().endsWith(".json")
+    ? parseJson(raw)
+    : parseCsv(raw);
+  const candles = records
+    .map((record, index) => normalizeRecord(record, symbol, sourceName, index))
+    .sort((a, b) => a.closeTime.localeCompare(b.closeTime));
+  validateCandles(candles);
+  if (candles.length < 2) {
+    throw new Error("Need at least two OHLCV rows to build a replay scenario.");
+  }
+
+  const benchmarks = candles.map((candle) => ({
+    symbol,
+    time: candle.closeTime,
+    value: candle.close,
+  }));
+  const scenarioSource = renderScenario({
+    id,
+    title,
+    symbol,
+    candles,
+    benchmarks,
+    startTime: candles[0].openTime,
+    endTime: candles[candles.length - 1].closeTime,
+    generatedAt,
+    sourceName,
+    license,
+    priceAdjustment,
+    assetClass,
+    granularity,
+    currency,
+    timezone,
+    initialCash,
+  });
+  const readme = renderReadme({
+    title,
+    generatedAt,
+    sourceName,
+    rowCount: candles.length,
+    license,
+  });
+
+  await writeOutputFiles(outDir, scenarioSource, readme, args.force === "true");
+  console.log(
+    `Generated local OHLCV scenario with ${candles.length} candles at ${outDir}`,
+  );
+  if (outDir === defaultOutDir && id.startsWith("local-")) {
+    console.log("This default src/data/scenarios/local-* output is gitignored.");
+  } else {
+    console.warn(
+      "Custom output paths may be git-visible. Verify git status and redistribution rights before committing or publishing.",
+    );
+  }
+  return { outDir, id, candles };
 }
 
-const inputPath = resolve(process.cwd(), args.input);
-const symbol = String(args.symbol).toUpperCase();
-const id = slug(args.id ?? `local-${symbol}`);
-const outDir = resolve(process.cwd(), args.out ?? `src/data/scenarios/${id}`);
-const title = args.title ?? `${symbol} Local OHLCV Replay`;
-const license =
-  args.license ??
-  "Local user-provided data; redistribution rights are not asserted by this repository.";
-const generatedAt = new Date().toISOString();
-const sourceName = args.source ?? basename(inputPath);
-const priceAdjustment = args.adjustment ?? "raw";
-
-const raw = await readFile(inputPath, "utf8");
-const records = inputPath.endsWith(".json") ? parseJson(raw) : parseCsv(raw);
-if (records.length < 2) {
-  throw new Error("Need at least two OHLCV rows to build a replay scenario.");
-}
-
-const candles = records.map((record) => normalizeRecord(record, symbol));
-const startTime = candles[0].openTime;
-const endTime = candles[candles.length - 1].closeTime;
-const benchmarks = candles.map((candle) => ({
-  symbol,
-  time: candle.closeTime,
-  value: candle.close,
-}));
-
-const scenarioSource = renderScenario({
-  id,
-  title,
-  symbol,
-  candles,
-  benchmarks,
-  startTime,
-  endTime,
-  generatedAt,
-  sourceName,
-  license,
-  priceAdjustment,
-});
-const readme = renderReadme({
-  title,
-  generatedAt,
-  sourceName,
-  rowCount: candles.length,
-  license,
-});
-
-await mkdir(outDir, { recursive: true });
-await writeFile(resolve(outDir, "index.ts"), scenarioSource);
-await writeFile(resolve(outDir, "README.md"), readme);
-
-console.log(`Generated local OHLCV scenario with ${candles.length} candles at ${outDir}`);
-console.log("Generated local-* scenario folders are gitignored by default.");
-
-function parseArgs(rawArgs) {
+export function parseArgs(rawArgs) {
   const parsed = {};
   for (const arg of rawArgs) {
     if (!arg.startsWith("--")) continue;
     const [key, ...valueParts] = arg.slice(2).split("=");
-    parsed[key] = valueParts.join("=");
+    if (!key) continue;
+    parsed[key] = valueParts.length > 0 ? valueParts.join("=") : "true";
   }
   return parsed;
 }
 
-function parseCsv(csv) {
-  const [headerLine, ...lines] = csv.trim().split(/\r?\n/);
-  const headers = splitCsvLine(headerLine).map((header) =>
+export function parseCsv(csv) {
+  const lines = csv.trim().split(/\r?\n/);
+  if (lines.length === 0 || !lines[0].trim()) return [];
+  const headers = splitCsvLine(lines[0]).map((header) =>
     header.trim().toLowerCase(),
   );
+  if (new Set(headers).size !== headers.length) {
+    throw new Error("CSV headers must be unique.");
+  }
   return lines
+    .slice(1)
     .filter((line) => line.trim())
-    .map((line) => {
+    .map((line, rowIndex) => {
       const values = splitCsvLine(line);
-      return Object.fromEntries(headers.map((header, index) => [header, values[index]]));
+      if (values.length !== headers.length) {
+        throw new Error(
+          `CSV row ${rowIndex + 2} has ${values.length} columns; expected ${headers.length}.`,
+        );
+      }
+      return Object.fromEntries(
+        headers.map((header, index) => [header, values[index]]),
+      );
     });
 }
 
-function splitCsvLine(line) {
+export function splitCsvLine(line) {
   const values = [];
   let current = "";
   let quoted = false;
-  for (const char of line) {
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
     if (char === '"') {
-      quoted = !quoted;
+      if (quoted && line[index + 1] === '"') {
+        current += '"';
+        index++;
+      } else {
+        quoted = !quoted;
+      }
     } else if (char === "," && !quoted) {
       values.push(current);
       current = "";
@@ -104,11 +179,12 @@ function splitCsvLine(line) {
       current += char;
     }
   }
+  if (quoted) throw new Error("CSV row contains an unterminated quoted value.");
   values.push(current);
   return values;
 }
 
-function parseJson(json) {
+export function parseJson(json) {
   const parsed = JSON.parse(json);
   if (!Array.isArray(parsed)) {
     throw new Error("JSON OHLCV input must be an array of row objects.");
@@ -116,8 +192,13 @@ function parseJson(json) {
   return parsed;
 }
 
-function normalizeRecord(record, symbol) {
-  const openTime = iso(record.openTime ?? record.open_time ?? record.date);
+export function normalizeRecord(record, symbol, sourceName, rowIndex = 0) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    throw new Error(`OHLCV row ${rowIndex + 1} must be an object.`);
+  }
+  const openTime = iso(
+    record.openTime ?? record.open_time ?? record.timestamp ?? record.date,
+  );
   const closeTime = iso(
     record.closeTime ??
       record.close_time ??
@@ -125,12 +206,24 @@ function normalizeRecord(record, symbol) {
       record.date,
     true,
   );
-  const open = finiteNumber(record.open, "open");
-  const high = finiteNumber(record.high, "high");
-  const low = finiteNumber(record.low, "low");
-  const close = finiteNumber(record.close, "close");
-  const volume = Number(record.volume ?? 0);
-  if (high < Math.max(open, close, low) || low > Math.min(open, close, high)) {
+  if (Date.parse(closeTime) <= Date.parse(openTime)) {
+    throw new Error(`OHLCV row ${rowIndex + 1} closes before it opens.`);
+  }
+  const open = positiveNumber(record.open, "open");
+  const high = positiveNumber(record.high, "high");
+  const low = positiveNumber(record.low, "low");
+  const close = positiveNumber(record.close, "close");
+  const adjustedValue = record.adjustedClose ?? record.adjusted_close;
+  const adjustedClose =
+    adjustedValue === undefined || adjustedValue === ""
+      ? close
+      : positiveNumber(adjustedValue, "adjustedClose");
+  const volumeValue = record.volume;
+  const volume =
+    volumeValue === undefined || volumeValue === ""
+      ? 0
+      : nonNegativeNumber(volumeValue, "volume");
+  if (high < Math.max(open, close) || low > Math.min(open, close) || high < low) {
     throw new Error(`OHLC values do not bracket open/close for ${openTime}.`);
   }
   return {
@@ -141,35 +234,174 @@ function normalizeRecord(record, symbol) {
     high,
     low,
     close,
-    adjustedClose: close,
-    volume: Number.isFinite(volume) ? Math.max(0, volume) : 0,
+    adjustedClose,
+    volume,
     source: sourceName,
   };
 }
 
-function iso(value, close = false) {
-  if (!value) throw new Error("OHLCV row is missing a time/date value.");
-  const text = String(value);
-  if (text.includes("T")) return new Date(text).toISOString();
-  return `${text}T${close ? "23:59:59.000" : "00:00:00.000"}Z`;
+export function validateCandles(candles) {
+  const closeTimes = new Set();
+  let previous;
+  for (const candle of candles) {
+    if (closeTimes.has(candle.closeTime)) {
+      throw new Error(`Duplicate OHLCV close time: ${candle.closeTime}`);
+    }
+    closeTimes.add(candle.closeTime);
+    if (
+      previous &&
+      Date.parse(candle.openTime) < Date.parse(previous.closeTime)
+    ) {
+      throw new Error(
+        `OHLCV candles overlap at ${previous.closeTime} and ${candle.openTime}.`,
+      );
+    }
+    previous = candle;
+  }
 }
 
-function finiteNumber(value, label) {
+export function iso(value, close = false) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    throw new Error("OHLCV row is missing a time/date value.");
+  }
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const parsed = new Date(`${text}T00:00:00.000Z`);
+    if (
+      Number.isNaN(parsed.getTime()) ||
+      parsed.toISOString().slice(0, 10) !== text
+    ) {
+      throw new Error(`Invalid OHLCV date: ${text}`);
+    }
+    return `${text}T${close ? "23:59:59.999" : "00:00:00.000"}Z`;
+  }
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid OHLCV timestamp: ${text}`);
+  }
+  return parsed.toISOString();
+}
+
+export function positiveNumber(value, label) {
   const number = Number(value);
-  if (!Number.isFinite(number)) {
+  if (!Number.isFinite(number) || number <= 0) {
     throw new Error(`OHLCV row has invalid ${label}: ${value}`);
   }
-  return Math.round(number * 1_000_000) / 1_000_000;
+  const rounded = Math.round(number * 1_000_000) / 1_000_000;
+  if (!Number.isFinite(rounded) || rounded <= 0) {
+    throw new Error(`OHLCV row has invalid ${label} after rounding: ${value}`);
+  }
+  return rounded;
 }
 
-function slug(value) {
+function nonNegativeNumber(value, label) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error(`OHLCV row has invalid ${label}: ${value}`);
+  }
+  const rounded = Math.round(number * 1_000_000) / 1_000_000;
+  if (!Number.isFinite(rounded) || rounded < 0) {
+    throw new Error(`OHLCV row has invalid ${label} after rounding: ${value}`);
+  }
+  return rounded;
+}
+
+export function slug(value) {
   return String(value)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 }
 
-function renderScenario({
+export function normalizeScenarioId(value) {
+  const normalized = slug(value);
+  if (!normalized) throw new Error("Scenario id must contain a letter or number.");
+  return normalized.startsWith("local-") ? normalized : `local-${normalized}`;
+}
+
+function normalizeSymbol(value) {
+  const symbol = String(value).trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9._:/-]{0,31}$/.test(symbol)) {
+    throw new Error(`Invalid symbol: ${value}`);
+  }
+  return symbol;
+}
+
+function normalizeCurrency(value) {
+  const currency = String(value).trim().toUpperCase();
+  if (!/^[A-Z]{3,8}$/.test(currency)) {
+    throw new Error(`Invalid currency: ${value}`);
+  }
+  return currency;
+}
+
+function normalizeTimezone(value) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+  } catch {
+    throw new Error(`Invalid timezone: ${value}`);
+  }
+  return value;
+}
+
+function validateChoice(value, choices, label) {
+  if (!choices.has(value)) {
+    throw new Error(`Invalid ${label}: ${value}`);
+  }
+  return value;
+}
+
+function assertSafeOutputDirectory(outDir, scenariosRoot) {
+  if (
+    containsPath(outDir, scenariosRoot) ||
+    containsPath(outDir, resolve(process.cwd()))
+  ) {
+    throw new Error(`Refusing unsafe output directory: ${outDir}`);
+  }
+}
+
+function containsPath(parent, child) {
+  const path = relative(parent, child);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+}
+
+async function exists(path) {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function writeOutputFiles(outDir, scenarioSource, readme, force) {
+  await mkdir(outDir, { recursive: true });
+  const indexPath = resolve(outDir, "index.ts");
+  const readmePath = resolve(outDir, "README.md");
+  if (!force && ((await exists(indexPath)) || (await exists(readmePath)))) {
+    throw new Error(
+      `Output already exists at ${outDir}; pass --force=true to replace it.`,
+    );
+  }
+  const suffix = `.tmp-${process.pid}-${Date.now()}`;
+  const indexTemp = `${indexPath}${suffix}`;
+  const readmeTemp = `${readmePath}${suffix}`;
+  try {
+    await Promise.all([
+      writeFile(indexTemp, scenarioSource, "utf8"),
+      writeFile(readmeTemp, readme, "utf8"),
+    ]);
+    await rename(indexTemp, indexPath);
+    await rename(readmeTemp, readmePath);
+  } finally {
+    await Promise.all([
+      rm(indexTemp, { force: true }),
+      rm(readmeTemp, { force: true }),
+    ]);
+  }
+}
+
+export function renderScenario({
   id,
   title,
   symbol,
@@ -181,7 +413,13 @@ function renderScenario({
   sourceName,
   license,
   priceAdjustment,
+  assetClass,
+  granularity,
+  currency,
+  timezone,
+  initialCash,
 }) {
+  const hasUsableVolume = candles.every((candle) => candle.volume > 0);
   return `import type {
   BenchmarkPoint,
   Candle,
@@ -193,19 +431,19 @@ function renderScenario({
 import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
 import { assembleScenario } from "../../../domain/scenario/loader";
 
-const SYMBOL = "${symbol}";
+const SYMBOL = ${JSON.stringify(symbol)};
 
 const meta: ScenarioMeta = {
-  id: "${id}",
+  id: ${JSON.stringify(id)},
   title: ${JSON.stringify(title)},
   subtitle: "Locally generated from user-provided licensed OHLCV data.",
-  assetClass: "etf",
+  assetClass: ${JSON.stringify(assetClass)},
   symbols: [SYMBOL],
-  startTime: "${startTime}",
-  endTime: "${endTime}",
-  baseCurrency: "USD",
-  initialCash: 10_000,
-  defaultGranularity: "1d",
+  startTime: ${JSON.stringify(startTime)},
+  endTime: ${JSON.stringify(endTime)},
+  baseCurrency: ${JSON.stringify(currency)},
+  initialCash: ${initialCash},
+  defaultGranularity: ${JSON.stringify(granularity)},
   difficulty: "intermediate",
   tags: ["local", "user_import", "ohlcv"],
   supportedModes: ["explorer", "professional", "challenge"],
@@ -214,9 +452,8 @@ const meta: ScenarioMeta = {
   dataSources: [${JSON.stringify(sourceName)}],
   dataVersion: "local-${generatedAt.slice(0, 10)}",
   sourceManifest: [${JSON.stringify(sourceName)}],
-  generatedAt: "${generatedAt}",
-  priceAdjustment: "${priceAdjustment}",
-  marketCalendarId: "always-open-local",
+  generatedAt: ${JSON.stringify(generatedAt)},
+  priceAdjustment: ${JSON.stringify(priceAdjustment)},
   isSampleData: false,
   description:
     "Local scenario generated from user-provided OHLCV data. Keep generated files local unless redistribution rights are explicit.",
@@ -226,26 +463,25 @@ const instruments: Instrument[] = [
   {
     symbol: SYMBOL,
     name: ${JSON.stringify(title)},
-    assetClass: "etf",
-    currency: "USD",
-    timezone: "UTC",
+    assetClass: ${JSON.stringify(assetClass)},
+    currency: ${JSON.stringify(currency)},
+    timezone: ${JSON.stringify(timezone)},
     allowFractional: true,
     tickSize: 0.01,
   },
 ];
 
 const broker: BrokerConfig = {
-  baseCurrency: "USD",
+  baseCurrency: ${JSON.stringify(currency)},
   commissionRateBps: 5,
   fixedFee: 0,
   spreadBps: 5,
-  slippageModel: "volume_based",
+  slippageModel: ${JSON.stringify(hasUsableVolume ? "volume_based" : "fixed_bps")},
   slippageBps: 3,
   allowFractional: true,
   allowShort: true,
   maxLeverage: 2,
-  maxParticipationRate: 0.1,
-  partialFillPolicy: "volume_limited",
+${hasUsableVolume ? '  maxParticipationRate: 0.1,\n  partialFillPolicy: "volume_limited",' : '  partialFillPolicy: "disabled",'}
   stopFillPolicy: "gap_open",
   marketHoursEnforced: false,
   marginCallPolicy: "reject_new_orders",
@@ -266,19 +502,6 @@ export const ${camel(id)}Scenario = assembleScenario({
   indicators,
   benchmarks,
   broker,
-  marketCalendar: {
-    id: "always-open-local",
-    timezone: "UTC",
-    sessions: [
-      { dayOfWeek: 0, open: "00:00", close: "23:59" },
-      { dayOfWeek: 1, open: "00:00", close: "23:59" },
-      { dayOfWeek: 2, open: "00:00", close: "23:59" },
-      { dayOfWeek: 3, open: "00:00", close: "23:59" },
-      { dayOfWeek: 4, open: "00:00", close: "23:59" },
-      { dayOfWeek: 5, open: "00:00", close: "23:59" },
-      { dayOfWeek: 6, open: "00:00", close: "23:59" },
-    ],
-  },
   corporateActions,
 });
 `;
@@ -288,7 +511,13 @@ function camel(value) {
   return value.replace(/-([a-z0-9])/g, (_, char) => char.toUpperCase());
 }
 
-function renderReadme({ title, generatedAt, sourceName, rowCount, license }) {
+export function renderReadme({
+  title,
+  generatedAt,
+  sourceName,
+  rowCount,
+  license,
+}) {
   return `# ${title}
 
 Generated at: ${generatedAt}
@@ -303,8 +532,18 @@ License / terms note:
 
 ${license}
 
-This directory is ignored by git because local OHLCV imports may contain
-restricted or proprietary data. Do not publish generated files or bundles unless
-you have explicit redistribution rights.
+Default src/data/scenarios/local-* output directories are ignored by git because
+local OHLCV imports may contain restricted or proprietary data. Custom output
+paths may not be ignored. Verify git status and do not publish generated files or
+bundles unless you have explicit redistribution rights.
 `;
+}
+
+const invokedAsScript =
+  process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedAsScript) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
 }

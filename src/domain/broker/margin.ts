@@ -156,6 +156,15 @@ export function requiresLiquidation(
   return equity < Math.abs(positionsGross) * policy.liquidationThreshold;
 }
 
+export function rejectsNewOrdersForMarginCall(
+  broker: BrokerConfig,
+  snapshot: MarginSnapshot,
+): boolean {
+  return (
+    broker.marginCallPolicy === "reject_new_orders" && snapshot.isMarginCall
+  );
+}
+
 export function borrowCostFor(
   notional: number,
   days: number,
@@ -171,9 +180,11 @@ export function canOpenAdditionalNotional(
   additionalNotional: number,
 ): boolean {
   const snap = marginSnapshot(inputs);
+  const initialMarginHeadroom =
+    snap.equity - snap.initialMarginRequirement;
   const additionalInitial = initialMarginRequired(
     additionalNotional,
     inputs.policy,
   );
-  return snap.excessEquity >= additionalInitial;
+  return initialMarginHeadroom >= additionalInitial;
 }

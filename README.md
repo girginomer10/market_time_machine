@@ -85,6 +85,16 @@ npm run import:fred-sp500
 
 This writes to `src/data/scenarios/sp500-covid-2020-fred/`, which is intentionally gitignored. FRED's `SP500` series is S&P Dow Jones Indices content, so generated files should remain local unless you have redistribution rights. See [Scenario Authoring](docs/scenario-authoring.md#local-fred-sp-500-import).
 
+Local licensed scenarios are available in the development server but are excluded from normal production bundles, even when their ignored source files exist in the workspace.
+
+FRED closes are source observations, but the importer derives open/high/low and
+sets volume to zero. Generated packages are therefore labeled **Sample data**
+so the UI does not present the derived OHLC candles as fully source-observed.
+
+The importer will not overwrite an existing generated scenario unless you pass
+`--force=true`. Custom date ranges receive a generic date-range identity and
+only retain events inside that range.
+
 ### Optional Licensed OHLCV Local Import
 
 Users with their own redistribution-safe or local-use licensed OHLCV data can generate a local scenario:
@@ -94,6 +104,9 @@ npm run import:ohlcv -- --input=local-data/spy.csv --symbol=SPY --title="SPY Loc
 ```
 
 This writes to `src/data/scenarios/local-spy/`, which is gitignored by default. CSV/JSON rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`.
+The importer validates prices, duplicates, timestamps, and output paths before
+an atomic write. It does not invent an exchange calendar; generated scenarios
+leave market-hours enforcement off until you add a verified calendar.
 
 ## Core Principles
 

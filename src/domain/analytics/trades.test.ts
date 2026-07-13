@@ -7,6 +7,7 @@ import {
   exposureTime,
   feesTotal,
   profitFactor,
+  portfolioExposureTime,
   realizeTrades,
   slippageTotal,
   tradeOutcomes,
@@ -75,14 +76,61 @@ describe("realizeTrades", () => {
     expect(trades[0].realizedPnl).toBeCloseTo(20 - 1 - 1);
   });
 
-  it("ignores closing fills with no inventory", () => {
+  it("treats a sell with no inventory as a short opening", () => {
     const fills: Fill[] = [
       fill({ id: "s1", side: "sell", time: "2020-01-01", price: 100, quantity: 1, commission: 1 }),
     ];
     const trades = realizeTrades(fills);
+    expect(trades).toHaveLength(0);
+  });
+
+  it("matches short sales with buy-to-cover fills", () => {
+    const fills: Fill[] = [
+      fill({ id: "s1", side: "sell", time: "2020-01-01", price: 100, quantity: 2, commission: 2 }),
+      fill({ id: "b1", side: "buy", time: "2020-01-02", price: 80, quantity: 1, commission: 1 }),
+    ];
+    const trades = realizeTrades(fills);
     expect(trades).toHaveLength(1);
-    expect(trades[0].matchedQuantity).toBe(0);
-    expect(trades[0].realizedPnl).toBeCloseTo(-1);
+    expect(trades[0].positionSide).toBe("short");
+    expect(trades[0].matchedQuantity).toBe(1);
+    expect(trades[0].matchedCostBasis).toBe(100);
+    expect(trades[0].realizedPnl).toBeCloseTo(18);
+  });
+
+  it("allocates commissions when a fill closes and reverses", () => {
+    const fills: Fill[] = [
+      fill({ id: "b1", side: "buy", time: "2020-01-01", price: 100, quantity: 1, commission: 1 }),
+      fill({ id: "s1", side: "sell", time: "2020-01-02", price: 110, quantity: 2, commission: 2 }),
+      fill({ id: "b2", side: "buy", time: "2020-01-03", price: 90, quantity: 1, commission: 1 }),
+    ];
+    const trades = realizeTrades(fills);
+    expect(trades).toHaveLength(2);
+    expect(trades[0].realizedPnl).toBeCloseTo(8);
+    expect(trades[1].realizedPnl).toBeCloseTo(18);
+  });
+
+  it("orders mixed-offset timestamps by instant rather than text", () => {
+    const fills: Fill[] = [
+      fill({
+        id: "close",
+        side: "sell",
+        time: "2024-01-01T23:00:00.500Z",
+        price: 120,
+        quantity: 1,
+      }),
+      fill({
+        id: "open",
+        side: "buy",
+        time: "2024-01-02T00:30:00+02:00",
+        price: 100,
+        quantity: 1,
+      }),
+    ];
+
+    const trades = realizeTrades(fills);
+    expect(trades).toHaveLength(1);
+    expect(trades[0].positionSide).toBe("long");
+    expect(trades[0].realizedPnl).toBeCloseTo(20);
   });
 });
 
@@ -157,6 +205,13 @@ describe("feesTotal / slippageTotal / turnover", () => {
     expect(feesTotal(fills)).toBeCloseTo(3);
   });
 
+  it("treats spread cost as the fill's total monetary cost", () => {
+    const fills: Fill[] = [
+      fill({ id: "x", side: "buy", time: "t", price: 100, quantity: 10, spreadCost: 0.1 }),
+    ];
+    expect(feesTotal(fills)).toBeCloseTo(0.1);
+  });
+
   it("multiplies slippage by quantity", () => {
     const fills: Fill[] = [
       fill({ id: "x", side: "buy", time: "t", price: 100, quantity: 2, slippage: 0.5 }),
@@ -190,5 +245,32 @@ describe("exposureTime", () => {
 
   it("returns 0 when there are no candles", () => {
     expect(exposureTime([], [], "BTC")).toBe(0);
+  });
+
+  it("counts short positions as exposure", () => {
+    const candles = [
+      candle("2020-01-01", 100),
+      candle("2020-01-02", 95),
+      candle("2020-01-03", 90),
+    ];
+    const fills: Fill[] = [
+      fill({ id: "s", side: "sell", time: "2020-01-01", price: 100, quantity: 1 }),
+      fill({ id: "b", side: "buy", time: "2020-01-02", price: 95, quantity: 1 }),
+    ];
+    expect(exposureTime(candles, fills, "BTC")).toBeCloseTo(2 / 3);
+  });
+
+  it("computes exposure across a multi-symbol portfolio timeline", () => {
+    const candles = [
+      candle("2020-01-01", 100, "BTC"),
+      candle("2020-01-02", 101, "BTC"),
+      candle("2020-01-01T12:00", 50, "ETH"),
+      candle("2020-01-03", 55, "ETH"),
+    ];
+    const fills: Fill[] = [
+      fill({ id: "s", side: "sell", time: "2020-01-01", price: 100, quantity: 1 }),
+      fill({ id: "b", side: "buy", time: "2020-01-03", price: 90, quantity: 1 }),
+    ];
+    expect(portfolioExposureTime(candles, fills, ["BTC", "ETH"])).toBe(1);
   });
 });

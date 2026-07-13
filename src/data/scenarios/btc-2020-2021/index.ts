@@ -18,7 +18,7 @@ const meta: ScenarioMeta = {
   assetClass: "crypto",
   symbols: [SYMBOL],
   startTime: "2020-01-01T00:00:00.000Z",
-  endTime: "2021-12-31T00:00:00.000Z",
+  endTime: "2021-12-31T23:59:59.999Z",
   baseCurrency: "USD",
   initialCash: 10_000,
   defaultGranularity: "1d",

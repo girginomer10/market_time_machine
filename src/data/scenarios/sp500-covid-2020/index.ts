@@ -3,6 +3,7 @@ import type {
   Candle,
   IndicatorSnapshot,
   Instrument,
+  MarketCalendar,
   MarketEvent,
 } from "../../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
@@ -26,6 +27,7 @@ const meta: ScenarioMeta = {
   tags: ["equity", "crash", "policy_response", "covid", "recovery"],
   supportedModes: ["explorer", "professional", "challenge"],
   benchmarkSymbol: SYMBOL,
+  marketCalendarId: "us-equities-2020",
   license: "CC-BY-4.0 (sample data)",
   dataSources: [
     "Synthetic deterministic sample prices shaped to the publicly documented U.S. equity 2020 path; raw licensed S&P DJI or ETF market data is not redistributed.",
@@ -65,6 +67,28 @@ const broker: BrokerConfig = {
 
 const DAY_MS = 86_400_000;
 
+const marketHolidays = new Set([
+  "2020-01-20",
+  "2020-02-17",
+  "2020-04-10",
+  "2020-05-25",
+  "2020-07-03",
+  "2020-09-07",
+  "2020-11-26",
+  "2020-12-25",
+]);
+
+const marketCalendar: MarketCalendar = {
+  id: "us-equities-2020",
+  timezone: "America/New_York",
+  sessions: [1, 2, 3, 4, 5].map((dayOfWeek) => ({
+    dayOfWeek: dayOfWeek as 1 | 2 | 3 | 4 | 5,
+    open: "09:30",
+    close: "16:00",
+  })),
+  holidays: [...marketHolidays],
+};
+
 function mulberry32(seed: number): () => number {
   let t = seed >>> 0;
   return function () {
@@ -100,9 +124,14 @@ function buildCandles(): Candle[] {
 
   for (let t = start; t <= end; t += DAY_MS) {
     const date = new Date(t);
-    if (date.getUTCDay() === 0 || date.getUTCDay() === 6) continue;
-
     const iso = date.toISOString().slice(0, 10);
+    if (
+      date.getUTCDay() === 0 ||
+      date.getUTCDay() === 6 ||
+      marketHolidays.has(iso)
+    ) {
+      continue;
+    }
     const target = interpolateAnchors(iso);
     const regime = volatilityRegime(iso);
     const overnightNoise = (rng() - 0.5) * target * 0.006 * regime;
@@ -428,8 +457,8 @@ function buildIndicators(candles: Candle[]): IndicatorSnapshot[] {
       });
     }
 
-    if (i + 1 >= volWindow) {
-      const slice = candles.slice(i + 1 - volWindow, i + 1);
+    if (i >= volWindow) {
+      const slice = candles.slice(i - volWindow, i + 1);
       const returns = [];
       for (let j = 1; j < slice.length; j++) {
         returns.push(slice[j].close / slice[j - 1].close - 1);
@@ -472,6 +501,7 @@ export const sp500Covid2020Scenario = assembleScenario({
   indicators,
   benchmarks,
   broker,
+  marketCalendar,
 });
 
 export const scenarioCatalogEntry = {

@@ -1,4 +1,4 @@
-import type { Granularity } from "../../types";
+import type { AssetClass, Granularity } from "../../types";
 
 export function totalReturn(
   initialEquity: number,
@@ -94,10 +94,12 @@ export function sortinoRatio(
   if (returns.length < 2) return undefined;
   const periodRf = riskFreeRate / periodsPerYear;
   const excess = returns.map((r) => r - periodRf);
-  const downside = excess.filter((r) => r < 0);
-  const sd = stdDev(downside);
-  if (sd === 0) return undefined;
-  return (mean(excess) / sd) * Math.sqrt(periodsPerYear);
+  const downsideDeviation = Math.sqrt(
+    excess.reduce((sum, value) => sum + Math.min(value, 0) ** 2, 0) /
+      excess.length,
+  );
+  if (downsideDeviation === 0) return undefined;
+  return (mean(excess) / downsideDeviation) * Math.sqrt(periodsPerYear);
 }
 
 export function calmarRatio(
@@ -108,21 +110,30 @@ export function calmarRatio(
   return totalReturnValue / maxDrawdownValue;
 }
 
-export function periodsPerYearForGranularity(g: Granularity): number {
+export function periodsPerYearForGranularity(
+  g: Granularity,
+  assetClass: AssetClass = "crypto",
+): number {
+  const alwaysOpen = assetClass === "crypto";
+  const hoursPerTradingDay =
+    alwaysOpen || assetClass === "fx" || assetClass === "commodity" ? 24 : 6.5;
+  const tradingDaysPerYear = alwaysOpen ? 365 : 252;
+  const minutesPerDay = alwaysOpen ? 24 * 60 : hoursPerTradingDay * 60;
+
   switch (g) {
     case "1m":
-      return 365 * 24 * 60;
+      return tradingDaysPerYear * minutesPerDay;
     case "5m":
-      return 365 * 24 * 12;
+      return (tradingDaysPerYear * minutesPerDay) / 5;
     case "15m":
-      return 365 * 24 * 4;
+      return (tradingDaysPerYear * minutesPerDay) / 15;
     case "1h":
-      return 365 * 24;
+      return tradingDaysPerYear * hoursPerTradingDay;
     case "4h":
-      return 365 * 6;
+      return (tradingDaysPerYear * hoursPerTradingDay) / 4;
     case "1d":
-      return 365;
+      return tradingDaysPerYear;
     default:
-      return 365;
+      return tradingDaysPerYear;
   }
 }

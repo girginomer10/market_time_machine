@@ -4,17 +4,21 @@ import { REPLAY_SPEEDS } from "../../domain/replay/engine";
 
 const SELECTABLE_SPEEDS = REPLAY_SPEEDS.filter((s) => s.label !== "step");
 
-export default function ReplayControls() {
+type Props = {
+  onRequestReset: () => void;
+};
+
+export default function ReplayControls({ onRequestReset }: Props) {
   const status = useSessionStore((s) => s.status);
   const speed = useSessionStore((s) => s.speed);
   const currentIndex = useSessionStore((s) => s.currentIndex);
   const total = useSessionStore((s) => s.primaryCandlesLength);
+  const mode = useSessionStore((s) => s.mode);
   const play = useSessionStore((s) => s.play);
   const pause = useSessionStore((s) => s.pause);
   const stepForward = useSessionStore((s) => s.stepForward);
   const setSpeed = useSessionStore((s) => s.setSpeed);
   const finish = useSessionStore((s) => s.finish);
-  const reset = useSessionStore((s) => s.resetScenario);
 
   useEffect(() => {
     if (status !== "playing") return;
@@ -27,6 +31,8 @@ export default function ReplayControls() {
 
   const isFinished = status === "finished";
   const isPlaying = status === "playing";
+  const restrictedReplay =
+    !isFinished && (mode === "blind" || mode === "challenge");
   const progressPct =
     total > 0 ? Math.round(((currentIndex + 1) / total) * 100) : 0;
 
@@ -67,18 +73,27 @@ export default function ReplayControls() {
         ))}
       </div>
       <div className="firewall-badge" title="Information firewall is active">
-        <span className="dot mixed" /> Firewall {progressPct}%
+        <span className="dot mixed" /> Firewall{" "}
+        {restrictedReplay ? "active" : `${progressPct}%`}
       </div>
       <div style={{ flex: 1 }} />
       <button
         className="btn"
         onClick={finish}
-        disabled={isFinished}
-        title="Skip to end and reveal the report"
+        disabled={isFinished || restrictedReplay}
+        title={
+          restrictedReplay
+            ? "Complete the local challenge to reveal the report"
+            : "Skip to end and reveal the report"
+        }
       >
         Skip to end
       </button>
-      <button className="btn danger" onClick={reset} title="Reset replay">
+      <button
+        className="btn danger"
+        onClick={onRequestReset}
+        title="Reset replay"
+      >
         Reset
       </button>
     </div>

@@ -29,6 +29,7 @@ export type Instrument = {
   exchange?: string;
   currency: string;
   timezone: string;
+  tradable?: boolean;
   allowFractional?: boolean;
   tickSize?: number;
   lotSize?: number;

@@ -3,6 +3,7 @@ import type {
   Candle,
   IndicatorSnapshot,
   Instrument,
+  MarketCalendar,
   MarketEvent,
 } from "../../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
@@ -26,6 +27,7 @@ const meta: ScenarioMeta = {
   tags: ["equity", "etf", "rate_shock", "inflation", "bear_market"],
   supportedModes: ["explorer", "professional", "challenge"],
   benchmarkSymbol: SYMBOL,
+  marketCalendarId: "us-equities-2022",
   license: "CC-BY-4.0 (sample data)",
   dataSources: [
     "Synthetic deterministic sample prices shaped to the publicly documented QQQ/Nasdaq 2022 tightening-cycle path; raw licensed ETF market data is not redistributed.",
@@ -103,6 +105,17 @@ const marketHolidays = new Set([
   "2022-11-24",
   "2022-12-26",
 ]);
+
+const marketCalendar: MarketCalendar = {
+  id: "us-equities-2022",
+  timezone: "America/New_York",
+  sessions: [1, 2, 3, 4, 5].map((dayOfWeek) => ({
+    dayOfWeek: dayOfWeek as 1 | 2 | 3 | 4 | 5,
+    open: "09:30",
+    close: "16:00",
+  })),
+  holidays: [...marketHolidays],
+};
 
 function buildCandles(): Candle[] {
   const start = Date.UTC(2022, 0, 3);
@@ -430,8 +443,8 @@ function buildIndicators(candles: Candle[]): IndicatorSnapshot[] {
       });
     }
 
-    if (i + 1 >= volWindow) {
-      const slice = candles.slice(i + 1 - volWindow, i + 1);
+    if (i >= volWindow) {
+      const slice = candles.slice(i - volWindow, i + 1);
       const returns = [];
       for (let j = 1; j < slice.length; j++) {
         returns.push(slice[j].close / slice[j - 1].close - 1);
@@ -474,6 +487,7 @@ export const qqqRateHike2022Scenario = assembleScenario({
   indicators,
   benchmarks,
   broker,
+  marketCalendar,
 });
 
 export const scenarioCatalogEntry = {

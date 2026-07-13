@@ -4,7 +4,13 @@ import {
   useSessionStore,
 } from "../../store/sessionStore";
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
-import type { MarginSnapshot, OrderType, RiskSnapshot, TradablePrice } from "../../types";
+import type {
+  MarginSnapshot,
+  OrderType,
+  RiskSnapshot,
+  TimeInForce,
+  TradablePrice,
+} from "../../types";
 import { estimateOneWaySpreadCost } from "./costEstimates";
 
 const ZERO_EPSILON = 0.0000001;
@@ -40,6 +46,7 @@ type TicketOrderType = OrderType | "bracket";
 
 type Props = {
   tradablePrice?: TradablePrice;
+  currency?: string;
   cash: number;
   positionsValue: number;
   totalValue: number;
@@ -64,6 +71,7 @@ function signedPct(value: number): string {
 
 export default function TradePanel({
   tradablePrice,
+  currency = "USD",
   cash,
   positionsValue,
   totalValue,
@@ -83,26 +91,47 @@ export default function TradePanel({
   const symbol = useSessionStore((s) => s.primarySymbol);
   const broker = useSessionStore((s) => s.broker);
   const brokerMode = useSessionStore((s) => s.brokerMode);
+  const scenarioMode = useSessionStore((s) => s.mode);
   const setBrokerMode = useSessionStore((s) => s.setBrokerMode);
   const fills = useSessionStore((s) => s.fills);
-  const position = useSessionStore(
-    (s) => s.portfolio.positions[s.primarySymbol],
-  );
+  const orders = useSessionStore((s) => s.orders);
+  const positionsBySymbol = useSessionStore((s) => s.portfolio.positions);
 
   const [quantity, setQuantity] = useState<string>("0.05");
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [orderType, setOrderType] = useState<TicketOrderType>("market");
   const [limitPrice, setLimitPrice] = useState<string>("");
   const [targetPrice, setTargetPrice] = useState<string>("");
+  // Daily scenarios expose each bar at its close, so a DAY order entered there
+  // has no remaining same-session candle to execute against. GTC is the safe
+  // default while DAY remains available for deliberate session-only orders.
+  const [timeInForce, setTimeInForce] = useState<TimeInForce>("gtc");
   const [note, setNote] = useState<string>("");
+  const [inputError, setInputError] = useState<string>();
 
   const totalReturn = useMemo(
     () => (initialCash > 0 ? totalValue / initialCash - 1 : 0),
     [initialCash, totalValue],
   );
   const totalPnl = totalValue - initialCash;
-  const exposure =
-    totalValue > 0 ? Math.max(0, Math.min(1, positionsValue / totalValue)) : 0;
+  const grossExposure =
+    totalValue > 0
+      ? Math.max(
+          0,
+          risk?.exposurePct ??
+            (margin?.positionsGrossNotional ?? Math.abs(positionsValue)) /
+              totalValue,
+        )
+      : 0;
+  const exposureBarWidth = Math.min(1, grossExposure);
+  const openPositions = useMemo(
+    () =>
+      Object.values(positionsBySymbol)
+        .filter((candidate) => Math.abs(candidate.quantity) > ZERO_EPSILON)
+        .sort((a, b) => a.symbol.localeCompare(b.symbol)),
+    [positionsBySymbol],
+  );
+  const position = positionsBySymbol[symbol];
   const heldQty = position?.quantity ?? 0;
   const marketPrice = tradablePrice?.price ?? position?.marketPrice;
   const hasTriggerPrice = orderType !== "market" && orderType !== "bracket";
@@ -132,13 +161,23 @@ export default function TradePanel({
       : 0;
 
   const isFinished = status === "finished";
-  const brokerLocked = fills.length > 0;
+  const workingOrderCount = orders.filter(
+    (order) =>
+      order.status === "pending" || order.status === "partially_filled",
+  ).length;
+  const brokerLocked =
+    fills.length > 0 ||
+    workingOrderCount > 0 ||
+    scenarioMode === "professional" ||
+    scenarioMode === "blind" ||
+    scenarioMode === "challenge";
   const canSell = broker.allowShort || heldQty > 0;
   const canBracket =
     orderType === "bracket" &&
     heldQty !== 0 &&
     ((heldQty > 0 && side === "sell") || (heldQty < 0 && side === "buy"));
-  const canSubmit = orderType === "bracket" ? canBracket : side === "buy" || canSell;
+  const canSubmit =
+    orderType === "bracket" ? canBracket : side === "buy" || canSell;
 
   const pendingPriceLabel =
     orderType === "limit"
@@ -180,19 +219,67 @@ export default function TradePanel({
       setQuantity(String(Math.abs(heldQty)));
     }
     if (nextType !== "market") {
-      setLimitPrice(defaultPriceFor(nextType, nextSide));
+      setLimitPrice(
+        defaultPriceFor(
+          nextType === "bracket" ? "stop_loss" : nextType,
+          nextSide,
+        ),
+      );
     }
     if (nextType === "bracket") {
       setTargetPrice(defaultPriceFor("take_profit", nextSide));
     }
+    setInputError(undefined);
+  }
+
+  function selectSide(nextSide: "buy" | "sell"): void {
+    setSide(nextSide);
+    if (orderType === "bracket") {
+      setLimitPrice(defaultPriceFor("stop_loss", nextSide));
+      setTargetPrice(defaultPriceFor("take_profit", nextSide));
+    } else if (orderType === "stop_loss" || orderType === "take_profit") {
+      setLimitPrice(defaultPriceFor(orderType, nextSide));
+    }
+    setInputError(undefined);
   }
 
   const placeOrder = () => {
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
       clearRejection();
+      setInputError("Enter a positive quantity.");
       return;
     }
+    if (hasTriggerPrice) {
+      const price = Number(limitPrice);
+      if (!Number.isFinite(price) || price <= 0) {
+        clearRejection();
+        setInputError(
+          `Enter a positive ${pendingPriceLabel.toLowerCase()} price.`,
+        );
+        return;
+      }
+    }
+    if (hasBracketPrices) {
+      const stop = Number(limitPrice);
+      const target = Number(targetPrice);
+      if (
+        !Number.isFinite(stop) ||
+        stop <= 0 ||
+        !Number.isFinite(target) ||
+        target <= 0
+      ) {
+        clearRejection();
+        setInputError("Enter positive stop and target prices.");
+        return;
+      }
+      if (Math.abs(stop - target) <= ZERO_EPSILON) {
+        clearRejection();
+        setInputError("Stop and target prices must be different.");
+        return;
+      }
+    }
+    setInputError(undefined);
     const result = (() => {
       if (orderType === "market") {
         return submitMarketOrder({
@@ -200,6 +287,7 @@ export default function TradePanel({
           side,
           type: "market",
           quantity: qty,
+          timeInForce,
           note: note.trim() || undefined,
         });
       }
@@ -210,6 +298,7 @@ export default function TradePanel({
           type: "limit",
           quantity: qty,
           limitPrice: Number(limitPrice),
+          timeInForce,
           note: note.trim() || undefined,
         });
       }
@@ -220,6 +309,7 @@ export default function TradePanel({
           quantity: qty,
           stopPrice: Number(limitPrice),
           targetPrice: Number(targetPrice),
+          timeInForce,
           note: note.trim() || undefined,
         });
       }
@@ -229,6 +319,7 @@ export default function TradePanel({
         type: orderType,
         quantity: qty,
         triggerPrice: Number(limitPrice),
+        timeInForce,
         note: note.trim() || undefined,
       });
     })();
@@ -242,62 +333,98 @@ export default function TradePanel({
       <section className="panel panel-portfolio">
         <div className="panel-head">
           <span className="panel-title">Portfolio</span>
-          <span className="panel-meta">USD</span>
+          <span className="panel-meta">{currency.toUpperCase()}</span>
         </div>
         <div className="portfolio-hero">
           <span className="hero-label">Total value</span>
           <span className={`hero-value ${toneFor(totalReturn)}`}>
-            {formatCurrency(totalValue)}
+            {formatCurrency(totalValue, currency)}
           </span>
           <span className={`hero-sub ${toneFor(totalReturn)}`}>
-            {signedPct(totalReturn)} · {formatCurrency(totalPnl)}
+            {signedPct(totalReturn)} · {formatCurrency(totalPnl, currency)}
           </span>
           <span className="hero-from">
-            from {formatCurrency(initialCash)}
+            from {formatCurrency(initialCash, currency)}
           </span>
         </div>
         <div className="portfolio-split">
-          <Metric label="Cash" value={formatCurrency(cash)} />
-          <Metric label="Position value" value={formatCurrency(positionsValue)} />
+          <Metric label="Cash" value={formatCurrency(cash, currency)} />
+          <Metric
+            label="Net position value"
+            value={formatCurrency(positionsValue, currency)}
+          />
           <Metric
             label="Realized P/L"
-            value={formatCurrency(realizedPnl)}
+            value={formatCurrency(realizedPnl, currency)}
             tone={toneFor(realizedPnl)}
           />
+          <Metric
+            label="Unrealized P/L"
+            value={formatCurrency(unrealizedPnl, currency)}
+            tone={toneFor(unrealizedPnl)}
+          />
         </div>
-        <div className="exposure-bar" aria-label="Portfolio exposure">
+        <div
+          className="exposure-bar"
+          role="meter"
+          aria-label="Gross portfolio exposure"
+          aria-valuemin={0}
+          aria-valuemax={Math.max(1, grossExposure)}
+          aria-valuenow={grossExposure}
+          aria-valuetext={formatPct(grossExposure)}
+        >
           <span
             className="exposure-cash"
-            style={{ width: `${(1 - exposure) * 100}%` }}
+            style={{ width: `${(1 - exposureBarWidth) * 100}%` }}
           />
           <span
             className="exposure-position"
-            style={{ width: `${exposure * 100}%` }}
+            style={{ width: `${exposureBarWidth * 100}%` }}
           />
+        </div>
+        <div className="exposure-label">
+          Gross exposure {formatPct(grossExposure)}
         </div>
         <div className="position-card">
           <div className="position-card-head">
-            <strong>{symbol}</strong>
-            <span>{heldQty === 0 ? "Flat" : heldQty > 0 ? "Long" : "Short"}</span>
+            <strong>Open positions</strong>
+            <span>
+              {openPositions.length} {openPositions.length === 1 ? "symbol" : "symbols"}
+            </span>
           </div>
-          {heldQty === 0 ? (
-            <div className="position-empty">No open position.</div>
+          {openPositions.length === 0 ? (
+            <div className="position-empty">No open positions.</div>
           ) : (
-            <div className="position-grid">
-              <Metric label="Qty" value={formatNumber(heldQty, 6)} />
-              <Metric
-                label="Avg"
-                value={formatCurrency(position?.averagePrice ?? 0)}
-              />
-              <Metric
-                label="Mark"
-                value={marketPrice ? formatCurrency(marketPrice) : "—"}
-              />
-              <Metric
-                label="Unrealized"
-                value={formatCurrency(unrealizedPnl)}
-                tone={toneFor(unrealizedPnl)}
-              />
+            <div className="open-position-list" aria-label="Open positions">
+              {openPositions.map((candidate) => (
+                <article className="open-position-row" key={candidate.symbol}>
+                  <div className="open-position-head">
+                    <strong>{candidate.symbol}</strong>
+                    <span>
+                      {candidate.quantity > 0 ? "Long" : "Short"}
+                    </span>
+                  </div>
+                  <div className="position-grid">
+                    <Metric
+                      label="Qty"
+                      value={formatNumber(candidate.quantity, 6)}
+                    />
+                    <Metric
+                      label="Avg"
+                      value={formatCurrency(candidate.averagePrice, currency)}
+                    />
+                    <Metric
+                      label="Mark"
+                      value={formatCurrency(candidate.marketPrice, currency)}
+                    />
+                    <Metric
+                      label="Unrealized"
+                      value={formatCurrency(candidate.unrealizedPnl, currency)}
+                      tone={toneFor(candidate.unrealizedPnl)}
+                    />
+                  </div>
+                </article>
+              ))}
             </div>
           )}
         </div>
@@ -313,12 +440,12 @@ export default function TradePanel({
         <div className="risk-grid">
           <Metric
             label="Equity"
-            value={margin ? formatCurrency(margin.equity) : "—"}
+            value={margin ? formatCurrency(margin.equity, currency) : "—"}
             tone={margin && margin.equity < 0 ? "neg" : "neutral"}
           />
           <Metric
             label="Buying power"
-            value={risk ? formatCurrency(risk.buyingPower) : "—"}
+            value={risk ? formatCurrency(risk.buyingPower, currency) : "—"}
           />
           <Metric
             label="Leverage"
@@ -331,7 +458,7 @@ export default function TradePanel({
           />
           <Metric
             label="Margin excess"
-            value={margin ? formatCurrency(margin.excessEquity) : "—"}
+            value={margin ? formatCurrency(margin.excessEquity, currency) : "—"}
             tone={margin && margin.excessEquity < 0 ? "neg" : "neutral"}
           />
         </div>
@@ -357,14 +484,14 @@ export default function TradePanel({
           <span className="panel-title">Order ticket</span>
           <span className="panel-meta">
             {tradablePrice
-              ? `${formatCurrency(tradablePrice.price)} mark`
+              ? `${formatCurrency(tradablePrice.price, currency)} mark`
               : "No quote yet"}
           </span>
         </div>
         <div className="seg buy-sell" role="radiogroup" aria-label="Side">
           <button
             className={side === "buy" ? "active buy" : ""}
-            onClick={() => setSide("buy")}
+            onClick={() => selectSide("buy")}
             role="radio"
             aria-checked={side === "buy"}
             disabled={isFinished}
@@ -373,7 +500,7 @@ export default function TradePanel({
           </button>
           <button
             className={side === "sell" ? "active sell" : ""}
-            onClick={() => setSide("sell")}
+            onClick={() => selectSide("sell")}
             role="radio"
             aria-checked={side === "sell"}
             disabled={isFinished}
@@ -432,11 +559,19 @@ export default function TradePanel({
           <label htmlFor="qty">Qty</label>
           <input
             id="qty"
+            type="number"
             inputMode="decimal"
+            min="0"
+            step="any"
             value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
+            onChange={(e) => {
+              setQuantity(e.target.value);
+              setInputError(undefined);
+            }}
             placeholder="0.05"
             disabled={isFinished}
+            aria-invalid={Boolean(inputError)}
+            aria-describedby={inputError ? "order-input-error" : undefined}
           />
         </div>
         {hasTriggerPrice ? (
@@ -444,9 +579,15 @@ export default function TradePanel({
             <label htmlFor="limit-price">{pendingPriceLabel}</label>
             <input
               id="limit-price"
+              type="number"
               inputMode="decimal"
+              min="0"
+              step="any"
               value={limitPrice}
-              onChange={(e) => setLimitPrice(e.target.value)}
+              onChange={(e) => {
+                setLimitPrice(e.target.value);
+                setInputError(undefined);
+              }}
               placeholder={tradablePrice ? String(Math.round(tradablePrice.price)) : "0"}
               disabled={isFinished}
             />
@@ -458,9 +599,15 @@ export default function TradePanel({
               <label htmlFor="bracket-stop-price">Stop</label>
               <input
                 id="bracket-stop-price"
+                type="number"
                 inputMode="decimal"
+                min="0"
+                step="any"
                 value={limitPrice}
-                onChange={(e) => setLimitPrice(e.target.value)}
+                onChange={(e) => {
+                  setLimitPrice(e.target.value);
+                  setInputError(undefined);
+                }}
                 placeholder={tradablePrice ? defaultPriceFor("stop_loss", side) : "0"}
                 disabled={isFinished}
               />
@@ -469,23 +616,56 @@ export default function TradePanel({
               <label htmlFor="bracket-target-price">Target</label>
               <input
                 id="bracket-target-price"
+                type="number"
                 inputMode="decimal"
+                min="0"
+                step="any"
                 value={targetPrice}
-                onChange={(e) => setTargetPrice(e.target.value)}
+                onChange={(e) => {
+                  setTargetPrice(e.target.value);
+                  setInputError(undefined);
+                }}
                 placeholder={tradablePrice ? defaultPriceFor("take_profit", side) : "0"}
                 disabled={isFinished}
               />
             </div>
           </>
         ) : null}
+        <div className="field-row">
+          <label htmlFor="time-in-force">Time in force</label>
+          <select
+            id="time-in-force"
+            value={timeInForce}
+            onChange={(event) =>
+              setTimeInForce(event.target.value as TimeInForce)
+            }
+            disabled={isFinished}
+          >
+            <option value="day">Day · expires after this session</option>
+            <option value="gtc">GTC · works until cancelled</option>
+          </select>
+        </div>
         <div className="ticket-summary">
-          <Row label="Expected notional" value={expectedNotional} />
-          <Row label={`${broker.commissionRateBps} bps commission`} value={commission} />
-          <Row label={`${broker.spreadBps} bps spread`} value={estimatedSpread} />
-          <Row label={`${broker.slippageModel.replace("_", " ")} slippage`} value={estimatedSlippage} />
+          <Row label="Expected notional" value={expectedNotional} currency={currency} />
+          <Row
+            label={`${broker.commissionRateBps} bps commission`}
+            value={commission}
+            currency={currency}
+          />
+          <Row
+            label={`${broker.spreadBps} bps spread`}
+            value={estimatedSpread}
+            currency={currency}
+          />
+          <Row
+            label={`${broker.slippageModel.replace("_", " ")} slippage`}
+            value={estimatedSlippage}
+            currency={currency}
+          />
         </div>
         <textarea
           className="note-input"
+          aria-label="Decision note"
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Decision note: why this trade, and what would invalidate it?"
@@ -504,6 +684,11 @@ export default function TradePanel({
               ? "Place bracket exit"
               : `Place ${orderLabel} ${side === "buy" ? "buy" : heldQty <= 0 && broker.allowShort ? "short" : "sell"}`}
         </button>
+        {inputError ? (
+          <div className="rejection" id="order-input-error" role="alert">
+            {inputError}
+          </div>
+        ) : null}
         {rejectionMessage ? (
           <div className="rejection" role="alert">
             <span>Order rejected: {rejectionMessage}</span>
@@ -514,7 +699,13 @@ export default function TradePanel({
           <div className="broker-head">
             <span>Broker model</span>
             <small>
-              {brokerLocked ? "Locked after first fill" : "Select before trading"}
+              {brokerLocked
+                ? scenarioMode === "professional" ||
+                  scenarioMode === "blind" ||
+                  scenarioMode === "challenge"
+                  ? `Locked in ${scenarioMode} mode`
+                  : `Locked after trading starts${workingOrderCount > 0 ? ` · ${workingOrderCount} working` : ""}`
+                : "Select before trading"}
             </small>
           </div>
           <div className="broker-grid" role="radiogroup" aria-label="Broker model">
@@ -556,11 +747,21 @@ function Metric({
   );
 }
 
-function Row({ label, value }: { label: string; value?: number }) {
+function Row({
+  label,
+  value,
+  currency,
+}: {
+  label: string;
+  value?: number;
+  currency: string;
+}) {
   return (
     <div className="kv-row">
       <span>{label}</span>
-      <strong>{value === undefined ? "—" : formatCurrency(value)}</strong>
+      <strong>
+        {value === undefined ? "—" : formatCurrency(value, currency)}
+      </strong>
     </div>
   );
 }

@@ -4,6 +4,7 @@ export type EventCoverageSummary = {
   total: number;
   withSource: number;
   withSourceUrl: number;
+  fullySourcedCount: number;
   missingSourceIds: string[];
   missingSourceUrlIds: string[];
   sourceUrlCoveragePct: number;
@@ -22,19 +23,23 @@ export function eventCoverageSummary(
   const missingSourceUrlIds: string[] = [];
   let withSource = 0;
   let withSourceUrl = 0;
+  let fullySourcedCount = 0;
 
   for (const event of events) {
-    if (hasText(event.source)) {
+    const sourcePresent = hasText(event.source);
+    const sourceUrlPresent = hasText(event.sourceUrl);
+    if (sourcePresent) {
       withSource += 1;
     } else {
       missingSourceIds.push(event.id);
     }
 
-    if (hasText(event.sourceUrl)) {
+    if (sourceUrlPresent) {
       withSourceUrl += 1;
     } else {
       missingSourceUrlIds.push(event.id);
     }
+    if (sourcePresent && sourceUrlPresent) fullySourcedCount += 1;
   }
 
   const sourceUrlCoveragePct =
@@ -46,10 +51,11 @@ export function eventCoverageSummary(
     total: events.length,
     withSource,
     withSourceUrl,
+    fullySourcedCount,
     missingSourceIds,
     missingSourceUrlIds,
     sourceUrlCoveragePct,
     fullySourced,
-    label: `${withSourceUrl}/${events.length} sourced`,
+    label: `${fullySourcedCount}/${events.length} sourced`,
   };
 }

@@ -6,6 +6,12 @@ The project currently follows a lightweight changelog while it is in open source
 
 ## Unreleased
 
+- Reworked replay advancement around a single multi-symbol timeline so every instrument, event, financing charge, corporate action, order trigger, and report snapshot is processed at the correct market instant.
+- Completed broker and portfolio lifecycle handling for partial fills, zero-liquidity deferral, gap-aware stops and targets, DAY/GTC expiry, bracket/OCO orders, margin calls, forced liquidation, borrow costs, dividends, and splits.
+- Added validated session persistence plus JSON import/export, canonical restore-time recomputation, Explorer/Professional/Challenge modes, challenge information masking, and safe reset/scenario-change confirmation flows.
+- Expanded post-game analytics with exact trade reconstruction, attribution, execution diagnostics, behavioral checks, evidence-aware decision scoring, journal quality, decision consistency, recommendations, and data provenance.
+- Hardened scenario validation and both local-data importers against non-finite or overflowing values, incomplete output, and mislabeled data; production builds now include only the explicit redistributable scenario allowlist and verify that local licensed data cannot leak into bundles.
+- Added responsive and accessible report, journal, audit, replay, and trade controls together with focused regression coverage across the application, store, replay engine, broker, analytics, validation, and import pipeline.
 - Added working limit-order edit and cancellation controls, with cancelled/rejected/expired order status badges in trade history.
 - Added stop-loss and take-profit pending orders with replay-time trigger processing.
 - Extended working-order edits to stop-loss and take-profit trigger prices.

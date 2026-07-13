@@ -122,7 +122,7 @@ describe("TradeHistory", () => {
     expect(table.queryByText("Filled")).not.toBeInTheDocument();
     expect(table.queryByText("Cancelled")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: /closed 2/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /completed 2/i }));
     table = within(screen.getByLabelText("Trade history"));
     expect(table.getByText("Filled")).toBeInTheDocument();
     expect(table.getByText("Cancelled")).toBeInTheDocument();
@@ -224,5 +224,49 @@ describe("TradeHistory", () => {
       screen.getByText(/take profit trigger @ \$5,800\.00/),
     ).toBeInTheDocument();
     expect(screen.getAllByText("OCO 1")).toHaveLength(2);
+  });
+
+  it("allows the remainder of a partially filled order to be edited or cancelled", () => {
+    const onCancelOrder = vi.fn();
+    const onUpdateOrder = vi.fn(() => ({ ok: true }));
+    const partiallyFilled: Order = {
+      ...pendingOrder,
+      id: "order-partial",
+      status: "partially_filled",
+      quantity: 0.5,
+      filledQuantity: 0.2,
+      remainingQuantity: 0.3,
+      averageFillPrice: 4920,
+    };
+
+    render(
+      <TradeHistory
+        fills={[]}
+        orders={[partiallyFilled]}
+        journal={[]}
+        onCancelOrder={onCancelOrder}
+        onUpdateOrder={onUpdateOrder}
+      />,
+    );
+
+    expect(screen.getByText("Part-filled")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit order order-partial" }),
+    );
+    fireEvent.change(screen.getByLabelText("Quantity"), {
+      target: { value: "0.6" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save order order-partial" }),
+    );
+    expect(onUpdateOrder).toHaveBeenCalledWith("order-partial", {
+      price: 4900,
+      quantity: 0.6,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Cancel order order-partial" }),
+    );
+    expect(onCancelOrder).toHaveBeenCalledWith("order-partial");
   });
 });

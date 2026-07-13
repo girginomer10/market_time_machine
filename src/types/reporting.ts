@@ -1,4 +1,4 @@
-import type { AuditEvent, Fill, Order } from "./trading";
+import type { AuditEvent, Fill, JournalEntry, Order } from "./trading";
 
 export type BehavioralFlagType =
   | "panic_sell"
@@ -27,6 +27,7 @@ export type ReportMetrics = {
   volatility: number;
   sharpe?: number;
   sortino?: number;
+  calmar?: number;
   winRate: number;
   profitFactor?: number;
   averageWin?: number;
@@ -45,12 +46,109 @@ export type EquityPoint = {
   time: string;
   portfolioValue: number;
   benchmarkValue: number;
+  isInitial?: boolean;
+  financingCost?: number;
+  equityAdjustment?: number;
 };
 
 export type TradeOutcome = {
   fill: Fill;
   realizedPnl: number;
   contributionPct: number;
+  matchedQuantity?: number;
+  entryTime?: string;
+  positionSide?: "long" | "short";
+};
+
+export type FinancingCostPoint = {
+  time: string;
+  amount: number;
+};
+
+export type DecisionReplayPoint = {
+  fill: Fill;
+  order?: Order;
+  journalEntry?: JournalEntry;
+  auditEvents: AuditEvent[];
+  tradeOutcome?: TradeOutcome;
+  equityBefore?: number;
+  equityAfter?: number;
+};
+
+export type PerformanceAttribution = {
+  realizedTradePnl: number;
+  unrealizedAndResidualPnl: number;
+  feesPaid: number;
+  slippagePaid: number;
+  financingPaid: number;
+  benchmarkPnl: number;
+  activePnl: number;
+};
+
+export type ScenarioProvenance = {
+  license: string;
+  dataSources: string[];
+  sourceManifest?: string[];
+  dataVersion?: string;
+  generatedAt?: string;
+  priceAdjustment?: "raw" | "split_adjusted" | "total_return";
+  marketCalendarId?: string;
+  isSampleData: boolean;
+};
+
+export type ReportScoreComponentId =
+  | "risk_adjusted_return"
+  | "benchmark_outperformance"
+  | "drawdown_control"
+  | "decision_consistency"
+  | "journal_quality";
+
+export type ReportScoreComponent = {
+  id: ReportScoreComponentId;
+  label: string;
+  /** Fraction of the overall score. The five documented weights sum to 1. */
+  weight: number;
+  score?: number;
+  status: "scored" | "not_applicable";
+  evidence: string;
+};
+
+export type ReportScore = {
+  status: "scored" | "insufficient_evidence";
+  overall?: number;
+  components: ReportScoreComponent[];
+  methodology: string;
+  reason?: string;
+};
+
+export type JournalQualitySummary = {
+  status: "assessed" | "insufficient_evidence" | "not_applicable";
+  score?: number;
+  executedDecisionCount: number;
+  linkedEntryCount: number;
+  coverageRate: number;
+  reasonRate: number;
+  riskPlanRate: number;
+  evidence: string[];
+};
+
+export type DecisionConsistencySummary = {
+  status: "assessed" | "insufficient_evidence" | "not_applicable";
+  score?: number;
+  assessedDecisionCount: number;
+  behavioralFlagCount: number;
+  severeBehavioralFlagCount: number;
+  forcedLiquidationCount: number;
+  evidence: string[];
+};
+
+export type PracticeRecommendation = {
+  id: string;
+  priority: 1 | 2 | 3;
+  title: string;
+  rationale: string;
+  evidence: string;
+  suggestedPractice: string;
 };
 
 export type ExecutionQuality = {
@@ -79,7 +177,18 @@ export type ReportPayload = {
   bestTrade?: TradeOutcome;
   worstTrade?: TradeOutcome;
   totalTrades: number;
+  closedTradeCount?: number;
+  tradeOutcomes?: TradeOutcome[];
+  fills?: Fill[];
   behavioralFlags: BehavioralFlag[];
+  journal?: JournalEntry[];
+  decisionReplay?: DecisionReplayPoint[];
+  attribution?: PerformanceAttribution;
+  provenance?: ScenarioProvenance;
+  score?: ReportScore;
+  journalQuality?: JournalQualitySummary;
+  decisionConsistency?: DecisionConsistencySummary;
+  recommendations?: PracticeRecommendation[];
   executionQuality?: ExecutionQuality;
   auditSummary?: AuditSummary;
   orders?: Order[];

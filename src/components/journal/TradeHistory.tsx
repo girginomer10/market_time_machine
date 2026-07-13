@@ -9,12 +9,13 @@ type OrderUpdate = {
 
 type OrderUpdateResult = { ok: boolean; message?: string };
 
-type HistoryView = "all" | "working" | "closed";
+type HistoryView = "all" | "working" | "completed";
 
 type Props = {
   fills: Fill[];
   orders: Order[];
   journal: JournalEntry[];
+  currency?: string;
   onCancelOrder?: (orderId: string) => void;
   onUpdateOrder?: (
     orderId: string,
@@ -34,7 +35,7 @@ const STATUS_LABELS: Record<Order["status"], string> = {
 const HISTORY_VIEWS: Array<{ value: HistoryView; label: string }> = [
   { value: "all", label: "All" },
   { value: "working", label: "Working" },
-  { value: "closed", label: "Closed" },
+  { value: "completed", label: "Completed" },
 ];
 
 function statusClass(status: Order["status"]): string {
@@ -46,11 +47,11 @@ function orderTypeLabel(type: Order["type"]): string {
   return type.replace("_", " ");
 }
 
-function orderPriceText(order: Order): string {
+function orderPriceText(order: Order, currency: string): string {
   const price = order.limitPrice ?? order.triggerPrice;
   if (!price) return "";
   const label = order.type === "limit" ? "" : " trigger";
-  return `${label} @ ${formatCurrency(price)}`;
+  return `${label} @ ${formatCurrency(price, currency)}`;
 }
 
 function buildOcoGroupLabels(orders: Order[]): Map<string, string> {
@@ -90,6 +91,7 @@ export default function TradeHistory({
   fills,
   orders,
   journal,
+  currency = "USD",
   onCancelOrder,
   onUpdateOrder,
 }: Props) {
@@ -116,7 +118,7 @@ export default function TradeHistory({
     )
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const visibleWorkingOrders =
-    historyView === "closed" ? [] : workingOrders;
+    historyView === "completed" ? [] : workingOrders;
   const visibleClosedOrders =
     historyView === "working" ? [] : closedOrders;
   const visibleFills = historyView === "working" ? [] : sorted;
@@ -126,7 +128,7 @@ export default function TradeHistory({
   const viewCounts: Record<HistoryView, number> = {
     all: totalRows,
     working: workingOrders.length,
-    closed: closedOrders.length + sorted.length,
+    completed: closedOrders.length + sorted.length,
   };
   const hasActions = Boolean(onCancelOrder || onUpdateOrder);
   const totalColumns = hasActions ? 7 : 6;
@@ -225,6 +227,7 @@ export default function TradeHistory({
                 <Fragment key={order.id}>
                   <OrderRow
                     order={order}
+                    currency={currency}
                     ocoGroupLabels={ocoGroupLabels}
                     hasActions={hasActions}
                     onCancelOrder={onCancelOrder}
@@ -297,6 +300,7 @@ export default function TradeHistory({
                 <OrderRow
                   key={order.id}
                   order={order}
+                  currency={currency}
                   ocoGroupLabels={ocoGroupLabels}
                   hasActions={hasActions}
                   onCancelOrder={onCancelOrder}
@@ -320,6 +324,7 @@ export default function TradeHistory({
                       {sourceOrder ? (
                         <OrderTypeText
                           order={sourceOrder}
+                          currency={currency}
                           ocoGroupLabels={ocoGroupLabels}
                         />
                       ) : (
@@ -327,7 +332,9 @@ export default function TradeHistory({
                       )}
                     </td>
                     <td className="right">{formatNumber(fill.quantity, 6)}</td>
-                    <td className="right">{formatCurrency(fill.price)}</td>
+                    <td className="right">
+                      {formatCurrency(fill.price, currency)}
+                    </td>
                     <td>
                       <span className="status-badge filled">Filled</span>
                       {fill.reason ? (
@@ -357,6 +364,7 @@ export default function TradeHistory({
 
 function OrderRow({
   order,
+  currency,
   ocoGroupLabels,
   hasActions,
   onCancelOrder,
@@ -364,6 +372,7 @@ function OrderRow({
   onStartEditing,
 }: {
   order: Order;
+  currency: string;
   ocoGroupLabels: Map<string, string>;
   hasActions: boolean;
   onCancelOrder?: (orderId: string) => void;
@@ -378,7 +387,11 @@ function OrderRow({
       <td>{dateLabel(order.createdAt)}</td>
       <td className={order.side === "buy" ? "pos" : "neg"}>{order.side}</td>
       <td>
-        <OrderTypeText order={order} ocoGroupLabels={ocoGroupLabels} />
+        <OrderTypeText
+          order={order}
+          ocoGroupLabels={ocoGroupLabels}
+          currency={currency}
+        />
       </td>
       <td className="right">
         {formatNumber(order.remainingQuantity ?? order.quantity, 6)}
@@ -387,7 +400,11 @@ function OrderRow({
         ) : null}
       </td>
       <td className="right">
-        {order.averageFillPrice ? formatCurrency(order.averageFillPrice) : <span className="muted">—</span>}
+        {order.averageFillPrice ? (
+          formatCurrency(order.averageFillPrice, currency)
+        ) : (
+          <span className="muted">—</span>
+        )}
       </td>
       <td>
         <span className={`status-badge ${statusClass(order.status)}`}>
@@ -435,15 +452,17 @@ function isWorkingOrder(order: Order): boolean {
 function OrderTypeText({
   order,
   ocoGroupLabels,
+  currency,
 }: {
   order: Order;
   ocoGroupLabels: Map<string, string>;
+  currency: string;
 }) {
   const label = ocoGroupLabel(order, ocoGroupLabels);
   return (
     <>
       {orderTypeLabel(order.type)}
-      {orderPriceText(order)}
+      {orderPriceText(order, currency)}
       {label ? <small className="oco-chip">{label}</small> : null}
       {order.timeInForce ? (
         <small className="execution-note">

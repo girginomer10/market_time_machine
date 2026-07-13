@@ -6,8 +6,9 @@ import {
   type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
-import type { Candle, MarketEvent } from "../../types";
+import type { Candle, IndicatorSnapshot, MarketEvent } from "../../types";
 import type { Fill, Order } from "../../types";
+import { formatNumber } from "../../utils/format";
 import {
   buildOverlayMarkers,
   firstChartWindowIndex,
@@ -17,6 +18,7 @@ import {
 type Props = {
   candles: Candle[];
   events: MarketEvent[];
+  indicators?: IndicatorSnapshot[];
   fills: Fill[];
   orders: Order[];
   eventNumbers: Map<string, number>;
@@ -27,6 +29,7 @@ type Props = {
 export default function ReplayChart({
   candles,
   events,
+  indicators = [],
   fills,
   orders,
   eventNumbers,
@@ -37,6 +40,7 @@ export default function ReplayChart({
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const indicatorSeriesRef = useRef<ISeriesApi<"Line">[]>([]);
 
   const chartData = useMemo(
     () =>
@@ -66,6 +70,43 @@ export default function ReplayChart({
   const overlayMarkers = useMemo<OverlayMarker[]>(() => {
     return buildOverlayMarkers(candles, events, eventNumbers);
   }, [candles, events, eventNumbers]);
+  const indicatorOverlayData = useMemo(() => {
+    const candleTimes = new Map(
+      candles.map((candle) => [candle.closeTime, candle.openTime]),
+    );
+    const groups = new Map<
+      string,
+      Array<{ time: UTCTimestamp; value: number }>
+    >();
+    for (const indicator of indicators) {
+      if (
+        typeof indicator.value !== "number" ||
+        !/(^|\b)(sma|ema|moving)/i.test(indicator.name)
+      ) {
+        continue;
+      }
+      const chartTime = candleTimes.get(indicator.time);
+      if (!chartTime) continue;
+      const points = groups.get(indicator.name) ?? [];
+      points.push({
+        time: Math.floor(Date.parse(chartTime) / 1000) as UTCTimestamp,
+        value: indicator.value,
+      });
+      groups.set(indicator.name, points);
+    }
+    return [...groups.entries()];
+  }, [candles, indicators]);
+  const indicatorSummaries = useMemo(() => {
+    const latest = new Map<string, IndicatorSnapshot>();
+    for (const indicator of indicators) {
+      const key = `${indicator.symbol}:${indicator.name}`;
+      const previous = latest.get(key);
+      if (!previous || previous.availableAt < indicator.availableAt) {
+        latest.set(key, indicator);
+      }
+    }
+    return [...latest.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [indicators]);
   const tradeMarkers = useMemo(() => {
     if (candles.length === 0) return [];
     const first = firstChartWindowIndex(candles.length);
@@ -92,7 +133,14 @@ export default function ReplayChart({
       .map((order) => ({
         id: order.id,
         leftPct: 98,
-        label: order.type === "limit" ? "LMT" : order.type === "stop_loss" ? "STP" : "TGT",
+        label:
+          order.type === "market"
+            ? "MKT"
+            : order.type === "limit"
+              ? "LMT"
+              : order.type === "stop_loss"
+                ? "STP"
+                : "TGT",
         tone: "working",
         title: `${order.type} ${order.side} ${order.remainingQuantity ?? order.quantity} ${order.symbol}`,
       }));
@@ -149,6 +197,7 @@ export default function ReplayChart({
       chartRef.current = null;
       seriesRef.current = null;
       volumeRef.current = null;
+      indicatorSeriesRef.current = [];
     };
   }, []);
 
@@ -165,6 +214,27 @@ export default function ReplayChart({
       });
     }
   }, [chartData, volumeData]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const series of indicatorSeriesRef.current) {
+      chart.removeSeries(series);
+    }
+    indicatorSeriesRef.current = [];
+    const colors = ["#7bb7e0", "#c69cf4", "#f2b65a", "#4fc58a"];
+    indicatorOverlayData.forEach(([name, data], index) => {
+      const series = chart.addLineSeries({
+        color: colors[index % colors.length],
+        lineWidth: 1,
+        title: name,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      series.setData(data);
+      indicatorSeriesRef.current.push(series);
+    });
+  }, [indicatorOverlayData]);
 
   return (
     <div className="chart-wrap">
@@ -199,6 +269,16 @@ export default function ReplayChart({
           </span>
         ))}
       </div>
+      {indicatorSummaries.length > 0 ? (
+        <div className="chart-indicator-layer" aria-label="Visible indicators">
+          {indicatorSummaries.map((indicator) => (
+            <span key={`${indicator.symbol}:${indicator.name}`}>
+              <strong>{indicator.name}</strong>{" "}
+              {formatIndicatorValue(indicator.value)}
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div className="now-line" aria-hidden>
         <span>Now</span>
       </div>
@@ -208,4 +288,13 @@ export default function ReplayChart({
       <div className="chart-host" ref={containerRef} />
     </div>
   );
+}
+
+function formatIndicatorValue(
+  value: number | Record<string, number>,
+): string {
+  if (typeof value === "number") return formatNumber(value, 2);
+  return Object.entries(value)
+    .map(([key, item]) => `${key} ${formatNumber(item, 2)}`)
+    .join(" · ");
 }

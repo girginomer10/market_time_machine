@@ -58,11 +58,30 @@ export type PendingOrderRequest = LimitOrderRequest | TriggerOrderRequest;
 
 export type FillResult =
   | { ok: true; fill: Fill; order: Order }
-  | { ok: false; order: Order; reason: string };
+  | {
+      ok: false;
+      order: Order;
+      reason: string;
+      /** The order is still valid and should be retried on later liquidity. */
+      deferredForLiquidity?: true;
+    };
 
 export type OrderPlacementResult =
   | { ok: true; order: Order }
   | { ok: false; order: Order; reason: string };
+
+export type AccountExposureContext = {
+  accountEquity?: number;
+  positionsGrossNotional?: number;
+  /** Gross exposure reserved by other working orders. */
+  reservedGrossNotional?: number;
+};
+
+export type CandleLiquidityContext = {
+  candleVolumeNotional?: number;
+  /** Remaining executable notional for the current candle after prior fills. */
+  availableCandleLiquidityNotional?: number;
+};
 
 function generateId(prefix: string): string {
   const random = Math.random().toString(36).slice(2, 8);
@@ -95,19 +114,20 @@ export function commissionFor(
   return brokerCommissionFor(notional, broker);
 }
 
-export type BrokerInputs = {
-  request: OrderRequest;
-  broker: BrokerConfig;
-  cash: number;
-  position?: Position;
-  tradablePrice?: TradablePrice;
-  currentTime: string;
-  instrument?: Instrument;
-  marketOpen?: boolean;
-  candleVolumeNotional?: number;
-  maxParticipationRate?: number;
-  volatility?: number;
-};
+export type BrokerInputs = AccountExposureContext &
+  CandleLiquidityContext & {
+    request: OrderRequest;
+    broker: BrokerConfig;
+    cash: number;
+    position?: Position;
+    tradablePrice?: TradablePrice;
+    currentTime: string;
+    instrument?: Instrument;
+    instrumentTradable?: boolean;
+    marketOpen?: boolean;
+    maxParticipationRate?: number;
+    volatility?: number;
+  };
 
 function orderFillProgress(
   quantity: number,
@@ -132,25 +152,39 @@ function fillableQuantityFor(
   referencePrice: number,
   broker: BrokerConfig,
   candleVolumeNotional?: number,
+  instrument?: Instrument,
+  availableCandleLiquidityNotional?: number,
 ): { quantity: number; participation?: number } {
-  if (
-    broker.partialFillPolicy !== "volume_limited" ||
-    !broker.maxParticipationRate ||
-    broker.maxParticipationRate <= 0 ||
-    !candleVolumeNotional ||
-    candleVolumeNotional <= 0 ||
-    referencePrice <= 0
-  ) {
+  if (broker.partialFillPolicy !== "volume_limited" || referencePrice <= 0) {
     return { quantity: requestedQuantity };
   }
 
-  const maxNotional = candleVolumeNotional * broker.maxParticipationRate;
+  let maxNotional: number;
+  if (availableCandleLiquidityNotional !== undefined) {
+    maxNotional = Math.max(0, availableCandleLiquidityNotional);
+  } else {
+    if (
+      !broker.maxParticipationRate ||
+      broker.maxParticipationRate <= 0 ||
+      !candleVolumeNotional ||
+      candleVolumeNotional <= 0
+    ) {
+      return { quantity: requestedQuantity };
+    }
+    maxNotional = candleVolumeNotional * broker.maxParticipationRate;
+  }
   const maxQuantity = maxNotional / referencePrice;
-  const quantity = Math.max(0, Math.min(requestedQuantity, maxQuantity));
+  const cappedQuantity = Math.max(
+    0,
+    Math.min(requestedQuantity, maxQuantity),
+  );
+  const quantity = normalizeQuantity(cappedQuantity, broker, instrument);
   return {
     quantity,
     participation:
-      candleVolumeNotional > 0 ? (quantity * referencePrice) / candleVolumeNotional : undefined,
+      candleVolumeNotional !== undefined && candleVolumeNotional > 0
+        ? (quantity * referencePrice) / candleVolumeNotional
+        : undefined,
   };
 }
 
@@ -161,6 +195,46 @@ function statusForFill(
   return fillQuantity + 1e-9 >= normalizedQuantity
     ? "filled"
     : "partially_filled";
+}
+
+function isLiquidityDeferral(
+  fillQuantity: number,
+  validation: ReturnType<typeof validateMarketOrder>,
+  availableCandleLiquidityNotional?: number,
+): boolean {
+  if (fillQuantity > 0) return false;
+  if (validation.ok) return true;
+  return (
+    validation.code === "EXCEEDS_LIQUIDITY_LIMIT" &&
+    availableCandleLiquidityNotional !== undefined &&
+    Number.isFinite(availableCandleLiquidityNotional) &&
+    availableCandleLiquidityNotional >= 0
+  );
+}
+
+function deferredLiquidityResult(
+  order: Order,
+  currentTime: string,
+  reason: string,
+): FillResult {
+  const triggeredAt =
+    order.type === "stop_loss" || order.type === "take_profit"
+      ? order.triggeredAt ?? currentTime
+      : order.triggeredAt;
+  return {
+    ok: false,
+    deferredForLiquidity: true,
+    order: {
+      ...order,
+      status:
+        order.status === "partially_filled" ? "partially_filled" : "pending",
+      triggeredAt,
+      closedAt: undefined,
+      rejectionCode: undefined,
+      rejectionReason: undefined,
+    },
+    reason,
+  };
 }
 
 export function executeMarketOrder(inputs: BrokerInputs): FillResult {
@@ -190,6 +264,8 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
         tradablePrice.price,
         broker,
         inputs.candleVolumeNotional,
+        inputs.instrument,
+        inputs.availableCandleLiquidityNotional,
       )
     : { quantity: normalizedQuantity };
   const fillQuantity = fillable.quantity;
@@ -216,12 +292,41 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
     broker,
     hasPrice: Boolean(tradablePrice),
     marketOpen: inputs.marketOpen,
+    instrumentTradable:
+      inputs.instrumentTradable ??
+      (inputs.instrument
+        ? inputs.instrument.symbol === request.symbol
+        : undefined),
+    accountEquity: inputs.accountEquity,
+    positionsGrossNotional: inputs.positionsGrossNotional,
+    reservedGrossNotional: inputs.reservedGrossNotional,
     candleVolumeNotional: inputs.candleVolumeNotional,
+    availableCandleLiquidityNotional:
+      inputs.availableCandleLiquidityNotional,
     maxParticipationRate:
       broker.partialFillPolicy === "volume_limited"
         ? undefined
         : inputs.maxParticipationRate,
   });
+
+  if (
+    isLiquidityDeferral(
+      fillQuantity,
+      validation,
+      inputs.availableCandleLiquidityNotional,
+    )
+  ) {
+    return deferredLiquidityResult(
+      {
+        ...order,
+        quantity: normalizedQuantity,
+        remainingQuantity: normalizedQuantity,
+        filledQuantity: 0,
+      },
+      currentTime,
+      "Insufficient liquidity at current replay time",
+    );
+  }
 
   if (!validation.ok) {
     return {
@@ -261,7 +366,7 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
     price: fillBreakdown.fillPrice,
     referencePrice: tradablePrice.price,
     commission,
-    spreadCost: fillBreakdown.spreadCost,
+    spreadCost: fillBreakdown.spreadCost * fillQuantity,
     slippage: fillBreakdown.slippage,
     totalCost: notional + commission,
     reason: "user_order",
@@ -281,12 +386,12 @@ export function executeMarketOrder(inputs: BrokerInputs): FillResult {
       filledQuantity: fillQuantity,
       averageFillPrice:
         fillQuantity > 0 ? fillBreakdown.fillPrice : fillProgress.averageFillPrice,
-      closedAt: currentTime,
+      closedAt: fillStatus === "filled" ? currentTime : undefined,
     },
   };
 }
 
-export type LimitOrderInputs = {
+export type LimitOrderInputs = AccountExposureContext & {
   request: LimitOrderRequest;
   broker: BrokerConfig;
   cash: number;
@@ -294,6 +399,7 @@ export type LimitOrderInputs = {
   tradablePrice?: TradablePrice;
   currentTime: string;
   instrument?: Instrument;
+  instrumentTradable?: boolean;
   marketOpen?: boolean;
 };
 
@@ -365,6 +471,14 @@ export function createLimitOrder(
     broker,
     hasPrice: Boolean(tradablePrice),
     marketOpen: inputs.marketOpen,
+    instrumentTradable:
+      inputs.instrumentTradable ??
+      (inputs.instrument
+        ? inputs.instrument.symbol === request.symbol
+        : undefined),
+    accountEquity: inputs.accountEquity,
+    positionsGrossNotional: inputs.positionsGrossNotional,
+    reservedGrossNotional: inputs.reservedGrossNotional,
   });
 
   if (!validation.ok) {
@@ -445,6 +559,14 @@ export function createTriggerOrder(
     broker,
     hasPrice: Boolean(tradablePrice),
     marketOpen: inputs.marketOpen,
+    instrumentTradable:
+      inputs.instrumentTradable ??
+      (inputs.instrument
+        ? inputs.instrument.symbol === request.symbol
+        : undefined),
+    accountEquity: inputs.accountEquity,
+    positionsGrossNotional: inputs.positionsGrossNotional,
+    reservedGrossNotional: inputs.reservedGrossNotional,
   });
 
   if (!validation.ok) {
@@ -481,29 +603,209 @@ export function createPendingOrder(
   return createTriggerOrder({ ...context, request });
 }
 
-export type LimitFillInputs = {
-  order: Order;
-  broker: BrokerConfig;
-  cash: number;
-  position?: Position;
-  currentTime: string;
-  instrument?: Instrument;
-  marketOpen?: boolean;
-  candle?: Candle;
-  candleVolumeNotional?: number;
-};
+export type LimitFillInputs = AccountExposureContext &
+  CandleLiquidityContext & {
+    order: Order;
+    broker: BrokerConfig;
+    cash: number;
+    position?: Position;
+    currentTime: string;
+    instrument?: Instrument;
+    instrumentTradable?: boolean;
+    marketOpen?: boolean;
+    candle?: Candle;
+    tradablePrice?: TradablePrice;
+    volatility?: number;
+  };
+
+function inferredInstrumentTradable(
+  symbol: string,
+  instrument: Instrument | undefined,
+  explicit: boolean | undefined,
+): boolean | undefined {
+  if (explicit !== undefined) return explicit;
+  return instrument ? instrument.symbol === symbol : undefined;
+}
+
+function candleTradablePrice(
+  candle: Candle | undefined,
+): TradablePrice | undefined {
+  if (!candle || !Number.isFinite(candle.close) || candle.close <= 0) {
+    return undefined;
+  }
+  return {
+    symbol: candle.symbol,
+    time: candle.closeTime,
+    price: candle.close,
+    bid: candle.close,
+    ask: candle.close,
+  };
+}
+
+export function executeMarketRemainderFill(
+  inputs: LimitFillInputs,
+): FillResult {
+  const { order, broker, cash, position, currentTime } = inputs;
+  const remaining = order.remainingQuantity ?? order.quantity;
+  if (
+    order.type !== "market" ||
+    (order.status !== "pending" && order.status !== "partially_filled") ||
+    !Number.isFinite(remaining) ||
+    remaining <= 0
+  ) {
+    return {
+      ok: false,
+      order: {
+        ...order,
+        status: "rejected",
+        closedAt: currentTime,
+        rejectionReason: "Invalid market-order remainder",
+      },
+      reason: "Invalid market-order remainder",
+    };
+  }
+
+  const tradablePrice =
+    inputs.tradablePrice ?? candleTradablePrice(inputs.candle);
+  const normalizedQuantity = normalizeQuantity(
+    remaining,
+    broker,
+    inputs.instrument,
+  );
+  const fillable = tradablePrice
+    ? fillableQuantityFor(
+        normalizedQuantity,
+        tradablePrice.price,
+        broker,
+        inputs.candleVolumeNotional,
+        inputs.instrument,
+        inputs.availableCandleLiquidityNotional,
+      )
+    : { quantity: normalizedQuantity };
+  const fillQuantity = fillable.quantity;
+  const breakdown = tradablePrice
+    ? priceWithSpreadAndSlippage(tradablePrice.price, order.side, broker, {
+        quantity: fillQuantity,
+        candleVolumeNotional: inputs.candleVolumeNotional,
+        volatility: inputs.volatility,
+      })
+    : undefined;
+  const notional = breakdown ? breakdown.fillPrice * fillQuantity : 0;
+  const commission = breakdown ? commissionFor(notional, broker) : 0;
+  const validation = validateMarketOrder({
+    side: order.side,
+    rawQuantity: remaining,
+    normalizedQuantity: fillQuantity > 0 ? fillQuantity : normalizedQuantity,
+    referencePrice: tradablePrice?.price ?? 0,
+    executionPrice: breakdown?.fillPrice,
+    cash,
+    fees: commission,
+    position,
+    broker,
+    hasPrice: Boolean(tradablePrice),
+    marketOpen: inputs.marketOpen,
+    instrumentTradable: inferredInstrumentTradable(
+      order.symbol,
+      inputs.instrument,
+      inputs.instrumentTradable,
+    ),
+    accountEquity: inputs.accountEquity,
+    positionsGrossNotional: inputs.positionsGrossNotional,
+    reservedGrossNotional: inputs.reservedGrossNotional,
+    candleVolumeNotional: inputs.candleVolumeNotional,
+    availableCandleLiquidityNotional:
+      inputs.availableCandleLiquidityNotional,
+    maxParticipationRate:
+      broker.partialFillPolicy === "volume_limited"
+        ? undefined
+        : broker.maxParticipationRate,
+  });
+  if (
+    isLiquidityDeferral(
+      fillQuantity,
+      validation,
+      inputs.availableCandleLiquidityNotional,
+    )
+  ) {
+    return deferredLiquidityResult(
+      order,
+      currentTime,
+      "Insufficient liquidity for market-order remainder",
+    );
+  }
+  if (!validation.ok || !tradablePrice || !breakdown || fillQuantity <= 0) {
+    const reason = validation.ok
+      ? "Insufficient liquidity for market-order remainder"
+      : validation.message;
+    return {
+      ok: false,
+      order: {
+        ...order,
+        status: "rejected",
+        rejectionCode: validation.ok ? undefined : validation.code,
+        closedAt: currentTime,
+        rejectionReason: reason,
+      },
+      reason,
+    };
+  }
+
+  const progress = orderFillProgress(
+    fillQuantity,
+    breakdown.fillPrice,
+    order.filledQuantity ?? 0,
+    order.averageFillPrice ?? 0,
+  );
+  const remainingQuantity = Math.max(
+    0,
+    order.quantity - progress.filledQuantity,
+  );
+  const status = remainingQuantity <= 1e-9 ? "filled" : "partially_filled";
+  const fill: Fill = {
+    id: generateId("fil"),
+    orderId: order.id,
+    time: currentTime,
+    symbol: order.symbol,
+    side: order.side,
+    quantity: fillQuantity,
+    price: breakdown.fillPrice,
+    referencePrice: tradablePrice.price,
+    commission,
+    spreadCost: breakdown.spreadCost * fillQuantity,
+    slippage: breakdown.slippage,
+    totalCost: notional + commission,
+    reason: "working_order",
+    liquidityParticipation: fillable.participation,
+    executionPriceSource: "market",
+    note: order.note,
+  };
+  return {
+    ok: true,
+    fill,
+    order: {
+      ...order,
+      remainingQuantity,
+      filledQuantity: progress.filledQuantity,
+      averageFillPrice: progress.averageFillPrice,
+      status,
+      closedAt: status === "filled" ? currentTime : undefined,
+    },
+  };
+}
 
 export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
   const { order, broker, cash, position, currentTime } = inputs;
-  const { fillPrice, priceSource } = pendingOrderFillPrice(
+  if (order.type === "market") return executeMarketRemainderFill(inputs);
+
+  const { fillPrice: referenceFillPrice, priceSource } = pendingOrderFillPrice(
     order,
     broker,
     inputs.candle,
   );
   if (
     !["limit", "stop_loss", "take_profit"].includes(order.type) ||
-    !Number.isFinite(fillPrice) ||
-    fillPrice <= 0
+    !Number.isFinite(referenceFillPrice) ||
+    referenceFillPrice <= 0
   ) {
     return {
       ok: false,
@@ -523,18 +825,33 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
   );
   const fillable = fillableQuantityFor(
     normalizedQuantity,
-    fillPrice,
+    referenceFillPrice,
     broker,
     inputs.candleVolumeNotional,
+    inputs.instrument,
+    inputs.availableCandleLiquidityNotional,
   );
   const fillQuantity = fillable.quantity;
+  const breakdown =
+    order.type === "limit"
+      ? {
+          fillPrice: referenceFillPrice,
+          spreadCost: 0,
+          slippage: 0,
+        }
+      : priceWithSpreadAndSlippage(referenceFillPrice, order.side, broker, {
+          quantity: fillQuantity,
+          candleVolumeNotional: inputs.candleVolumeNotional,
+          volatility: inputs.volatility,
+        });
+  const fillPrice = breakdown.fillPrice;
   const notional = fillPrice * fillQuantity;
   const commission = commissionFor(notional, broker);
   const validation = validateMarketOrder({
     side: order.side,
     rawQuantity: order.remainingQuantity ?? order.quantity,
     normalizedQuantity: fillQuantity > 0 ? fillQuantity : normalizedQuantity,
-    referencePrice: fillPrice,
+    referencePrice: referenceFillPrice,
     executionPrice: fillPrice,
     cash,
     fees: commission,
@@ -542,7 +859,31 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
     broker,
     hasPrice: true,
     marketOpen: inputs.marketOpen,
+    instrumentTradable: inferredInstrumentTradable(
+      order.symbol,
+      inputs.instrument,
+      inputs.instrumentTradable,
+    ),
+    accountEquity: inputs.accountEquity,
+    positionsGrossNotional: inputs.positionsGrossNotional,
+    reservedGrossNotional: inputs.reservedGrossNotional,
+    candleVolumeNotional: inputs.candleVolumeNotional,
+    availableCandleLiquidityNotional:
+      inputs.availableCandleLiquidityNotional,
   });
+  if (
+    isLiquidityDeferral(
+      fillQuantity,
+      validation,
+      inputs.availableCandleLiquidityNotional,
+    )
+  ) {
+    return deferredLiquidityResult(
+      order,
+      currentTime,
+      "Insufficient liquidity for fill",
+    );
+  }
   if (!validation.ok) {
     return {
       ok: false,
@@ -579,7 +920,10 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
     previousAverage,
   );
   const totalQuantity = order.quantity;
-  const remainingQuantity = Math.max(0, totalQuantity - progress.filledQuantity);
+  const remainingQuantity = Math.max(
+    0,
+    totalQuantity - progress.filledQuantity,
+  );
   const status = remainingQuantity <= 1e-9 ? "filled" : "partially_filled";
 
   const fill: Fill = {
@@ -591,10 +935,12 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
     quantity: fillQuantity,
     price: fillPrice,
     referencePrice:
-      order.type === "limit" ? order.limitPrice ?? fillPrice : order.triggerPrice ?? fillPrice,
+      order.type === "limit"
+        ? order.limitPrice ?? fillPrice
+        : order.triggerPrice ?? fillPrice,
     commission,
-    spreadCost: 0,
-    slippage: 0,
+    spreadCost: breakdown.spreadCost * fillQuantity,
+    slippage: breakdown.slippage,
     totalCost: notional + commission,
     reason: "working_order",
     liquidityParticipation: fillable.participation,
@@ -612,7 +958,7 @@ export function executePendingOrderFill(inputs: LimitFillInputs): FillResult {
       filledQuantity: progress.filledQuantity,
       averageFillPrice: progress.averageFillPrice,
       triggeredAt: order.triggeredAt ?? currentTime,
-      closedAt: status === "filled" ? currentTime : order.closedAt,
+      closedAt: status === "filled" ? currentTime : undefined,
       status,
     },
   };
@@ -632,6 +978,15 @@ export function isPendingOrderTriggered(input: LimitTriggerInput): boolean {
   const { order, high, low } = input;
   if (order.status !== "pending" && order.status !== "partially_filled") {
     return false;
+  }
+  if (order.type === "market") {
+    return order.status === "pending" || order.status === "partially_filled";
+  }
+  if (
+    order.triggeredAt &&
+    (order.type === "stop_loss" || order.type === "take_profit")
+  ) {
+    return true;
   }
   if (order.type === "limit") {
     const limit = order.limitPrice;
@@ -664,13 +1019,22 @@ function pendingOrderFillPrice(
     return { fillPrice: order.limitPrice ?? 0, priceSource: "limit" };
   }
   const trigger = order.triggerPrice ?? 0;
+  if (
+    order.triggeredAt &&
+    candle
+  ) {
+    return { fillPrice: candle.open, priceSource: "gap_open" };
+  }
   if (broker.stopFillPolicy !== "gap_open" || !candle) {
     return { fillPrice: trigger, priceSource: "stop_trigger" };
   }
 
   const gapped =
-    (order.side === "sell" && candle.open <= trigger) ||
-    (order.side === "buy" && candle.open >= trigger);
+    order.type === "take_profit"
+      ? (order.side === "sell" && candle.open >= trigger) ||
+        (order.side === "buy" && candle.open <= trigger)
+      : (order.side === "sell" && candle.open <= trigger) ||
+        (order.side === "buy" && candle.open >= trigger);
   if (gapped) {
     return { fillPrice: candle.open, priceSource: "gap_open" };
   }

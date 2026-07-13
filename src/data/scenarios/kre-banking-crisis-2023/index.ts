@@ -3,6 +3,7 @@ import type {
   Candle,
   IndicatorSnapshot,
   Instrument,
+  MarketCalendar,
   MarketEvent,
 } from "../../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
@@ -26,6 +27,7 @@ const meta: ScenarioMeta = {
   tags: ["equity", "etf", "banking", "liquidity_crisis", "rate_shock"],
   supportedModes: ["explorer", "professional", "challenge"],
   benchmarkSymbol: SYMBOL,
+  marketCalendarId: "us-equities-2023",
   license: "CC-BY-4.0 (sample data)",
   dataSources: [
     "Synthetic deterministic sample prices shaped to the publicly documented 2023 U.S. regional-bank stress path; raw licensed ETF market data is not redistributed.",
@@ -95,6 +97,17 @@ const anchors: Anchor[] = [
 ];
 
 const marketHolidays = new Set(["2023-04-07", "2023-05-29", "2023-06-19"]);
+
+const marketCalendar: MarketCalendar = {
+  id: "us-equities-2023",
+  timezone: "America/New_York",
+  sessions: [1, 2, 3, 4, 5].map((dayOfWeek) => ({
+    dayOfWeek: dayOfWeek as 1 | 2 | 3 | 4 | 5,
+    open: "09:30",
+    close: "16:00",
+  })),
+  holidays: [...marketHolidays],
+};
 
 function buildCandles(): Candle[] {
   const start = Date.UTC(2023, 2, 1);
@@ -376,8 +389,8 @@ function buildIndicators(candles: Candle[]): IndicatorSnapshot[] {
       });
     }
 
-    if (i + 1 >= volWindow) {
-      const slice = candles.slice(i + 1 - volWindow, i + 1);
+    if (i >= volWindow) {
+      const slice = candles.slice(i - volWindow, i + 1);
       const returns = [];
       for (let j = 1; j < slice.length; j++) {
         returns.push(slice[j].close / slice[j - 1].close - 1);
@@ -420,6 +433,7 @@ export const kreBankingCrisis2023Scenario = assembleScenario({
   indicators,
   benchmarks,
   broker,
+  marketCalendar,
 });
 
 export const scenarioCatalogEntry = {
