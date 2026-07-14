@@ -3,6 +3,7 @@ import { validateScenarioPackage } from "../../domain/validation/scenario";
 import { buildScenarioRegistry, listScenarios } from "./index";
 import { btc20202021Scenario } from "./btc-2020-2021";
 import { eurGbpBrexit2016Scenario } from "./eurgbp-brexit-2016";
+import { eurUsdCovidLiquidity2020Scenario } from "./eurusd-covid-liquidity-2020";
 import { kreBankingCrisis2023Scenario } from "./kre-banking-crisis-2023";
 import { qqqRateHike2022Scenario } from "./qqq-rate-hike-2022";
 import { sp500Covid2020Scenario } from "./sp500-covid-2020";
@@ -62,6 +63,88 @@ describe("eurgbp-brexit-2016 scenario", () => {
       "scripts/import-ecb-eurgbp.mjs",
     );
     expect(eurGbpBrexit2016Scenario.meta.observedFields?.[0]).toContain(
+      "ECB reference rate",
+    );
+  });
+});
+
+describe("eurusd-covid-liquidity-2020 scenario", () => {
+  it("passes strict quality review with only expected ECB business-day gaps", () => {
+    const result = validateScenarioPackage(eurUsdCovidLiquidity2020Scenario);
+    expect(result.valid).toBe(true);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(
+      result.warnings.every((warning) => warning.code === "candles.gap"),
+    ).toBe(true);
+  });
+
+  it("ships the official observed ECB reference-rate path", () => {
+    expect(eurUsdCovidLiquidity2020Scenario.meta).toMatchObject({
+      id: "eurusd-covid-liquidity-2020",
+      difficulty: "intermediate",
+      isSampleData: false,
+      dataFidelity: "mixed",
+    });
+    expect(eurUsdCovidLiquidity2020Scenario.candles).toHaveLength(104);
+    expect(eurUsdCovidLiquidity2020Scenario.candles[0]).toMatchObject({
+      symbol: "EURUSD",
+      closeTime: "2020-02-03T15:00:00.000Z",
+      close: 1.1066,
+    });
+    expect(eurUsdCovidLiquidity2020Scenario.candles.at(-1)).toMatchObject({
+      closeTime: "2020-06-30T15:00:00.000Z",
+      close: 1.1198,
+    });
+    expect(
+      eurUsdCovidLiquidity2020Scenario.candles.every(
+        (candle) =>
+          candle.open === candle.close &&
+          candle.high === candle.close &&
+          candle.low === candle.close &&
+          candle.volume === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("uses the same observed reference series as its benchmark", () => {
+    expect(eurUsdCovidLiquidity2020Scenario.benchmarks).toHaveLength(
+      eurUsdCovidLiquidity2020Scenario.candles.length,
+    );
+    for (const [index, point] of
+      eurUsdCovidLiquidity2020Scenario.benchmarks.entries()) {
+      const candle = eurUsdCovidLiquidity2020Scenario.candles[index];
+      expect(point).toMatchObject({
+        symbol: candle.symbol,
+        time: candle.closeTime,
+        value: candle.close,
+      });
+    }
+  });
+
+  it("attributes official WHO, Federal Reserve, and ECB event evidence", () => {
+    const sourceHosts = new Set(
+      eurUsdCovidLiquidity2020Scenario.events.map(
+        (event) => new URL(event.sourceUrl!).hostname,
+      ),
+    );
+    expect(sourceHosts).toEqual(
+      new Set([
+        "www.ecb.europa.eu",
+        "www.federalreserve.gov",
+        "www.who.int",
+      ]),
+    );
+    expect(
+      eurUsdCovidLiquidity2020Scenario.events.every(
+        (event) => event.source && event.sourceUrl,
+      ),
+    ).toBe(true);
+    expect(eurUsdCovidLiquidity2020Scenario.meta.sourceManifest).toEqual([
+      "src/data/scenarios/eurusd-covid-liquidity-2020/README.md",
+      "src/data/scenarios/eurusd-covid-liquidity-2020/ecb-eurusd.json",
+      "scripts/import-ecb-eurusd.mjs",
+    ]);
+    expect(eurUsdCovidLiquidity2020Scenario.meta.observedFields?.[0]).toContain(
       "ECB reference rate",
     );
   });

@@ -6,6 +6,8 @@ import type {
   TradeOutcome,
 } from "../../types";
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
+import { getBuiltInDrill } from "../../data/practice/drills";
+import DrillDebrief from "../practice/DrillDebrief";
 import "./PostGameReport.css";
 
 const ZERO_EPSILON = 0.0000001;
@@ -17,6 +19,7 @@ type Props = {
   onClose: () => void;
   onReset: () => void;
   onChooseNextPractice?: () => void;
+  previousComparablePracticeScore?: number;
 };
 
 function toneFor(value: number): "pos" | "neg" | "neutral" {
@@ -38,6 +41,7 @@ export default function PostGameReport({
   onClose,
   onReset,
   onChooseNextPractice,
+  previousComparablePracticeScore,
 }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
@@ -52,6 +56,11 @@ export default function PostGameReport({
     () => reportSummary(report, closedTradeCount, currency),
     [closedTradeCount, currency, report],
   );
+  const practiceDefinition =
+    report.practiceDrill?.definition ??
+    (report.practiceAssessment
+      ? getBuiltInDrill(report.practiceAssessment.drillId)
+      : undefined);
 
   useEffect(() => {
     const priorFocus = document.activeElement as HTMLElement | null;
@@ -190,6 +199,15 @@ export default function PostGameReport({
           </span>
           <p>{verdict.text}</p>
         </div>
+
+        {report.practiceAssessment && practiceDefinition ? (
+          <DrillDebrief
+            definition={practiceDefinition}
+            assessment={report.practiceAssessment}
+            practiceDrill={report.practiceDrill}
+            previousComparableProcessScore={previousComparablePracticeScore}
+          />
+        ) : null}
 
         <section className="report-summary" aria-label="Performance summary">
           <ReportStat

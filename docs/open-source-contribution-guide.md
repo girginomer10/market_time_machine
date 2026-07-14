@@ -19,6 +19,7 @@ Examples:
 - Scenario validator
 - Report metrics
 - Behavioral analysis
+- Practice drill and track domain logic
 - UI improvements
 
 ### Scenario Packages
@@ -65,6 +66,9 @@ A scenario pull request should include:
 - source documentation
 - license information
 - known limitations
+- optional data-only drill definitions, when they can be validated against the
+  scenario; valid definitions are runnable only with that scenario and do not
+  automatically enter credit-bearing tracks
 
 Review checklist:
 
@@ -77,6 +81,8 @@ Review checklist:
 - Data source license is compatible
 - Benchmark is appropriate
 - Broker assumptions are reasonable
+- Authored drill definitions use explicit definition/rubric versions and pass
+  scenario validation
 
 ## Code Contribution Principles
 
@@ -85,6 +91,9 @@ Review checklist:
 - Add tests for information firewall behavior.
 - Make broker assumptions explicit.
 - Avoid hidden magic in scoring.
+- Keep outcome scoring separate from versioned process-only drill evidence.
+- Do not grant practice-track credit from self-declared imported provenance;
+  credit references remain explicitly curated.
 - Keep scenario schemas backward-compatible when possible.
 
 ## Testing Priorities
@@ -97,6 +106,11 @@ Highest priority tests:
 - Orders cannot fill with unknown future prices
 - Portfolio value uses last visible price
 - Report metrics unlock only after completion
+- Event-drill checkpoints map by `publishedAt` to the next real primary close
+- Missing drill evidence remains unassessed
+- Synthetic preview units cannot earn track credit
+- Compact ledger/archive paths never copy raw journal, plan,
+  checkpoint-response, or reflection text into compact evidence
 
 Medium priority tests:
 
@@ -131,4 +145,3 @@ A contribution is better when it is:
 - useful for learning
 
 The project should prefer transparent limitations over hidden confidence.
-

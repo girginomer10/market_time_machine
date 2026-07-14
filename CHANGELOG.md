@@ -4,17 +4,53 @@ All notable changes to Market Time Machine will be tracked here.
 
 The project follows a lightweight changelog for the local-first product.
 
-## Unreleased - Personal Decision Gym v2 Preview
+## 0.3.0 - Personal Decision Gym v2 - 2026-07-14
 
 - Defined V2 as a local deliberate-practice product that connects replay
   evidence to one focused next exercise without accounts, telemetry, or AI
   grading.
-- Added the first Local Practice Coach slice with a baseline assignment,
-  report-derived next practice, supported current/target measures, rubric
-  version, and three evidence-based Decision Foundations milestones.
+- Shipped the Local Practice Coach with a versioned drill baseline, deterministic
+  incomplete-attempt/weakest-component/transfer/comparable-repeat assignments,
+  supported current/target measures, rubric version, and three evidence-based
+  Practice orientation milestones kept separate from track credit.
+- Kept generic outcome/report recommendations in the report so the coach never
+  relabels an unmeasured behavior as Event Discipline evidence.
 - Connected finished reports back to the next-practice loop and made coach CTAs
   prepare the existing scenario briefing rather than silently starting or
   replacing a replay.
+- Shipped versioned Event Discipline drills for the EUR/GBP and EUR/USD ECB
+  scenarios and synthetic QQQ/KRE rehearsal scenarios. Drills require an initial
+  plan plus at least one executed position for completion, stop at mapped
+  high-importance event checkpoints, capture Hold/Reduce/Exit/Wait decisions,
+  and use a process-only rubric.
+- Added the reproducible ECB EUR/USD COVID Liquidity scenario and importer as the
+  second source-observed daily reference-rate lab, with explicit mixed-fidelity
+  disclosure for derived OHLC fields and zero volume.
+- Added a compact local practice ledger with stable replay identities, factual
+  legacy entries, versioned drill assessments, a 250-entry cap, and no copied raw
+  journal, plan, checkpoint-response, or reflection text.
+- Added a versioned evidence profile that groups compatible drill definitions by
+  stable competency and rubric identity while retaining their exact definition
+  identities, evidence counts, source-scenario coverage, and confidence labels.
+  Trends compare only runs sharing the same scenario version, mode, broker,
+  drill, definition, and rubric.
+- Added curated Decision Foundations and Event Pressure Transfer tracks. Track
+  credit requires every criterion in one exact-version attempt; synthetic QQQ
+  and KRE Volatility Discipline units remain explicitly preview-only and cannot
+  award credit.
+- Replaced run-history-only export with the V2 practice archive: up to 12 recent
+  full reports plus 250 compact entries, deep render-safe validation, atomic
+  two-layer persistence with rollback, deterministic non-overwriting conflict
+  handling, and migration from V1 history exports as factual unassessed evidence.
+- Added scenario-package drill-definition authoring, validation, and
+  scenario-scoped runtime discovery. Valid imported definitions are runnable
+  with their containing scenario, cannot replace reserved built-ins, and do not
+  enter the separately curated credit-bearing track catalog.
+- Pinned active practice-session backups to the exact scenario data version,
+  competency, definition, rubric, and normalized drill snapshot; restore rejects
+  drift and requires imported scenario packages to be installed separately.
+- Added keyboard radiogroup navigation and improved muted-text contrast in the
+  scenario library.
 
 ## 0.2.0 - Local Lab v1 - 2026-07-13
 

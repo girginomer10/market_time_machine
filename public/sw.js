@@ -1,7 +1,8 @@
 /* Market Time Machine production service worker. Keep runtime caching limited to
  * static, same-origin resources so future API responses or user data are never
- * persisted accidentally. Bump CACHE_VERSION when cache behavior changes. */
-const CACHE_VERSION = "local-lab-v1";
+ * persisted accidentally. Bump CACHE_VERSION when cache behavior or the
+ * release-critical app shell changes. */
+const CACHE_VERSION = "personal-decision-gym-v2";
 const CACHE_PREFIX = "market-time-machine-";
 const APP_SHELL_CACHE = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${CACHE_VERSION}`;

@@ -1,19 +1,22 @@
 # V2 Product Definition: Personal Decision Gym
 
+Status: **shipped in `0.3.0`**. Local Lab v1 remains the replay, simulation,
+and reporting foundation.
+
 ## Product Decision
 
-Market Time Machine V2 turns isolated historical replays into a deliberate
-practice loop. It does not begin with accounts, leaderboards, more order types,
-or a general-purpose scenario editor.
+Market Time Machine V2 turns isolated historical replays into a local
+deliberate-practice loop. It does not begin with accounts, leaderboards, more
+order types, or a general-purpose scenario editor.
 
 The product promise is:
 
-> Every replay produces observable decision evidence, a focused next practice,
-> and a clearer view of whether the user's process is improving.
+> A replay can produce observable process evidence, a focused next practice,
+> and an honest view of whether comparable evidence is changing.
 
-Local Lab v1 remains the replay, simulation, and reporting foundation. V2 adds
-the layer that answers the question left after a report: **what should I
-practice next, and why?**
+Free replays still create factual history, but only a completed versioned drill
+can create an assessed process claim or earn track credit. The app never treats
+profit, time spent, or missing evidence as proof of skill.
 
 ## Primary User
 
@@ -27,7 +30,7 @@ Their core job is:
 > expose it, and what evidence would count as improvement.
 
 Educators, teams, and competitive communities remain valuable later users, but
-they do not define the local V2 product.
+they do not define the shipped local V2 product.
 
 ## Product Loop
 
@@ -35,79 +38,185 @@ they do not define the local V2 product.
 2. **Diagnose:** use only report evidence that the simulator can support.
 3. **Assign:** prepare one deterministic next practice with a stated reason.
 4. **Practice:** brief, plan, execute, and review under the information firewall.
-5. **Compare:** assess the targeted process evidence across comparable attempts.
+5. **Compare:** assess the targeted process only across comparable attempts.
 
-The coach is deterministic and local. It is not an LLM judging free text, an
-investment recommendation, or a claim about real-world trading skill.
+The coach and drill assessment are deterministic and local. They are not an LLM
+judging free text, an investment recommendation, or a claim about real-world
+trading ability.
 
-## V2 Capabilities
+## Shipped V2 Capabilities
 
 ### 1. Local Practice Coach
 
-- Turns the latest report's highest-priority practice recommendation into an
-  actionable next session.
-- Shows the source evidence and a measurable target when the report supports
-  one.
-- Prepares the existing scenario briefing instead of silently replacing an
-  active replay or starting a trade session.
-- Falls back to the source-observed EUR/GBP foundation lab when an imported
-  source scenario is no longer available.
+- Gives a new user a versioned Event Discipline baseline assignment.
+- Uses the latest versioned drill assessment to repeat an incomplete attempt,
+  target the weakest measured component, transfer a clean process to another
+  regime, or request an exact-context repeat for a comparable trend.
+- Keeps generic outcome/report recommendations in the report instead of
+  presenting them as measured drill evidence.
+- Shows a retained source report when available, compact-ledger evidence breadth,
+  rubric version, and a current value and target only when supported.
+- Tracks three locally derived Practice orientation milestones, kept visibly
+  separate from the credit-bearing Decision Foundations track.
+- Preserves active-session replacement confirmations and never silently starts a
+  trade session.
+- Falls back to the shipped EUR/GBP foundation lab if a referenced imported
+  scenario is no longer available.
 
-### 2. Versioned Practice Drills
+The coach rubric remains `practice-coach-v1`. Its milestones are a lightweight
+orientation layer, not the credit policy used by versioned practice tracks.
+When the 12-report window expires, the coach can still use validated compact
+assessments without inventing details that are absent from the ledger.
 
-A future `DrillDefinition` will specify the target process, scenario, mode,
-rules, checkpoints, completion evidence, and rubric version. Drill scores must
-reward observable process, not hindsight or profit alone.
+### 2. Event Discipline Drills
 
-The first planned drill is **EUR/GBP Brexit — Event Discipline**:
+The shipped `DrillDefinition` contract fixes the scenario, primary symbol,
+mode, definition version, rubric version, initial-plan rule, event checkpoint
+rule, and process-only assessment weights.
 
-- require a structured plan before the first position;
-- pause at high-importance visible events;
-- ask the user to choose Hold, Reduce, Exit, or Wait and record what changed;
-- assess plan coverage, event links, rule violations, and checkpoint coverage;
-- compare the targeted process with the previous comparable attempt.
+Four built-in Event Discipline definitions are available:
 
-### 3. Evidence Profile
+| Scenario | Market-data scope | Track credit |
+| --- | --- | --- |
+| EUR/GBP Brexit 2016 | ECB daily reference-rate observation with derived OHLC fields and zero volume | Eligible through exact curated units |
+| EUR/USD COVID Liquidity 2020 | ECB daily reference-rate observation with derived OHLC fields and zero volume | Eligible through exact curated units |
+| QQQ Rate Shock 2022 | Synthetic sample prices with official-source events | Preview practice only |
+| KRE Banking Crisis 2023 | Synthetic sample prices with official-source events | Preview practice only |
 
-V2 will build a local profile from versioned, drill-specific observations. Each
-claim must show evidence count, scenario coverage, confidence, and rubric
-version. Missing evidence remains unassessed; it never becomes a zero.
+Each definition:
 
-The existing overall report score must not be relabeled as a cross-scenario
-skill score. It intentionally includes outcome measures and is useful inside a
-run, but it is not sufficient evidence of durable ability.
+- requires at least one executed position from a complete initial plan before
+  the drill can be marked completed;
+- requires thesis, invalidation, exit plan, and accepted risk before the first
+  position can be opened;
+- maps importance-4-or-higher visible events to the next real primary-symbol
+  candle close, grouping events that reach the same replay step;
+- requires an explicit Hold, Reduce, Exit, or Wait response plus a reflection;
+- records rule violations when the process is bypassed or a checkpoint is
+  skipped;
+- assesses initial-plan coverage, checkpoint coverage, visible-event linkage,
+  and rule adherence under rubric `event-discipline-process-v1`.
 
-### 4. Practice Tracks
+Missing process evidence is `insufficient_evidence` and has no score. The
+assessment does not use return or hindsight to grade the drill.
 
-Tracks will sequence drills around decision foundations, event pressure, and
-discipline under volatility. Progress is based on completed evidence criteria,
-not streaks, time spent, or profit badges.
+### 3. Compact Practice Ledger And Evidence Profile
 
-### 5. Compact Practice Ledger
+The browser retains two history layers:
 
-The current history retains 12 bounded reports. A later V2 migration may keep a
-longer lightweight ledger of versioned practice observations while retaining
-only recent full reports. The first coach slice deliberately derives everything
-from existing history and adds no new persistence format.
+- up to 12 recent full reports in completed-run history;
+- up to 250 compact ledger entries containing run identity, scenario and data
+  version, mode, broker, factual counts/rates, and an optional validated drill
+  assessment.
 
-## First Shipped V2 Slice
+The ledger never copies raw journal notes, plan text, checkpoint responses, or
+reflection text. Legacy and ordinary free-replay entries remain factual and
+unassessed. Incomplete drill attempts can remain visible as attempts, but they
+do not add evidence, confidence, trend, or track credit even if they contain a
+provisional component score.
 
-The initial preview implements the Local Practice Coach and the Decision
-Foundations track:
+Evidence claims are grouped by the drill definition's stable `competencyId` and
+rubric version. The four built-in definitions therefore contribute to the same
+`event-discipline` competency while the claim still lists every exact drill id
+and definition version represented in its evidence. Older compact assessments
+without a competency id fall back to their drill id instead of being silently
+merged into a broader claim. Each claim shows assessed-run count, scenario
+coverage, exact source-reviewed scenario coverage, sample-data count, data
+fidelity, confidence, and the latest process score.
 
-- first-run baseline assignment;
-- report-to-next-practice handoff;
-- source evidence and supported current/target values;
-- three locally derived milestones:
-  1. complete one replay;
-  2. complete a replay where every executed decision has a linked structured
-     plan with a stated reason and risk plan;
-  3. complete two different scenarios;
-- safe briefing preparation with the existing active-session protection;
-- rubric label `practice-coach-v1`.
+A trend is deliberately narrower than a competency claim: it requires two
+scored runs with the same scenario id and data version, drill id and definition
+version, rubric, mode, and broker. A change of at least 10 points is labeled
+improving or declining; smaller changes are stable.
 
-This slice proves the learning loop before adding drill checkpoints or a larger
-skill taxonomy.
+Confidence describes evidence breadth only. It is not an outcome rating,
+investment certainty, or durable cross-scenario skill score. The existing
+overall report score remains scoped to one replay and is never substituted for
+drill evidence.
+
+### 4. Versioned Practice Tracks
+
+The shipped catalog has three tracks:
+
+| Track | Status | Units |
+| --- | --- | --- |
+| Decision Foundations v1 | Open | One validated EUR/GBP Event Discipline unit |
+| Event Pressure Transfer v1 | Open | Validated EUR/GBP and EUR/USD units; both source-reviewed scenarios are required |
+| Volatility Discipline v1 | Preview | QQQ and KRE synthetic rehearsal units; no completion credit |
+
+A validated unit receives credit only when one attempt matches the exact
+scenario id and data version, fidelity/sample flags, drill id, definition,
+rubric, and mode, and satisfies every completion criterion in that same attempt.
+Criteria are never combined across runs. Imported lookalikes and synthetic
+preview units cannot earn credit.
+
+The current Event Discipline unit threshold is a completed assessment with an
+overall score of at least 80, plan coverage of at least 80, full checkpoint and
+event-link coverage, full rule adherence, and no violations.
+
+### 5. Practice Archive Portability
+
+The history control exports
+`market-time-machine-practice-archive` version `2` with:
+
+- an export timestamp;
+- up to 12 recent full reports, including the bounded initial plan, checkpoint
+  decisions/reflections, safe event display fields, and rule violations for a
+  completed drill;
+- up to 250 compact ledger entries.
+
+Those free-form practice details remain in the full-report layer only. They are
+deliberately omitted from the compact ledger and must be treated as private when
+the user exports an archive.
+
+The archive controls remain available when the 12-report window is empty but
+older compact ledger evidence still exists, so ledger-only data can still be
+exported or cleared explicitly.
+
+Import is strict and atomic: nested report collections are render-safe validated,
+one malformed run or ledger entry rejects the file, and a browser-storage failure
+rolls both history layers back instead of keeping half an import. Exact
+duplicates are no-ops. Same-id records with different content are reported as
+conflicts and the browser's existing record is kept. New records are merged in
+deterministic newest-first order.
+
+The importer also accepts the previous
+`market-time-machine-run-history` version `1` export. It derives compact factual
+entries without inventing drill assessments. This archive migration is separate
+from active-session backup and scenario-package import.
+
+Active practice-session backups pin the scenario data version and the complete
+drill identity: competency, definition version, rubric, and normalized
+definition snapshot. Restore rejects drift instead of finishing an old attempt
+under changed evidence. A session backup does not embed an imported scenario
+package; the matching package must be imported into the destination browser
+first.
+
+### 6. Drill-Definition Authoring Surface
+
+`ScenarioPackage` accepts an optional `drills` array. Untrusted definitions are
+parsed defensively and must pass the same domain validation as built-in drills,
+including scenario/symbol/mode compatibility, checkpoint mapping, supported
+actions, plan fields, and rubric weights.
+
+Valid authored definitions are discovered as runnable options only while their
+containing scenario is available. They are scenario-scoped, cannot replace a
+reserved built-in drill id, and remain data-only: custom functions and scoring
+code are not accepted. Runnable does not mean creditable; all track units and
+their exact evidence references remain separately curated in
+`src/data/practice/`.
+
+## Evidence And Data Boundary
+
+The two completion-grade source scenarios use official ECB daily reference-rate
+observations. They are labeled `mixed` fidelity because open, high, and low
+repeat the daily observation and volume is zero; they are not intraday execution
+evidence. Official event sources do not turn a synthetic price path into
+completion-grade market evidence.
+
+Track credit uses exact curated scenario ids and data-version strings. A user
+import cannot gain credit merely by copying a title, setting `sampleData` to
+false, or claiming a similar source.
 
 ## Non-Goals
 
@@ -116,32 +225,31 @@ skill taxonomy.
 - Broker connectivity, live signals, or investment advice
 - A general backtesting terminal
 - Automatic semantic grading of free-form reasoning
+- Automatic admission of imported drills into credit-bearing tracks
 - A full no-code Scenario Studio
 - Inflating the catalog with low-quality or unclear-rights data
 
-## Success Criteria
+## Success Criteria And Measurement Status
 
-Product research should be opt-in; the local app has no telemetry collector.
-For a V2 beta, the intended success criteria are:
+The product has no telemetry collector, so adoption and retention targets have
+not been measured by the app. Any product research must be opt-in. Future
+research may evaluate baseline completion, return-to-practice behavior, and
+whether users can explain the evidence behind a recommendation.
 
-- At least 70% of observed new users complete the guided baseline in 20 minutes.
-- At least 50% of completers open the prepared next practice.
-- At least 35% complete another practice within seven days.
-- At least 60% of users with two comparable attempts improve the target process
-  score by 10 points or more.
-- At least 80% can explain what they should practice next and cite the evidence.
-- Every coach claim exposes its evidence, sample count, and rubric version.
-- Future-leakage, offline use, local privacy, and v1 history compatibility remain
-  release gates.
+The shipped engineering release gates are narrower and testable:
 
-## Delivery Sequence
+- future information remains hidden during replay;
+- missing evidence remains unassessed;
+- only exact validated units award track credit;
+- synthetic preview units never award credit;
+- active sessions, evidence, and archives remain local and portable;
+- V1 run-history exports migrate without fabricated assessments;
+- offline use and the release verification gate continue to pass.
 
-1. **Coach loop — started:** baseline, milestones, report handoff, next practice.
-2. **Event Discipline drill:** checkpoints, process rubric, targeted retry.
-3. **Evidence profile:** drill observations, confidence, trend, compact ledger.
-4. **Track catalog:** validated units across multiple source-reviewed scenarios.
-5. **Scenario authoring support:** only after drill quality and retention are
-   demonstrated.
+## Follow-On Work
 
-Hosted challenges and team workflows remain a separate platform expansion after
-the local learning loop is proven.
+The V2 product loop is shipped. Useful later work includes adding more
+rights-reviewed source scenarios, expanding the curated drill taxonomy,
+measuring the loop through opt-in research, and defining a review path for
+authored drills that seek track credit. Hosted challenges, team workflows, and
+cross-device services remain a separate platform expansion.

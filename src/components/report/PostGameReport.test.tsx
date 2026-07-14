@@ -1,7 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { eventDisciplineEurGbpV1 } from "../../data/practice/drills";
 import PostGameReport from "./PostGameReport";
-import type { ReportPayload } from "../../types";
+import type {
+  DrillAssessment,
+  DrillDefinition,
+  ReportPayload,
+} from "../../types";
 
 const neutralReport: ReportPayload = {
   scenarioId: "neutral",
@@ -37,6 +42,27 @@ const neutralReport: ReportPayload = {
   totalTrades: 0,
   behavioralFlags: [],
 };
+
+function practiceAssessment(
+  overrides: Partial<DrillAssessment> = {},
+): DrillAssessment {
+  return {
+    drillId: eventDisciplineEurGbpV1.id,
+    definitionVersion: eventDisciplineEurGbpV1.definitionVersion,
+    rubricVersion: eventDisciplineEurGbpV1.rubricVersion,
+    status: "completed",
+    overallScore: 80,
+    methodology: "Process-only score based on recorded plan and checkpoint evidence.",
+    components: [],
+    eligibleCheckpointCount: 1,
+    answeredCheckpointCount: 1,
+    skippedCheckpointCount: 0,
+    eligibleEventCount: 1,
+    linkedEventCount: 1,
+    violationCount: 0,
+    ...overrides,
+  };
+}
 
 describe("PostGameReport", () => {
   afterEach(() => {
@@ -252,6 +278,106 @@ describe("PostGameReport", () => {
     expect(
       screen.getByText("Intraday range reconstructed from the close"),
     ).toBeInTheDocument();
+  });
+
+  it("uses the archived drill definition and evidence when an authored drill is no longer installed", () => {
+    const archivedDefinition: DrillDefinition = {
+      ...eventDisciplineEurGbpV1,
+      id: "authored-drill-removed-from-scenario",
+      definitionVersion: 7,
+      rubricVersion: "authored-process-v7",
+      title: "Archived authored policy drill",
+    };
+
+    render(
+      <PostGameReport
+        report={{
+          ...neutralReport,
+          practiceAssessment: practiceAssessment({
+            drillId: archivedDefinition.id,
+            definitionVersion: archivedDefinition.definitionVersion,
+            rubricVersion: archivedDefinition.rubricVersion,
+          }),
+          practiceDrill: {
+            definition: archivedDefinition,
+            initialPlan: {
+              thesis: "The official release may alter the policy path.",
+              invalidation: "The release leaves the policy path unchanged.",
+              exitPlan: "Exit after a confirmed invalidation.",
+              acceptedRisk: "A predefined small position.",
+            },
+            checkpoints: [
+              {
+                checkpoint: {
+                  id: "authored-checkpoint",
+                  drillId: archivedDefinition.id,
+                  definitionVersion: archivedDefinition.definitionVersion,
+                  replayIndex: 3,
+                  replayTime: "2020-01-01T12:00:00.000Z",
+                  eventIds: ["archived-event"],
+                },
+                response: {
+                  id: "authored-response",
+                  drillId: archivedDefinition.id,
+                  definitionVersion: archivedDefinition.definitionVersion,
+                  checkpointId: "authored-checkpoint",
+                  replayTime: "2020-01-01T12:00:00.000Z",
+                  eventIds: ["archived-event"],
+                  status: "answered",
+                  action: "wait",
+                  reflection: "Wait for confirmation because the plan is not invalidated.",
+                },
+                events: [
+                  {
+                    id: "archived-event",
+                    publishedAt: "2020-01-01T11:55:00.000Z",
+                    title: "Archived official release title",
+                    type: "central_bank",
+                    importance: 5,
+                    source: "Official archive",
+                  },
+                ],
+              },
+            ],
+            violations: [],
+          },
+        }}
+        onClose={vi.fn()}
+        onReset={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Archived authored policy drill" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Archived official release title")).toBeInTheDocument();
+    expect(
+      screen.getByText("Wait for confirmation because the plan is not invalidated."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(eventDisciplineEurGbpV1.title)).not.toBeInTheDocument();
+  });
+
+  it("keeps the built-in definition fallback for legacy assessment-only reports", () => {
+    render(
+      <PostGameReport
+        report={{
+          ...neutralReport,
+          practiceAssessment: practiceAssessment(),
+        }}
+        onClose={vi.fn()}
+        onReset={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: eventDisciplineEurGbpV1.title }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/legacy report retains its versioned process assessment/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Checkpoint decision record" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders every structured decision with planned, actual, and visible-event context", () => {

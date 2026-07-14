@@ -1,3 +1,4 @@
+import { useRef, type ChangeEvent } from "react";
 import type { CompletedRun } from "../../domain/history/runHistory";
 import {
   compareRunWithPrevious,
@@ -9,17 +10,20 @@ import "./runHistory.css";
 
 type Props = {
   runs: CompletedRun[];
+  hasArchiveData?: boolean;
   onViewReport: (run: CompletedRun) => void;
   onReplay: (run: CompletedRun) => void;
   onRemove: (run: CompletedRun) => void;
   onExport: () => void;
+  onImport: (event: ChangeEvent<HTMLInputElement>) => void;
+  importMessage?: string;
   onClear: () => void;
 };
 
 function scoreLabel(run: CompletedRun): string {
-  if (run.scoreStatus === "insufficient_evidence") return "Not scored";
-  if (run.score === undefined) return "Score unavailable";
-  return `${Math.round(run.score)} / 100`;
+  const processScore = run.report.practiceAssessment?.overallScore;
+  if (processScore === undefined) return "Not assessed";
+  return `${Math.round(processScore)} / 100`;
 }
 
 function signedPct(value: number): string {
@@ -30,13 +34,17 @@ function signedPct(value: number): string {
 
 export default function RunHistory({
   runs,
+  hasArchiveData = runs.length > 0,
   onViewReport,
   onReplay,
   onRemove,
   onExport,
+  onImport,
+  importMessage,
   onClear,
 }: Props) {
   const stats = runHistoryStats(runs);
+  const importRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <section className="run-history" aria-labelledby="run-history-title">
@@ -51,30 +59,71 @@ export default function RunHistory({
             <span><strong>{stats.scenariosCompleted}</strong> scenarios</span>
             <span><strong>{stats.journaledRuns}</strong> journaled</span>
             <span>
-              <strong>{stats.bestScore !== undefined ? Math.round(stats.bestScore) : "—"}</strong>
-              best score
+              <strong>
+                {
+                  runs.filter(
+                    (run) =>
+                      run.report.practiceAssessment?.overallScore !== undefined,
+                  ).length
+                }
+              </strong>
+              drill assessed
             </span>
           </div>
-          {runs.length > 0 ? (
-            <div className="run-history-library-actions">
+          <div className="run-history-library-actions">
+            {hasArchiveData ? (
               <button className="btn" type="button" onClick={onExport}>
-                Export history
+                Export practice archive
               </button>
+            ) : null}
+            <button
+              className="btn"
+              type="button"
+              onClick={() => importRef.current?.click()}
+            >
+              Import practice archive
+            </button>
+            {hasArchiveData ? (
               <button className="btn danger" type="button" onClick={onClear}>
                 Clear history
               </button>
-            </div>
+            ) : null}
+          </div>
+          <input
+            className="visually-hidden"
+            ref={importRef}
+            type="file"
+            accept=".json,application/json"
+            aria-label="Import practice archive JSON"
+            onChange={onImport}
+          />
+          {importMessage ? (
+            <p className="run-history-import-message" role="status">
+              {importMessage}
+            </p>
           ) : null}
         </div>
       </div>
 
       {runs.length === 0 ? (
         <div className="run-history-empty">
-          <strong>Your first completed replay will appear here.</strong>
-          <p>
-            Finish a scenario to preserve its score, benchmark comparison, and
-            decision review on this device.
-          </p>
+          {hasArchiveData ? (
+            <>
+              <strong>No full replay reports are stored.</strong>
+              <p>
+                Compact practice evidence remains available in your evidence
+                profile and practice archive.
+              </p>
+            </>
+          ) : (
+            <>
+              <strong>Your first completed replay will appear here.</strong>
+              <p>
+                Finish a scenario to preserve its score, benchmark comparison,
+                and decision review on this device.
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <div className="run-history-list">
@@ -98,7 +147,7 @@ export default function RunHistory({
                   {run.sampleData ? <span className="run-history-sample">Demo data</span> : null}
                 </div>
                 <div className="run-history-metrics">
-                  <span><small>Score</small><strong>{scoreLabel(run)}</strong></span>
+                  <span><small>Process</small><strong>{scoreLabel(run)}</strong></span>
                   <span><small>Return</small><strong>{signedPct(run.totalReturn)}</strong></span>
                   <span><small>Alpha</small><strong>{signedPct(run.excessReturn)}</strong></span>
                   <span><small>Max drawdown</small><strong>{formatPct(run.maxDrawdown)}</strong></span>
@@ -106,9 +155,6 @@ export default function RunHistory({
                 {comparison.previous ? (
                   <p className="run-history-comparison">
                     Versus your prior attempt: return {signedPct(comparison.returnDelta ?? 0)}
-                    {comparison.scoreDelta !== undefined
-                      ? ` · score ${comparison.scoreDelta >= 0 ? "+" : ""}${Math.round(comparison.scoreDelta)}`
-                      : ""}
                   </p>
                 ) : null}
                 <div className="run-history-actions">

@@ -7,7 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Fill, Order } from "../types";
+import type { DrillAssessment, Fill, Order } from "../types";
 import { useSessionStore } from "../store/sessionStore";
 import {
   getScenario,
@@ -15,6 +15,21 @@ import {
   registerUserScenario,
   removeUserScenario,
 } from "../data/scenarios";
+import {
+  eventDisciplineEurGbpV1,
+  eventDisciplineQqqV1,
+} from "../data/practice/drills";
+import {
+  decisionFoundationsTrack,
+  EURGBP_BREXIT_2016_DATA_VERSION,
+} from "../data/practice/tracks";
+import {
+  derivePracticeLedgerEntry,
+  persistPracticeLedger,
+  type PracticeLedgerEntry,
+} from "../domain/history/practiceLedger";
+import { exportPracticeArchive } from "../domain/history/practiceArchive";
+import { recordCompletedRun } from "../domain/history/runHistory";
 import App from "./App";
 
 vi.mock("../components/chart/ReplayChart", () => ({
@@ -130,6 +145,131 @@ describe("App scenario library journey", () => {
     window.localStorage.clear();
   });
 
+  it("builds the local evidence dashboard and only prepares a track briefing", () => {
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: "Evidence profile" })).toBeInTheDocument();
+    expect(screen.getByText("No process evidence yet")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Practice tracks" })).toBeInTheDocument();
+    expect(screen.getAllByText("0/1").length).toBeGreaterThan(0);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Prepare ${decisionFoundationsTrack.units[0].title}`,
+      }),
+    );
+
+    expect(useSessionStore.getState().activeDrillId).toBeUndefined();
+    expect(document.getElementById("briefing-title")).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Start guided drill" }));
+    expect(useSessionStore.getState().activeDrillId).toBe(
+      eventDisciplineEurGbpV1.id,
+    );
+    expect(screen.getByText("Active drill")).toBeInTheDocument();
+    raf.mockRestore();
+  });
+
+  it("derives evidence claims, track credit, and archive actions from compact ledger data", () => {
+    const completeAssessment: DrillAssessment = {
+      drillId: eventDisciplineEurGbpV1.id,
+      definitionVersion: eventDisciplineEurGbpV1.definitionVersion,
+      rubricVersion: eventDisciplineEurGbpV1.rubricVersion,
+      status: "completed",
+      overallScore: 100,
+      methodology: "Process-only integration fixture.",
+      components: [
+        {
+          id: "plan_coverage",
+          label: "Initial plan coverage",
+          weight: 0.3,
+          status: "assessed",
+          score: 100,
+          evidence: "Complete plan.",
+        },
+        {
+          id: "checkpoint_coverage",
+          label: "Checkpoint coverage",
+          weight: 0.3,
+          status: "assessed",
+          score: 100,
+          evidence: "All checkpoints answered.",
+        },
+        {
+          id: "event_linkage",
+          label: "Event linkage",
+          weight: 0.2,
+          status: "assessed",
+          score: 100,
+          evidence: "All visible events linked.",
+        },
+        {
+          id: "rule_adherence",
+          label: "Rule adherence",
+          weight: 0.2,
+          status: "assessed",
+          score: 100,
+          evidence: "No violations.",
+        },
+      ],
+      eligibleCheckpointCount: 1,
+      answeredCheckpointCount: 1,
+      skippedCheckpointCount: 0,
+      eligibleEventCount: 1,
+      linkedEventCount: 1,
+      violationCount: 0,
+    };
+    const ledgerEntry: PracticeLedgerEntry = {
+      id: "compact-ledger-run",
+      runId: "compact-ledger-run",
+      runInstanceId: "compact-ledger-run",
+      completedAt: "2026-07-14T12:00:00.000Z",
+      scenarioId: "eurgbp-brexit-2016",
+      scenarioTitle: "Brexit Referendum: EUR/GBP 2016",
+      scenarioDataVersion: EURGBP_BREXIT_2016_DATA_VERSION,
+      scenarioDataFidelity: "mixed",
+      sampleData: false,
+      mode: "explorer",
+      brokerMode: "scenario",
+      facts: {
+        executionCount: 1,
+        closedTradeCount: 1,
+        journalEntryCount: 1,
+        executedDecisionCount: 1,
+        linkedDecisionCount: 1,
+        behavioralFlagCount: 0,
+        forcedLiquidationCount: 0,
+      },
+      assessment: completeAssessment,
+    };
+    persistPracticeLedger([ledgerEntry]);
+
+    render(<App />);
+
+    const evidenceClaim = screen
+      .getByRole("heading", { name: eventDisciplineEurGbpV1.id })
+      .closest("article");
+    expect(evidenceClaim).not.toBeNull();
+    expect(within(evidenceClaim!).getByText("100/100")).toBeInTheDocument();
+    expect(within(evidenceClaim!).getByText("1 source-reviewed scenario")).toBeInTheDocument();
+
+    const foundationTrack = screen
+      .getByRole("heading", { name: "Decision Foundations" })
+      .closest("article");
+    expect(foundationTrack).not.toBeNull();
+    expect(within(foundationTrack!).getByText("1/1")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Export practice archive" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clear history" })).toBeInTheDocument();
+    expect(screen.getByText("No full replay reports are stored.")).toBeInTheDocument();
+  });
+
   it("keeps a fresh user in the library until a replay is deliberately started", () => {
     render(<App />);
 
@@ -234,6 +374,145 @@ describe("App scenario library journey", () => {
     );
   });
 
+  it("rejects oversized practice archives and session backups before reading them", async () => {
+    render(<App />);
+    const oversizedArchive = {
+      name: "oversized-practice-archive.json",
+      size: 25 * 1024 * 1024 + 1,
+      text: vi.fn(),
+    } as unknown as File;
+    const oversizedSession = {
+      name: "oversized-session.json",
+      size: 25 * 1024 * 1024 + 1,
+      text: vi.fn(),
+    } as unknown as File;
+
+    fireEvent.change(screen.getByLabelText("Import practice archive JSON"), {
+      target: { files: [oversizedArchive] },
+    });
+    expect(
+      await screen.findByText("Practice archive is larger than the 25 MB import limit."),
+    ).toBeInTheDocument();
+    expect(oversizedArchive.text).not.toHaveBeenCalled();
+
+    fireEvent.change(
+      screen.getByLabelText("Restore Market Time Machine session backup"),
+      { target: { files: [oversizedSession] } },
+    );
+    expect(
+      await screen.findByText("Session file is larger than the 25 MB restore limit."),
+    ).toBeInTheDocument();
+    expect(oversizedSession.text).not.toHaveBeenCalled();
+  });
+
+  it("imports a valid practice archive through the library as one operation", async () => {
+    useSessionStore.getState().finish();
+    const report = useSessionStore.getState().report!;
+    const memory = new Map<string, string>();
+    const isolatedStorage = {
+      getItem: (key: string) => memory.get(key) ?? null,
+      setItem: (key: string, value: string) => memory.set(key, value),
+      removeItem: (key: string) => memory.delete(key),
+    };
+    const archived = recordCompletedRun(
+      {
+        report,
+        runInstanceId: "archive-app-run",
+        mode: "explorer",
+        brokerMode: "scenario",
+        completedAt: "2026-07-14T12:00:00.000Z",
+      },
+      isolatedStorage,
+    ).run;
+    const serialized = exportPracticeArchive(
+      [archived],
+      [derivePracticeLedgerEntry(archived)],
+      "2026-07-14T12:30:00.000Z",
+    );
+    useSessionStore.getState().resetScenario();
+    window.localStorage.clear();
+    render(<App />);
+
+    const file = {
+      name: "practice-archive.json",
+      size: serialized.length,
+      text: vi.fn().mockResolvedValue(serialized),
+    } as unknown as File;
+    fireEvent.change(screen.getByLabelText("Import practice archive JSON"), {
+      target: { files: [file] },
+    });
+
+    expect(
+      await screen.findByText(
+        "Imported 1 report and 1 compact evidence entry.",
+      ),
+    ).toBeInTheDocument();
+    expect(window.localStorage.getItem("market-time-machine.run-history.v1"))
+      .toContain("archive-app-run");
+    expect(window.localStorage.getItem("market-time-machine.practice-ledger.v1"))
+      .toContain("archive-app-run");
+    expect(
+      screen.getByRole("button", { name: "Export practice archive" }),
+    ).toBeInTheDocument();
+  });
+
+  it("imports an authored drill, discovers it in the library, and starts it", async () => {
+    const source = getScenario("qqq-rate-hike-2022")!;
+    const authoredScenario = {
+      ...source,
+      meta: {
+        ...source.meta,
+        id: "app-authored-drill-scenario",
+        title: "App Authored Drill Scenario",
+      },
+      drills: [
+        {
+          ...eventDisciplineQqqV1,
+          id: "app-authored-event-discipline-v1",
+          competencyId: "app-authored-event-discipline",
+          title: "App Authored Event Discipline",
+          scenarioId: "app-authored-drill-scenario",
+        },
+      ],
+    };
+    const serialized = JSON.stringify(authoredScenario);
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Import scenario package JSON"), {
+      target: {
+        files: [
+          {
+            name: "authored-scenario.json",
+            size: serialized.length,
+            text: vi.fn().mockResolvedValue(serialized),
+          } as unknown as File,
+        ],
+      },
+    });
+
+    await screen.findByRole("button", {
+      name: "Choose App Authored Drill Scenario",
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Choose App Authored Drill Scenario",
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /App Authored Event Discipline/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start guided drill" }));
+
+    expect(useSessionStore.getState()).toMatchObject({
+      activeDrillId: "app-authored-event-discipline-v1",
+      scenario: { meta: { id: "app-authored-drill-scenario" } },
+    });
+    expect(screen.getByText("Active drill")).toBeInTheDocument();
+    expect(screen.getByText("App Authored Event Discipline")).toBeInTheDocument();
+    useSessionStore.getState().selectScenario("eurgbp-brexit-2016");
+    removeUserScenario("app-authored-drill-scenario");
+  });
+
   it("explains malformed and incomplete scenario packages", async () => {
     render(<App />);
     const input = screen.getByLabelText("Import scenario package JSON");
@@ -269,7 +548,7 @@ describe("App scenario library journey", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("button", { name: "Export history" }),
+      await screen.findByRole("button", { name: "Export practice archive" }),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
     const dialog = screen.getByRole("alertdialog", {
@@ -282,7 +561,7 @@ describe("App scenario library journey", () => {
       screen.getByRole("button", { name: "Review first practice" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Export history" }),
+      screen.queryByRole("button", { name: "Export practice archive" }),
     ).not.toBeInTheDocument();
     expect(
       window.localStorage.getItem("market-time-machine.run-history.v1"),

@@ -12,10 +12,38 @@ Minimum required parts:
 - `instruments`: at least one `Instrument` matching `meta.symbols`
 - `candles`: ISO-timestamped OHLCV candles, sorted by `closeTime`
 - `events`: market events with both `happenedAt` and `publishedAt`
+- `drills`: optional data-only practice definitions scoped to this scenario
 - `benchmarks`: optional, but recommended for post-game comparison
 - `broker`: a `BrokerConfig` describing fills, spread, fees, slippage, leverage
 
-`assembleScenario` will normalize sort order. It does not validate — call `validateScenarioPackage` from `src/domain/validation/scenario.ts` to check correctness.
+`assembleScenario` will normalize sort order. It validates and defensively copies optional authored drills because malformed drill rules must never enter a replay. Call `validateScenarioPackage` from `src/domain/validation/scenario.ts` to check the complete package.
+
+## Optional Data-Only Practice Drills
+
+A scenario package may include `drills?: DrillDefinition[]`. These are JSON-compatible definitions, not executable extensions. See the compact [event-discipline example](examples/event-discipline-drill.json).
+
+Each definition requires:
+
+- a scenario-local unique `id` and a positive integer `definitionVersion`
+- a non-empty stable `competencyId`, `rubricVersion`, title, and description
+- `scenarioId` exactly matching the containing package
+- a `primarySymbol` declared by the scenario and a `mode` supported by it
+- an initial-plan rule using only `thesis`, `invalidation`, `exitPlan`, and `acceptedRisk`
+- checkpoint mapping `next_primary_candle_close`, with `groupSameReplayIndex: true`
+- checkpoint actions containing `hold`, `reduce`, `exit`, and `wait` exactly once
+- a process rubric with `plan_coverage`, `checkpoint_coverage`, `event_linkage`, and `rule_adherence` weights summing to `1`
+- a finite `violationPenalty` from `0` through `100`
+
+Eligible events are selected by `minimumImportance` and `affectedSymbols`, then mapped from `publishedAt` to the next real close of `primarySymbol`. A definition is invalid if it produces no checkpoint or if an eligible event has no later primary-symbol close. Events mapped to the same replay index become one grouped checkpoint.
+
+Valid scenario-authored drills appear as runnable library options only with their containing scenario. A definition using a reserved built-in id cannot replace the built-in definition. Imported definitions do not enter the curated practice-track allowlist or earn track credit merely by copying a track drill id.
+
+`competencyId` groups compatible definitions in the evidence profile; use the
+same value only when they assess the same process under the same rubric. It does
+not grant track credit or make two runs trend-comparable. Trends still require
+the exact same scenario/data version, drill/definition, mode, and broker.
+
+Authoring is intentionally data-only. Custom functions, scripts, arbitrary scoring code, and a no-code drill editor are not supported; a no-code editor is a product non-goal for this schema version.
 
 ## Validation Checklist
 
@@ -31,6 +59,7 @@ Before opening a pull request, confirm:
 - Broker assumptions are realistic for the asset class (crypto vs. equities differ on fractional, leverage, hours)
 - License and data sources are declared
 - Local/professional scenarios should also declare `dataVersion`, `sourceManifest`, `generatedAt`, `priceAdjustment`, and `marketCalendarId` when those are known
+- Optional drills pass structural parsing, domain validation, scenario matching, and unique-id/version checks
 
 The validator returns errors and warnings:
 
@@ -79,6 +108,11 @@ Events outside the scenario range get a warning, not an error. Use this intentio
 ## Sample Data
 
 If your scenario uses synthetic, smoothed, or otherwise non-source-true prices (for example, the demo BTC scenario), set `meta.isSampleData = true` and explain the construction in `dataSources`. The product surface uses this flag to add a clear sample-data badge.
+
+Synthetic price paths may still use carefully sourced historical events, but
+that event provenance does not make the market series source-observed. The
+shipped practice-track catalog keeps synthetic QQQ and KRE Event Discipline
+units preview-only and non-creditable.
 
 ## Local FRED S&P 500 Import
 

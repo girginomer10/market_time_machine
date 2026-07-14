@@ -53,10 +53,23 @@ Report Engine
   -> benchmark comparison
 
 Practice Coach
-  -> completed-run evidence
-  -> deterministic next practice
-  -> local milestones
+  -> versioned drill assessment or factual baseline gap
+  -> deterministic repeat, component focus, transfer, or comparable rerun
+  -> local Practice orientation milestones
   -> versioned rubric
+
+Practice Engine
+  -> versioned drill definitions
+  -> published-event checkpoint schedule
+  -> initial-plan and checkpoint rules
+  -> process-only assessment
+
+Evidence And History
+  -> 12 bounded full reports
+  -> 250 compact factual/assessment entries
+  -> competency-and-rubric evidence claims plus exact-context trends
+  -> exact-version practice-track credit
+  -> V2 archive and V1 history migration
 
 Frontend
   -> chart
@@ -66,11 +79,14 @@ Frontend
   -> journal
   -> report
   -> practice coach
+  -> drill checkpoints and debrief
+  -> evidence profile and tracks
 ```
 
 ## Open Source Local Architecture
 
-The initial open source version can run mostly in the browser.
+The shipped open source product runs in the browser without an application
+server.
 
 ```text
 Static scenario package
@@ -78,6 +94,7 @@ Static scenario package
   -> local replay engine
   -> local broker simulation
   -> local report engine
+  -> local practice assessment and evidence ledger
   -> React app
 ```
 
@@ -185,6 +202,40 @@ Responsibilities:
 - Analyze journal consistency
 - Produce shareable summaries
 
+### Practice Service
+
+Responsibilities:
+
+- Validate versioned drill definitions against the selected scenario
+- Map eligible events by `publishedAt` to the next primary-symbol candle close
+- Enforce required initial-plan fields and unresolved checkpoint stops
+- Capture Hold, Reduce, Exit, or Wait responses and local rule violations
+- Produce process-only drill assessments without using return as skill evidence
+
+The shipped UI combines curated built-ins with valid scenario-authored
+definitions discovered from the currently available scenario packages. Authored
+definitions are scenario-scoped, cannot replace reserved built-in ids, and do
+not mutate the separately curated practice-track catalog.
+
+### Evidence And History Service
+
+Responsibilities:
+
+- Keep stable run-instance identity across save/restore
+- Pin practice sessions to scenario data plus competency/definition/rubric
+  identity and reject restore-time drift
+- Retain at most 12 recent full reports and 250 compact ledger entries
+- Strip raw journal, plan, checkpoint-response, and reflection text from compact
+  evidence
+- Group compatible evidence by stable competency id and rubric while retaining
+  every represented drill id and definition version
+- Compare trends only across matching scenario/data version, drill/definition,
+  rubric, mode, and broker context
+- Award track credit only to exact curated unit references in one qualifying
+  attempt
+- Deep-validate and deterministically merge V2 practice archives, persist both
+  history layers with rollback, and migrate V1 exports as factual unassessed data
+
 ## Suggested Frontend Structure
 
 ```text
@@ -200,21 +251,26 @@ src/
     journal/
     report/
     scenario/
+    practice/
+  data/
+    practice/
+    scenarios/
   domain/
     replay/
-    simulation/
+    broker/
     portfolio/
     analytics/
-    data/
+    report/
+    practice/
+    history/
   store/
-    replayStore.ts
-    portfolioStore.ts
-    scenarioStore.ts
+    sessionStore.ts
   types/
     market.ts
     scenario.ts
     trading.ts
     reporting.ts
+    practice.ts
 ```
 
 ## Suggested Backend Structure
@@ -240,6 +296,18 @@ services/
 ```
 
 ## Data Stores
+
+The shipped local product does not require a database. It uses browser
+`localStorage` for the active session, imported scenarios, bounded completed-run
+history, and the compact practice ledger. Static application and shipped
+scenario assets use browser Cache Storage. User-controlled JSON files provide
+session and practice-archive portability.
+
+The ledger is intentionally not a second full report store. It contains compact
+facts and optional validated assessments, while sensitive free text remains in
+the active session or recent full report where applicable.
+
+### Future Hosted Stores
 
 Recommended long-term stores:
 

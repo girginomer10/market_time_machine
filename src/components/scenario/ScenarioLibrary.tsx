@@ -4,12 +4,22 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { replayTimeline } from "../../domain/replay/engine";
 import type { PracticeCoachPlan } from "../../domain/coaching/practiceCoach";
-import PracticeCoach from "../coaching/PracticeCoach";
+import type { PracticeEvidenceProfile } from "../../domain/practice/evidenceProfile";
 import type {
+  PracticeTrack,
+  PracticeTrackProgress,
+  PracticeTrackUnit,
+} from "../../domain/practice/tracks";
+import PracticeCoach from "../coaching/PracticeCoach";
+import EvidenceProfile from "../practice/EvidenceProfile";
+import PracticeTracks from "../practice/PracticeTracks";
+import type {
+  DrillDefinition,
   ReplayStatus,
   ScenarioMode,
   ScenarioPackage,
@@ -26,16 +36,25 @@ type Props = {
   activeMode: ScenarioMode;
   activeStatus: ReplayStatus;
   activeProgressPct: number;
+  activeDrillId?: string;
   hasActiveSession: boolean;
   hideActiveIdentity?: boolean;
   history?: ReactNode;
   practicePlan?: PracticeCoachPlan;
+  drills?: DrillDefinition[];
+  evidenceProfile?: PracticeEvidenceProfile;
+  practiceTracks?: PracticeTrack[];
+  practiceTrackProgress?: PracticeTrackProgress[];
   sessionMessage?: string;
   scenarioMessage?: string;
   scenarioMessageKind?: "status" | "error";
   userScenarioIds: string[];
   onContinue: () => void;
-  onStart: (scenarioId: string, mode: ScenarioMode) => void;
+  onStart: (
+    scenarioId: string,
+    mode: ScenarioMode,
+    drillId?: string,
+  ) => void;
   onClose?: () => void;
   onExport: () => void;
   onRestore: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -51,10 +70,15 @@ export default function ScenarioLibrary({
   activeMode,
   activeStatus,
   activeProgressPct,
+  activeDrillId,
   hasActiveSession,
   hideActiveIdentity = false,
   history,
   practicePlan,
+  drills = [],
+  evidenceProfile,
+  practiceTracks = [],
+  practiceTrackProgress = [],
   sessionMessage,
   scenarioMessage,
   scenarioMessageKind = "status",
@@ -75,10 +99,18 @@ export default function ScenarioLibrary({
   const [selectedMode, setSelectedMode] = useState<ScenarioMode>(
     supportedMode(activeScenario, activeMode),
   );
+  const [selectedDrillId, setSelectedDrillId] = useState<string | undefined>(
+    activeDrillId,
+  );
+  const [preparedTrackUnit, setPreparedTrackUnit] =
+    useState<PracticeTrackUnit>();
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
   const scenarioInputRef = useRef<HTMLInputElement | null>(null);
   const titleRef = useRef<HTMLHeadingElement | null>(null);
   const briefingTitleRef = useRef<HTMLHeadingElement | null>(null);
+  const modeButtonRefs = useRef<
+    Partial<Record<ScenarioMode, HTMLButtonElement | null>>
+  >({});
   const userScenarioIdSet = useMemo(
     () => new Set(userScenarioIds),
     [userScenarioIds],
@@ -87,7 +119,11 @@ export default function ScenarioLibrary({
   useEffect(() => {
     setSelectedScenarioId(activeScenario.meta.id);
     setSelectedMode(supportedMode(activeScenario, activeMode));
-  }, [activeMode, activeScenario]);
+    setSelectedDrillId(
+      activeDrillId,
+    );
+    setPreparedTrackUnit(undefined);
+  }, [activeDrillId, activeMode, activeScenario]);
 
   useEffect(() => {
     titleRef.current?.focus();
@@ -100,10 +136,32 @@ export default function ScenarioLibrary({
       activeScenario,
     [activeScenario, scenarios, selectedScenarioId],
   );
+  const scenarioDrills = useMemo(
+    () =>
+      drills.filter(
+        (definition) => definition.scenarioId === selectedScenario.meta.id,
+      ),
+    [drills, selectedScenario.meta.id],
+  );
+  const selectedDrill = scenarioDrills.find(
+    (definition) => definition.id === selectedDrillId,
+  );
 
   function chooseScenario(candidate: ScenarioPackage): void {
     setSelectedScenarioId(candidate.meta.id);
+    setSelectedDrillId(undefined);
+    setPreparedTrackUnit(undefined);
     setSelectedMode(supportedMode(candidate, selectedMode));
+  }
+
+  function focusBriefing(): void {
+    window.requestAnimationFrame(() => {
+      briefingTitleRef.current?.focus();
+      briefingTitleRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
   }
 
   function preparePractice(plan: PracticeCoachPlan): void {
@@ -112,14 +170,64 @@ export default function ScenarioLibrary({
     );
     if (!candidate) return;
     setSelectedScenarioId(candidate.meta.id);
-    setSelectedMode(supportedMode(candidate, plan.mode));
-    window.requestAnimationFrame(() => {
-      briefingTitleRef.current?.focus();
-      briefingTitleRef.current?.scrollIntoView?.({
-        behavior: "smooth",
-        block: "start",
-      });
-    });
+    setSelectedDrillId(plan.drillId);
+    setPreparedTrackUnit(undefined);
+    setSelectedMode(plan.mode);
+    focusBriefing();
+  }
+
+  function prepareTrackUnit(unit: PracticeTrackUnit): void {
+    const candidate = scenarios.find(
+      (scenario) => scenario.meta.id === unit.scenario.id,
+    );
+    const definition = drills.find(
+      (drill) =>
+        drill.id === unit.drill.id &&
+        drill.scenarioId === unit.scenario.id &&
+        drill.definitionVersion === unit.drill.definitionVersion &&
+        drill.rubricVersion === unit.drill.rubricVersion &&
+        drill.mode === unit.drill.mode,
+    );
+    if (!candidate || !definition) return;
+    setSelectedScenarioId(candidate.meta.id);
+    setSelectedDrillId(definition.id);
+    setSelectedMode(definition.mode);
+    setPreparedTrackUnit(unit);
+    focusBriefing();
+  }
+
+  function handleModeKeyDown(
+    event: KeyboardEvent<HTMLButtonElement>,
+    currentMode: ScenarioMode,
+  ): void {
+    const modes = selectedScenario.meta.supportedModes;
+    const currentIndex = modes.indexOf(currentMode);
+    if (currentIndex < 0 || modes.length === 0) return;
+
+    let nextIndex: number | undefined;
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        nextIndex = (currentIndex + 1) % modes.length;
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        nextIndex = (currentIndex - 1 + modes.length) % modes.length;
+        break;
+      case "Home":
+        nextIndex = 0;
+        break;
+      case "End":
+        nextIndex = modes.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    const nextMode = modes[nextIndex];
+    setSelectedMode(nextMode);
+    modeButtonRefs.current[nextMode]?.focus();
   }
 
   const activeTitle = hideActiveIdentity
@@ -223,6 +331,16 @@ export default function ScenarioLibrary({
             plan={practicePlan}
             onPrepare={() => preparePractice(practicePlan)}
             onViewSource={onViewPracticeSource}
+          />
+        ) : null}
+
+        {evidenceProfile ? <EvidenceProfile profile={evidenceProfile} /> : null}
+
+        {practiceTracks.length > 0 ? (
+          <PracticeTracks
+            tracks={practiceTracks}
+            progress={practiceTrackProgress}
+            onPrepareUnit={prepareTrackUnit}
           />
         ) : null}
 
@@ -378,17 +496,74 @@ export default function ScenarioLibrary({
                 </span>
               </div>
             ) : null}
+            {preparedTrackUnit?.status === "preview" ? (
+              <div className="sample-warning" role="note">
+                <strong>Preview practice · No completion credit</strong>
+                <span>
+                  This unit rehearses the guided process, but it cannot award
+                  unit or track completion credit. Its market path uses
+                  synthetic sample data.
+                </span>
+              </div>
+            ) : null}
           </div>
 
           <div className="mode-briefing">
             <span className="library-step">Step 3</span>
+            <h3>Choose the practice format</h3>
+            <div className="library-practice-options">
+              {scenarioDrills.map((definition) => (
+                <button
+                  className={
+                    definition.id === selectedDrill?.id
+                      ? "library-practice-option active"
+                      : "library-practice-option"
+                  }
+                  type="button"
+                  key={definition.id}
+                  aria-pressed={definition.id === selectedDrill?.id}
+                  onClick={() => {
+                    setSelectedDrillId(definition.id);
+                    setPreparedTrackUnit(undefined);
+                    setSelectedMode(definition.mode);
+                  }}
+                >
+                  <strong>{definition.title}</strong>
+                  <span>{definition.description}</span>
+                  <small>
+                    Version {definition.definitionVersion} · rubric {definition.rubricVersion}
+                  </small>
+                </button>
+              ))}
+              <button
+                className={
+                  selectedDrill ? "library-practice-option" : "library-practice-option active"
+                }
+                type="button"
+                aria-pressed={!selectedDrill}
+                onClick={() => {
+                  setSelectedDrillId(undefined);
+                  setPreparedTrackUnit(undefined);
+                }}
+              >
+                <strong>Free replay</strong>
+                <span>
+                  Use the simulator without mandatory process checkpoints.
+                </span>
+                <small>Report evidence only; no drill observation</small>
+              </button>
+            </div>
+            <span className="library-step">Step 4</span>
             <h3>Choose how much context you want</h3>
             <div
               className="library-mode-grid"
               role="radiogroup"
               aria-label="Learning mode"
             >
-              {selectedScenario.meta.supportedModes.map((candidateMode) => (
+              {(selectedDrill
+                ? [selectedDrill.mode]
+                : selectedScenario.meta.supportedModes
+              ).map((candidateMode) => (
                 <button
                   key={candidateMode}
                   className={
@@ -399,7 +574,14 @@ export default function ScenarioLibrary({
                   type="button"
                   role="radio"
                   aria-checked={candidateMode === selectedMode}
+                  tabIndex={candidateMode === selectedMode ? 0 : -1}
+                  ref={(element) => {
+                    modeButtonRefs.current[candidateMode] = element;
+                  }}
                   onClick={() => setSelectedMode(candidateMode)}
+                  onKeyDown={(event) =>
+                    handleModeKeyDown(event, candidateMode)
+                  }
                 >
                   <span>{scenarioModeLabel(candidateMode)}</span>
                   <small>{scenarioModeDescription(candidateMode)}</small>
@@ -409,9 +591,19 @@ export default function ScenarioLibrary({
             <button
               className="btn primary library-start"
               type="button"
-              onClick={() => onStart(selectedScenario.meta.id, selectedMode)}
+              onClick={() =>
+                selectedDrill
+                  ? onStart(
+                      selectedScenario.meta.id,
+                      selectedDrill.mode,
+                      selectedDrill.id,
+                    )
+                  : onStart(selectedScenario.meta.id, selectedMode)
+              }
             >
-              Start {scenarioModeLabel(selectedMode)} replay
+              {selectedDrill
+                ? "Start guided drill"
+                : `Start ${scenarioModeLabel(selectedMode)} replay`}
             </button>
             {hasActiveSession ? (
               <p className="start-replacement-note">
@@ -429,10 +621,11 @@ export default function ScenarioLibrary({
         <section className="library-session-tools" aria-labelledby="session-tools-title">
           <div>
             <span className="library-step">Local backup</span>
-            <h2 id="session-tools-title">Move a session between browsers</h2>
+            <h2 id="session-tools-title">Back up or restore this replay</h2>
             <p>
-              Export creates a JSON backup. Restore validates a backup before it
-              changes the active replay.
+              Export creates a version-pinned JSON backup. Restore requires the
+              exact same scenario data and drill definition; for an imported lab,
+              import its scenario package in the other browser first.
             </p>
           </div>
           <div className="library-session-actions">

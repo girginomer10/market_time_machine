@@ -1,8 +1,9 @@
 # Roadmap
 
-This roadmap separates the shipped Local Lab v1 product from optional hosted
-platform expansion. Local Lab v1 is complete as a single-user, local-first
-product; later phases do not block that release.
+This roadmap separates the shipped local-first product from optional hosted
+platform expansion. Local Lab v1 supplies the replay foundation and Personal
+Decision Gym v2 supplies the deliberate-practice layer; later phases do not
+block either local release.
 
 ## Release Status
 
@@ -16,6 +17,19 @@ Shipped in Local Lab v1:
 - Session backup/restore and validated browser scenario-package import
 - Installable offline PWA, CI release gate, and manual static deployment
 
+Shipped in Personal Decision Gym v2:
+
+- Local Practice Coach and report-to-next-practice handoff
+- Versioned Event Discipline drills with initial-plan enforcement, visible-event
+  checkpoints, explicit process decisions, and a process-only rubric
+- Two source-reviewed ECB reference-rate scenarios for credit-bearing units
+- Compact 250-entry practice ledger and versioned evidence profile
+- Decision Foundations and Event Pressure Transfer tracks with exact-version,
+  same-attempt credit rules
+- Preview-only synthetic QQQ/KRE practice units that cannot award credit
+- V2 practice archive export/import with V1 run-history migration
+- Validated scenario-package drill-definition authoring surface
+
 Future hosted platform work:
 
 - Accounts and cross-device sync
@@ -23,31 +37,47 @@ Future hosted platform work:
 - Educator/team cohorts and managed assignments
 - Managed market-data services, payments, and broker connectivity
 
-## V2: Personal Decision Gym — In Progress
+## V2: Personal Decision Gym — Shipped
 
 Goal:
 
 Turn completed replays into a local, evidence-backed deliberate-practice loop.
 
-Started in the V2 preview:
+Shipped in `0.3.0`:
 
 - Local Practice Coach on the scenario-library home
-- First-run baseline assignment
-- Latest-report evidence translated into one focused next practice
+- First-run versioned drill baseline assignment
+- Latest drill assessment translated into an incomplete-attempt retry, weakest
+  measured component, cross-regime transfer, or comparable rerun
+- Generic report recommendations kept separate from measured drill evidence
 - Supported current/target measures instead of invented skill claims
-- Decision Foundations milestones derived from existing local history
+- Practice orientation milestones derived from existing local history and kept
+  separate from the Decision Foundations credit track
 - Report-to-coach handoff and safe briefing preparation
 - Versioned `practice-coach-v1` rubric label
+- EUR/GBP, EUR/USD, QQQ, and KRE Event Discipline definitions
+- Process-only assessment with plan, checkpoint, event-link, and rule evidence
+- Compact factual/assessment ledger, confidence-aware evidence claims, and
+  comparable-context trends
+- Open Decision Foundations and Event Pressure Transfer tracks
+- Preview Volatility Discipline track whose synthetic units award no credit
+- Deep-validated, atomic V2 practice archive with deterministic merge, storage
+  rollback, and V1 migration
+- Exact scenario-data and drill-definition identity for active practice backups
+- Scenario-package drill-definition parsing, validation, and scenario-scoped
+  runtime discovery; track credit remains separately curated
 
-Next increments:
+Potential local follow-ons:
 
-1. EUR/GBP Event Discipline drill with plan requirements and event checkpoints
-2. Drill-specific process scoring and targeted retry comparison
-3. Versioned local evidence observations with confidence and trend
-4. A compact long-horizon practice ledger and export migration
-5. Validated practice tracks across multiple source-reviewed scenarios
+1. Add more redistribution-safe source scenarios and reviewed track units.
+2. Expand the curated drill taxonomy beyond Event Discipline.
+3. Define a reviewed admission path before authored scenario drills can enter
+   credit-bearing tracks; valid authored drills are already runnable with their
+   containing scenario.
+4. Test onboarding and repeat-practice behavior through opt-in research; the app
+   has no telemetry collector and does not claim measured retention.
 
-Success criteria and non-goals are defined in
+Evidence boundaries and non-goals are defined in
 [V2 Product Definition](v2-personal-decision-gym.md). Hosted accounts,
 leaderboards, teams, and anti-cheat remain later platform work rather than V2
 local-product prerequisites.
@@ -186,7 +216,9 @@ Deliverables:
 - Scenario preview page
 - Scenario quality checklist
 - Validated browser import for complete scenario-package JSON
-- Reproducible ECB and local licensed-data import scripts
+- Reproducible EUR/GBP and EUR/USD ECB importers plus local licensed-data import
+  scripts
+- Validated scenario-scoped drill definitions with reserved built-in protection
 
 Success criteria:
 

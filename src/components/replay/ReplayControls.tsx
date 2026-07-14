@@ -14,6 +14,10 @@ export default function ReplayControls({ onRequestReset }: Props) {
   const currentIndex = useSessionStore((s) => s.currentIndex);
   const total = useSessionStore((s) => s.primaryCandlesLength);
   const mode = useSessionStore((s) => s.mode);
+  const activeDrillId = useSessionStore((s) => s.activeDrillId);
+  const pendingDrillCheckpoint = useSessionStore(
+    (s) => s.pendingDrillCheckpoint,
+  );
   const play = useSessionStore((s) => s.play);
   const pause = useSessionStore((s) => s.pause);
   const stepForward = useSessionStore((s) => s.stepForward);
@@ -53,7 +57,7 @@ export default function ReplayControls({ onRequestReset }: Props) {
         <button
           className="btn primary"
           onClick={play}
-          disabled={isFinished}
+          disabled={isFinished || Boolean(pendingDrillCheckpoint)}
           aria-label="Play replay"
         >
           Play
@@ -62,7 +66,7 @@ export default function ReplayControls({ onRequestReset }: Props) {
       <button
         className="btn"
         onClick={stepForward}
-        disabled={isFinished}
+        disabled={isFinished || Boolean(pendingDrillCheckpoint)}
         aria-label="Step forward one candle"
       >
         Step ▶
@@ -83,7 +87,9 @@ export default function ReplayControls({ onRequestReset }: Props) {
         className="firewall-badge"
         title={
           mode === "explorer"
-            ? "Pause when a newly published high-importance event becomes visible"
+            ? activeDrillId
+              ? "The active drill requires its own event checkpoints"
+              : "Pause when a newly published high-importance event becomes visible"
             : "Major-event auto-pause is locked outside Explorer mode"
         }
       >
@@ -91,7 +97,7 @@ export default function ReplayControls({ onRequestReset }: Props) {
           type="checkbox"
           checked={pauseOnMajorEvents}
           onChange={(event) => setPauseOnMajorEvents(event.target.checked)}
-          disabled={mode !== "explorer" || isFinished}
+          disabled={mode !== "explorer" || isFinished || Boolean(activeDrillId)}
           aria-label="Auto-pause on major events"
         />
         Major-event pause
@@ -109,9 +115,11 @@ export default function ReplayControls({ onRequestReset }: Props) {
       <button
         className="btn"
         onClick={finish}
-        disabled={isFinished || restrictedReplay}
+        disabled={isFinished || restrictedReplay || Boolean(activeDrillId)}
         title={
-          restrictedReplay
+          activeDrillId
+            ? "Complete every practice checkpoint in replay order"
+            : restrictedReplay
             ? "Complete the local challenge to reveal the report"
             : "Skip to end and reveal the report"
         }

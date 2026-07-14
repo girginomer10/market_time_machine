@@ -99,6 +99,7 @@ export default function TradePanel({
   const broker = useSessionStore((s) => s.broker);
   const brokerMode = useSessionStore((s) => s.brokerMode);
   const scenarioMode = useSessionStore((s) => s.mode);
+  const activeDrillId = useSessionStore((s) => s.activeDrillId);
   const setBrokerMode = useSessionStore((s) => s.setBrokerMode);
   const fills = useSessionStore((s) => s.fills);
   const orders = useSessionStore((s) => s.orders);
@@ -154,7 +155,7 @@ export default function TradePanel({
       ),
     [currentReplayTime, scenarioEvents],
   );
-  const seriousDecisionMode = scenarioMode !== "explorer";
+  const seriousDecisionMode = scenarioMode !== "explorer" || Boolean(activeDrillId);
   const position = positionsBySymbol[symbol];
   const heldQty = position?.quantity ?? 0;
   const marketPrice = tradablePrice?.price ?? position?.marketPrice;

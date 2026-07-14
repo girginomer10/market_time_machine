@@ -22,7 +22,7 @@ export default function PracticeCoach({
       <header className="practice-coach-head">
         <div>
           <span className="practice-coach-eyebrow">
-            V2 preview · Personal Decision Gym
+            Personal Decision Gym v2
           </span>
           <h2 id="practice-coach-title">
             {plan.kind === "first_run" ? "Today’s practice" : "Next practice"}
@@ -52,6 +52,7 @@ export default function PracticeCoach({
           <p>{plan.objective}</p>
           <div className="practice-scenario">
             <strong>{plan.scenarioTitle}</strong>
+            <span>{plan.drillTitle}</span>
             <span>{scenarioModeLabel(plan.mode)} mode</span>
           </div>
           <ol className="practice-steps" aria-label="Practice loop">
@@ -101,7 +102,10 @@ export default function PracticeCoach({
       </div>
 
       <div className="practice-coach-foot">
-        <ol className="practice-milestones" aria-label="Foundation milestones">
+        <ol
+          className="practice-milestones"
+          aria-label="Practice orientation milestones"
+        >
           {plan.milestones.map((milestone) => (
             <li className={milestone.complete ? "complete" : "pending"} key={milestone.id}>
               <span aria-hidden="true">{milestone.complete ? "✓" : "○"}</span>

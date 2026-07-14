@@ -4,6 +4,11 @@ import type {
   BrokerConfig,
   CorporateAction,
   DecisionPlan,
+  DrillCheckpoint,
+  DrillCheckpointAction,
+  DrillCheckpointResponse,
+  DrillDefinition,
+  DrillRuleViolation,
   Fill,
   JournalEntry,
   MarginSnapshot,
@@ -63,17 +68,40 @@ import {
   positionsGrossNotional,
 } from "../domain/broker/margin";
 import { buildReport } from "../domain/report/report";
-import type { ReportPayload } from "../types/reporting";
+import {
+  PRACTICE_DRILL_REFLECTION_MAX_LENGTH,
+  type PracticeDrillReportSnapshot,
+  type ReportPayload,
+} from "../types/reporting";
+import { getDrillForScenario } from "../data/practice/drills";
+import {
+  assessDrill,
+  buildDrillCheckpointSchedule,
+  nextDrillCheckpoint,
+  validateDrillCheckpointResponse,
+  validateDrillDefinition,
+} from "../domain/practice/drills";
+import { parseScenarioDrillDefinitions } from "../domain/practice/drillAuthoring";
 
 const DEFAULT_SPEED = REPLAY_SPEEDS[1];
-const SESSION_STORAGE_KEY = "market-time-machine.session.v1";
-const SESSION_STORAGE_VERSION = 1;
+export const SESSION_STORAGE_KEY = "market-time-machine.session.v2";
+export const LEGACY_SESSION_STORAGE_KEY = "market-time-machine.session.v1";
+const SESSION_STORAGE_VERSION = 3;
 export type BrokerMode = "scenario" | BrokerPresetName;
 
 export type MajorEventPauseNotice = {
   eventId: string;
   title: string;
   publishedAt: string;
+};
+
+export type ActiveDrillSessionIdentity = {
+  scenarioDataVersion: string | null;
+  drillId: string;
+  competencyId: string;
+  definitionVersion: number;
+  rubricVersion: string;
+  definitionSnapshot: DrillDefinition;
 };
 
 export type BracketOrderRequest = {
@@ -90,6 +118,7 @@ export type BracketOrderRequest = {
 type FinancingCostEvent = { time: string; amount: number };
 
 export type SessionState = {
+  runInstanceId: string;
   scenario: ScenarioPackage;
   mode: ScenarioMode;
   broker: BrokerConfig;
@@ -114,10 +143,21 @@ export type SessionState = {
   financingCosts: FinancingCostEvent[];
   pauseOnMajorEvents: boolean;
   majorEventPauseNotice?: MajorEventPauseNotice;
+  activeDrillId?: string;
+  activeDrillDefinitionVersion?: number;
+  activeDrillIdentity?: ActiveDrillSessionIdentity;
+  initialDrillPlan?: DecisionPlan;
+  drillCheckpointResponses: DrillCheckpointResponse[];
+  pendingDrillCheckpoint?: DrillCheckpoint;
+  drillRuleViolations: DrillRuleViolation[];
 };
 
 type SessionActions = {
   selectScenario: (id: string) => void;
+  startPractice: (
+    scenarioId: string,
+    drillId: string,
+  ) => { ok: boolean; message?: string };
   resetScenario: () => void;
   play: () => void;
   pause: () => void;
@@ -127,6 +167,10 @@ type SessionActions = {
   setScenarioMode: (mode: ScenarioMode) => void;
   setBrokerMode: (mode: BrokerMode) => void;
   finish: () => void;
+  submitDrillCheckpoint: (
+    action: DrillCheckpointAction,
+    reflection: string,
+  ) => { ok: boolean; message?: string };
   submitMarketOrder: (req: OrderRequest) => { ok: boolean; message?: string };
   submitLimitOrder: (req: LimitOrderRequest) => { ok: boolean; message?: string };
   submitPendingOrder: (req: PendingOrderRequest) => { ok: boolean; message?: string };
@@ -150,15 +194,20 @@ type SessionActions = {
 
 export type SessionStore = SessionState & SessionActions;
 
-function buildInitialState(scenarioId: string): SessionState {
+function buildInitialState(scenarioId: string, drillId?: string): SessionState {
   const scenario = getScenario(scenarioId);
   if (!scenario) {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
   const primarySymbol = scenario.meta.symbols[0];
   const timeline = replayTimeline(scenario);
-  const mode = scenario.meta.supportedModes[0] ?? "explorer";
+  const drill = drillId ? getDrillForScenario(drillId, scenario) : undefined;
+  if (drillId && (!drill || !validateDrillDefinition(drill, scenario).valid)) {
+    throw new Error(`Practice drill is not available for scenario: ${drillId}`);
+  }
+  const mode = drill?.mode ?? scenario.meta.supportedModes[0] ?? "explorer";
   return {
+    runInstanceId: generateRunInstanceId(),
     scenario,
     mode,
     broker: { ...scenario.broker },
@@ -173,6 +222,8 @@ function buildInitialState(scenarioId: string): SessionState {
     auditEvents: [],
     margin: undefined,
     risk: undefined,
+    rejectionMessage: undefined,
+    report: undefined,
     primarySymbol,
     // Kept for selector compatibility; replay progress now spans all symbols.
     primaryCandlesLength: timeline.length,
@@ -182,12 +233,23 @@ function buildInitialState(scenarioId: string): SessionState {
     financingCosts: [],
     pauseOnMajorEvents: mode === "explorer",
     majorEventPauseNotice: undefined,
+    activeDrillId: drill?.id,
+    activeDrillDefinitionVersion: drill?.definitionVersion,
+    activeDrillIdentity: drill
+      ? activeDrillIdentityFor(drill, scenario.meta.dataVersion ?? null)
+      : undefined,
+    initialDrillPlan: undefined,
+    drillCheckpointResponses: [],
+    pendingDrillCheckpoint: undefined,
+    drillRuleViolations: [],
   };
 }
 
 type PersistedSession = {
   version: number;
+  runInstanceId: string;
   scenarioId: string;
+  scenarioDataVersion: string | null;
   mode: ScenarioMode;
   broker: BrokerConfig;
   brokerMode: BrokerMode;
@@ -205,12 +267,24 @@ type PersistedSession = {
   liquidityConsumed: Record<string, number>;
   financingCosts: FinancingCostEvent[];
   pauseOnMajorEvents?: boolean;
+  activeDrillId?: string;
+  activeDrillDefinitionVersion?: number;
+  activeDrillIdentity?: ActiveDrillSessionIdentity;
+  initialDrillPlan?: DecisionPlan;
+  drillCheckpointResponses?: DrillCheckpointResponse[];
+  pendingDrillCheckpointId?: string;
+  drillRuleViolations?: DrillRuleViolation[];
 };
 
 function persistedSessionFor(state: SessionState): PersistedSession {
   return {
     version: SESSION_STORAGE_VERSION,
+    runInstanceId: state.runInstanceId,
     scenarioId: state.scenario.meta.id,
+    scenarioDataVersion:
+      state.activeDrillIdentity?.scenarioDataVersion ??
+      state.scenario.meta.dataVersion ??
+      null,
     mode: state.mode,
     broker: state.broker,
     brokerMode: state.brokerMode,
@@ -228,6 +302,15 @@ function persistedSessionFor(state: SessionState): PersistedSession {
     liquidityConsumed: state.liquidityConsumed,
     financingCosts: state.financingCosts,
     pauseOnMajorEvents: state.pauseOnMajorEvents,
+    activeDrillId: state.activeDrillId,
+    activeDrillDefinitionVersion: state.activeDrillDefinitionVersion,
+    activeDrillIdentity: state.activeDrillIdentity
+      ? copyActiveDrillIdentity(state.activeDrillIdentity)
+      : undefined,
+    initialDrillPlan: state.initialDrillPlan,
+    drillCheckpointResponses: state.drillCheckpointResponses,
+    pendingDrillCheckpointId: state.pendingDrillCheckpoint?.id,
+    drillRuleViolations: state.drillRuleViolations,
   };
 }
 
@@ -239,8 +322,145 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function stableHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function copyDrillDefinition(definition: DrillDefinition): DrillDefinition {
+  return {
+    id: definition.id,
+    competencyId: definition.competencyId,
+    definitionVersion: definition.definitionVersion,
+    rubricVersion: definition.rubricVersion,
+    title: definition.title,
+    description: definition.description,
+    scenarioId: definition.scenarioId,
+    primarySymbol: definition.primarySymbol,
+    mode: definition.mode,
+    initialPlanRule: {
+      requiredBeforeFirstOrder:
+        definition.initialPlanRule.requiredBeforeFirstOrder,
+      requiredFields: [...definition.initialPlanRule.requiredFields],
+    },
+    checkpointRule: {
+      minimumImportance: definition.checkpointRule.minimumImportance,
+      mapping: definition.checkpointRule.mapping,
+      groupSameReplayIndex: definition.checkpointRule.groupSameReplayIndex,
+      requireReflection: definition.checkpointRule.requireReflection,
+      actions: [...definition.checkpointRule.actions],
+    },
+    rubric: {
+      weights: { ...definition.rubric.weights },
+      violationPenalty: definition.rubric.violationPenalty,
+    },
+  };
+}
+
+function activeDrillIdentityFor(
+  definition: DrillDefinition,
+  scenarioDataVersion: string | null,
+): ActiveDrillSessionIdentity {
+  return {
+    scenarioDataVersion,
+    drillId: definition.id,
+    competencyId: definition.competencyId,
+    definitionVersion: definition.definitionVersion,
+    rubricVersion: definition.rubricVersion,
+    definitionSnapshot: copyDrillDefinition(definition),
+  };
+}
+
+function copyActiveDrillIdentity(
+  identity: ActiveDrillSessionIdentity,
+): ActiveDrillSessionIdentity {
+  return {
+    scenarioDataVersion: identity.scenarioDataVersion,
+    drillId: identity.drillId,
+    competencyId: identity.competencyId,
+    definitionVersion: identity.definitionVersion,
+    rubricVersion: identity.rubricVersion,
+    definitionSnapshot: copyDrillDefinition(identity.definitionSnapshot),
+  };
+}
+
+function canonicalDrillDefinition(definition: DrillDefinition): string {
+  return JSON.stringify(copyDrillDefinition(definition));
+}
+
+function activeDrillIdentityMatches(
+  identity: ActiveDrillSessionIdentity,
+  definition: DrillDefinition,
+  scenarioDataVersion: string | null,
+): boolean {
+  return (
+    identity.scenarioDataVersion === scenarioDataVersion &&
+    identity.drillId === definition.id &&
+    identity.competencyId === definition.competencyId &&
+    identity.definitionVersion === definition.definitionVersion &&
+    identity.rubricVersion === definition.rubricVersion &&
+    canonicalDrillDefinition(identity.definitionSnapshot) ===
+      canonicalDrillDefinition(definition)
+  );
+}
+
+function generateRunInstanceId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return `run_${Date.now().toString(36)}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+}
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function parseActiveDrillIdentity(
+  value: unknown,
+  scenario: ScenarioPackage,
+): ActiveDrillSessionIdentity | undefined {
+  if (
+    !isRecord(value) ||
+    (value.scenarioDataVersion !== null &&
+      !isNonEmptyString(value.scenarioDataVersion)) ||
+    !isNonEmptyString(value.drillId) ||
+    !isNonEmptyString(value.competencyId) ||
+    !Number.isInteger(value.definitionVersion) ||
+    Number(value.definitionVersion) < 1 ||
+    !isNonEmptyString(value.rubricVersion)
+  ) {
+    return undefined;
+  }
+  const parsedSnapshot = parseScenarioDrillDefinitions(
+    [value.definitionSnapshot],
+    scenario,
+  );
+  const definitionSnapshot = parsedSnapshot.valid
+    ? parsedSnapshot.drills[0]
+    : undefined;
+  if (
+    !definitionSnapshot ||
+    value.drillId !== definitionSnapshot.id ||
+    value.competencyId !== definitionSnapshot.competencyId ||
+    value.definitionVersion !== definitionSnapshot.definitionVersion ||
+    value.rubricVersion !== definitionSnapshot.rubricVersion
+  ) {
+    return undefined;
+  }
+  return {
+    scenarioDataVersion: value.scenarioDataVersion,
+    drillId: value.drillId,
+    competencyId: value.competencyId,
+    definitionVersion: Number(value.definitionVersion),
+    rubricVersion: value.rubricVersion,
+    definitionSnapshot: copyDrillDefinition(definitionSnapshot),
+  };
 }
 
 function isTimestamp(value: unknown): value is string {
@@ -495,6 +715,56 @@ function isValidJournalEntry(
   );
 }
 
+function isValidDrillCheckpointResponseShape(
+  value: unknown,
+): value is DrillCheckpointResponse {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.drillId) &&
+    Number.isInteger(value.definitionVersion) &&
+    Number(value.definitionVersion) > 0 &&
+    isNonEmptyString(value.checkpointId) &&
+    isTimestamp(value.replayTime) &&
+    Array.isArray(value.eventIds) &&
+    value.eventIds.every(isNonEmptyString) &&
+    new Set(value.eventIds).size === value.eventIds.length &&
+    (value.status === "answered" || value.status === "skipped") &&
+    (value.action === undefined ||
+      ["hold", "reduce", "exit", "wait"].includes(String(value.action))) &&
+    isOptionalString(value.reflection) &&
+    (value.reflection === undefined ||
+      value.reflection.length <= PRACTICE_DRILL_REFLECTION_MAX_LENGTH) &&
+    (value.positionQuantity === undefined ||
+      isFiniteNumber(value.positionQuantity)) &&
+    (value.workingOrderIds === undefined ||
+      (Array.isArray(value.workingOrderIds) &&
+        value.workingOrderIds.every(isNonEmptyString) &&
+        new Set(value.workingOrderIds).size === value.workingOrderIds.length))
+  );
+}
+
+function isValidDrillRuleViolationShape(
+  value: unknown,
+): value is DrillRuleViolation {
+  if (!isRecord(value)) return false;
+  return (
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.drillId) &&
+    Number.isInteger(value.definitionVersion) &&
+    Number(value.definitionVersion) > 0 &&
+    [
+      "order_before_plan",
+      "checkpoint_skipped",
+      "advance_while_checkpoint_open",
+      "invalid_checkpoint_response",
+    ].includes(String(value.code)) &&
+    isTimestamp(value.replayTime) &&
+    isOptionalString(value.checkpointId) &&
+    isNonEmptyString(value.evidence)
+  );
+}
+
 function isValidAuditEvent(
   value: unknown,
   symbols: Set<string>,
@@ -600,13 +870,28 @@ function parsePersistedSession(serialized: string): SessionState {
   } catch {
     throw new Error("Session file is not valid JSON.");
   }
-  if (!isRecord(parsed) || parsed.version !== SESSION_STORAGE_VERSION) {
+  if (
+    !isRecord(parsed) ||
+    (parsed.version !== 1 &&
+      parsed.version !== 2 &&
+      parsed.version !== SESSION_STORAGE_VERSION)
+  ) {
     throw new Error("Unsupported session file version.");
   }
+  const sessionVersion = parsed.version as 1 | 2 | 3;
   if (typeof parsed.scenarioId !== "string") {
     throw new Error("Session file is missing a scenario ID.");
   }
   const base = buildInitialState(parsed.scenarioId);
+  const scenarioDataVersion = base.scenario.meta.dataVersion ?? null;
+  if (
+    sessionVersion === SESSION_STORAGE_VERSION &&
+    parsed.scenarioDataVersion !== scenarioDataVersion
+  ) {
+    throw new Error(
+      "Session file references a different scenario data version.",
+    );
+  }
   const symbols = new Set(base.scenario.meta.symbols);
   if (
     !Array.isArray(parsed.fills) ||
@@ -701,6 +986,155 @@ function parsePersistedSession(serialized: string): SessionState {
     scenario: base.scenario,
     currentIndex,
   });
+  const activeDrillId =
+    parsed.activeDrillId === undefined
+      ? undefined
+      : isNonEmptyString(parsed.activeDrillId)
+        ? parsed.activeDrillId
+        : null;
+  if (activeDrillId === null) {
+    throw new Error("Session file contains an invalid practice drill ID.");
+  }
+  const activeDrillIdentity =
+    parsed.activeDrillIdentity === undefined
+      ? undefined
+      : parseActiveDrillIdentity(parsed.activeDrillIdentity, base.scenario);
+  if (
+    parsed.activeDrillIdentity !== undefined &&
+    !activeDrillIdentity
+  ) {
+    throw new Error("Session file contains an invalid practice drill identity.");
+  }
+  if (sessionVersion < SESSION_STORAGE_VERSION && activeDrillId) {
+    throw new Error(
+      "Legacy practice sessions cannot be safely restored because their immutable drill identity is missing. Start a new practice session.",
+    );
+  }
+  const activeDrill = activeDrillId
+    ? getDrillForScenario(activeDrillId, base.scenario)
+    : undefined;
+  if (
+    activeDrillId &&
+    (!activeDrill ||
+      !activeDrillIdentity ||
+      parsed.activeDrillDefinitionVersion !== activeDrill.definitionVersion ||
+      !activeDrillIdentityMatches(
+        activeDrillIdentity,
+        activeDrill,
+        scenarioDataVersion,
+      ) ||
+      !validateDrillDefinition(activeDrill, base.scenario).valid ||
+      mode !== activeDrill.mode)
+  ) {
+    throw new Error(
+      "Session file references an unavailable or changed practice drill definition.",
+    );
+  }
+  if (
+    !activeDrillId &&
+    (parsed.activeDrillDefinitionVersion !== undefined ||
+      activeDrillIdentity !== undefined)
+  ) {
+    throw new Error("Session file contains incomplete practice drill metadata.");
+  }
+  if (!isValidDecisionPlan(parsed.initialDrillPlan)) {
+    throw new Error("Session file contains an invalid initial practice plan.");
+  }
+  const rawDrillResponses = parsed.drillCheckpointResponses ?? [];
+  const rawDrillViolations = parsed.drillRuleViolations ?? [];
+  if (
+    !Array.isArray(rawDrillResponses) ||
+    !Array.isArray(rawDrillViolations)
+  ) {
+    throw new Error("Session file contains invalid practice evidence.");
+  }
+  const drillSchedule = activeDrill
+    ? buildDrillCheckpointSchedule(activeDrill, base.scenario)
+    : [];
+  const checkpointById = new Map(
+    drillSchedule.map((checkpoint) => [checkpoint.id, checkpoint]),
+  );
+  const drillCheckpointResponses = rawDrillResponses.filter(
+    isValidDrillCheckpointResponseShape,
+  );
+  const drillRuleViolations = rawDrillViolations.filter(
+    isValidDrillRuleViolationShape,
+  );
+  if (
+    drillCheckpointResponses.length !== rawDrillResponses.length ||
+    drillRuleViolations.length !== rawDrillViolations.length ||
+    !hasUniqueIds(drillCheckpointResponses) ||
+    !hasUniqueIds(drillRuleViolations) ||
+    new Set(drillCheckpointResponses.map((response) => response.checkpointId))
+      .size !== drillCheckpointResponses.length
+  ) {
+    throw new Error("Session file contains malformed practice evidence.");
+  }
+  if (
+    !activeDrill &&
+    (parsed.initialDrillPlan !== undefined ||
+      drillCheckpointResponses.length > 0 ||
+      drillRuleViolations.length > 0 ||
+      parsed.pendingDrillCheckpointId !== undefined)
+  ) {
+    throw new Error("Session file contains practice evidence without an active drill.");
+  }
+  if (
+    activeDrill &&
+    (drillCheckpointResponses.some((response) => {
+      const checkpoint = checkpointById.get(response.checkpointId);
+      return (
+        !checkpoint ||
+        checkpoint.replayIndex > currentIndex ||
+        !validateDrillCheckpointResponse(
+          activeDrill,
+          checkpoint,
+          response,
+          checkpoint.eventIds,
+        ).valid
+      );
+    }) ||
+      drillRuleViolations.some(
+        (violation) =>
+          violation.drillId !== activeDrill.id ||
+          violation.definitionVersion !== activeDrill.definitionVersion ||
+          !isAtOrBefore(violation.replayTime, currentTime) ||
+          (violation.checkpointId !== undefined &&
+            !checkpointById.has(violation.checkpointId)),
+      ))
+  ) {
+    throw new Error("Session file contains inconsistent practice evidence.");
+  }
+  const pendingDrillCheckpoint =
+    parsed.pendingDrillCheckpointId === undefined
+      ? undefined
+      : isNonEmptyString(parsed.pendingDrillCheckpointId)
+        ? checkpointById.get(parsed.pendingDrillCheckpointId)
+        : undefined;
+  if (
+    parsed.pendingDrillCheckpointId !== undefined &&
+    (!pendingDrillCheckpoint ||
+      pendingDrillCheckpoint.replayIndex !== currentIndex ||
+      drillCheckpointResponses.some(
+        (response) =>
+          response.checkpointId === pendingDrillCheckpoint.id,
+      ))
+  ) {
+    throw new Error("Session file contains an invalid pending practice checkpoint.");
+  }
+  if (
+    activeDrill &&
+    drillSchedule.some(
+      (checkpoint) =>
+        checkpoint.replayIndex <= currentIndex &&
+        !drillCheckpointResponses.some(
+          (response) => response.checkpointId === checkpoint.id,
+        ) &&
+        pendingDrillCheckpoint?.id !== checkpoint.id,
+    )
+  ) {
+    throw new Error("Session file skips a required practice checkpoint.");
+  }
   const orderById = new Map(orders.map((order) => [order.id, order]));
   const fillIds = new Set(fills.map((fill) => fill.id));
   const timelineIsValid =
@@ -760,8 +1194,16 @@ function parsePersistedSession(serialized: string): SessionState {
     },
     {},
   );
+  const runInstanceId =
+    sessionVersion >= 2
+      ? parsed.runInstanceId
+      : `legacy_${stableHash(serialized)}`;
+  if (!isNonEmptyString(runInstanceId)) {
+    throw new Error("Session file is missing a run instance ID.");
+  }
   const next: SessionState = {
     ...base,
+    runInstanceId,
     mode,
     broker,
     brokerMode,
@@ -781,6 +1223,15 @@ function parsePersistedSession(serialized: string): SessionState {
     pauseOnMajorEvents:
       mode === "explorer" ? (parsed.pauseOnMajorEvents ?? true) : false,
     majorEventPauseNotice: undefined,
+    activeDrillId: activeDrill?.id,
+    activeDrillDefinitionVersion: activeDrill?.definitionVersion,
+    activeDrillIdentity: activeDrill
+      ? activeDrillIdentityFor(activeDrill, scenarioDataVersion)
+      : undefined,
+    initialDrillPlan: parsed.initialDrillPlan as DecisionPlan | undefined,
+    drillCheckpointResponses,
+    pendingDrillCheckpoint,
+    drillRuleViolations,
   };
   const prices = tradablePricesFor(
     next.scenario,
@@ -793,17 +1244,7 @@ function parsePersistedSession(serialized: string): SessionState {
   next.risk = snapshots.risk;
   next.marginCallActive = snapshots.margin.isMarginCall;
   if (status === "finished") {
-    next.report = buildReport({
-      scenario: next.scenario,
-      fills: next.fills,
-      orders: next.orders,
-      auditEvents: next.auditEvents,
-      initialCash: next.scenario.meta.initialCash,
-      finalEquityOverride: snapshotPortfolio(next.portfolio, currentTime).totalValue,
-      financingPaid: next.portfolio.financingPaid,
-      financingCosts: next.financingCosts,
-      journal: next.journal,
-    });
+    next.report = buildReportForState(next);
   }
   return next;
 }
@@ -811,7 +1252,11 @@ function parsePersistedSession(serialized: string): SessionState {
 function savedSession(): string | undefined {
   if (typeof window === "undefined") return undefined;
   try {
-    return window.localStorage.getItem(SESSION_STORAGE_KEY) ?? undefined;
+    return (
+      window.localStorage.getItem(SESSION_STORAGE_KEY) ??
+      window.localStorage.getItem(LEGACY_SESSION_STORAGE_KEY) ??
+      undefined
+    );
   } catch {
     return undefined;
   }
@@ -822,8 +1267,14 @@ function initialState(): SessionState {
   if (!saved) return buildInitialState(defaultScenarioId);
   try {
     return parsePersistedSession(saved);
-  } catch {
-    return buildInitialState(defaultScenarioId);
+  } catch (error) {
+    const fallback = buildInitialState(defaultScenarioId);
+    const reason =
+      error instanceof Error ? error.message : "Unknown session error.";
+    return {
+      ...fallback,
+      rejectionMessage: `Saved session was not restored: ${reason}`,
+    };
   }
 }
 
@@ -831,6 +1282,7 @@ function saveSession(state: SessionState): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(SESSION_STORAGE_KEY, serializeSession(state));
+    window.localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
   } catch {
     // Persistence is best-effort; quota/privacy errors must not break replay.
   }
@@ -844,6 +1296,90 @@ function currentTimeFor(
     state.currentIndex,
     state.scenario.meta.startTime,
   );
+}
+
+function activeDrillFor(state: SessionState) {
+  if (!state.activeDrillId || !state.activeDrillIdentity) return undefined;
+  const definition = getDrillForScenario(state.activeDrillId, state.scenario);
+  if (!definition) return undefined;
+  return definition.definitionVersion === state.activeDrillDefinitionVersion &&
+    activeDrillIdentityMatches(
+      state.activeDrillIdentity,
+      definition,
+      state.scenario.meta.dataVersion ?? null,
+    )
+    ? definition
+    : undefined;
+}
+
+function activeDrillLabel(state: SessionState): string {
+  if (state.mode === "blind" || state.mode === "challenge") {
+    return "practice drill";
+  }
+  return activeDrillFor(state)?.title ?? "practice drill";
+}
+
+function copyDecisionPlan(plan: DecisionPlan): DecisionPlan {
+  return {
+    thesis: plan.thesis?.trim() || undefined,
+    invalidation: plan.invalidation?.trim() || undefined,
+    exitPlan: plan.exitPlan?.trim() || undefined,
+    acceptedRisk: plan.acceptedRisk?.trim() || undefined,
+    linkedEventIds: plan.linkedEventIds
+      ? [...new Set(plan.linkedEventIds)]
+      : undefined,
+  };
+}
+
+function initialDrillPlanRejection(
+  state: SessionState,
+  plan: DecisionPlan | undefined,
+): string | undefined {
+  const definition = activeDrillFor(state);
+  if (
+    !definition ||
+    state.initialDrillPlan ||
+    !definition.initialPlanRule.requiredBeforeFirstOrder
+  ) {
+    return undefined;
+  }
+  const missing = definition.initialPlanRule.requiredFields.filter(
+    (field) => !plan?.[field]?.trim(),
+  );
+  return missing.length > 0
+    ? `Complete the ${activeDrillLabel(state)} plan before the first order: ${missing.join(
+        ", ",
+      )}.`
+    : undefined;
+}
+
+function drillViolation(
+  state: SessionState,
+  code: DrillRuleViolation["code"],
+  evidence: string,
+  checkpointId?: string,
+): DrillRuleViolation | undefined {
+  const definition = activeDrillFor(state);
+  if (!definition) return undefined;
+  return {
+    id: `drv_${Date.now().toString(36)}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`,
+    drillId: definition.id,
+    definitionVersion: definition.definitionVersion,
+    code,
+    replayTime: currentTimeFor(state),
+    checkpointId,
+    evidence,
+  };
+}
+
+function initialPlanAfterAcceptedOrder(
+  state: SessionState,
+  plan: DecisionPlan | undefined,
+): DecisionPlan | undefined {
+  return state.initialDrillPlan ??
+    (activeDrillFor(state) && plan ? copyDecisionPlan(plan) : undefined);
 }
 
 function majorEventPauseFor(
@@ -2087,14 +2623,54 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set(buildInitialState(id));
   },
 
+  startPractice: (scenarioId, drillId) => {
+    try {
+      const next = buildInitialState(scenarioId, drillId);
+      const definition = activeDrillFor(next);
+      const firstCheckpoint = definition
+        ? buildDrillCheckpointSchedule(definition, next.scenario).find(
+            (checkpoint) => checkpoint.replayIndex === 0,
+          )
+        : undefined;
+      set({
+        ...next,
+        pendingDrillCheckpoint: firstCheckpoint,
+        status: firstCheckpoint ? "paused" : next.status,
+      });
+      return { ok: true };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to start practice.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+  },
+
   resetScenario: () => {
-    set(buildInitialState(get().scenario.meta.id));
+    const state = get();
+    set(buildInitialState(state.scenario.meta.id, state.activeDrillId));
   },
 
   play: () => {
     const state = get();
     const { status, currentIndex, primaryCandlesLength } = state;
     if (status === "finished") return;
+    if (state.pendingDrillCheckpoint) {
+      const violation = drillViolation(
+        state,
+        "advance_while_checkpoint_open",
+        "Replay advance was attempted before the mandatory checkpoint was answered.",
+        state.pendingDrillCheckpoint.id,
+      );
+      set({
+        status: "paused",
+        rejectionMessage: `Answer the ${activeDrillLabel(state)} checkpoint before resuming the replay.`,
+        drillRuleViolations: violation
+          ? [...state.drillRuleViolations, violation]
+          : state.drillRuleViolations,
+      });
+      return;
+    }
     if (currentIndex >= primaryCandlesLength - 1) {
       const finalTime = currentTimeFor(state);
       const closed = closeWorkingOrdersAtEnd(
@@ -2122,13 +2698,44 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   stepForward: () => {
     const state = get();
     if (state.status === "finished") return;
+    if (state.pendingDrillCheckpoint) {
+      const violation = drillViolation(
+        state,
+        "advance_while_checkpoint_open",
+        "Replay step was attempted before the mandatory checkpoint was answered.",
+        state.pendingDrillCheckpoint.id,
+      );
+      set({
+        status: "paused",
+        rejectionMessage: `Answer the ${activeDrillLabel(state)} checkpoint before advancing.`,
+        drillRuleViolations: violation
+          ? [...state.drillRuleViolations, violation]
+          : state.drillRuleViolations,
+      });
+      return;
+    }
     const requestedIndex = Math.min(
       state.currentIndex + state.speed.candlesPerTick,
       state.primaryCandlesLength - 1,
     );
-    const majorEventPause = majorEventPauseFor(state, requestedIndex);
-    const nextIndex = majorEventPause?.index ?? requestedIndex;
-    const isFinished = nextIndex >= state.primaryCandlesLength - 1;
+    const definition = activeDrillFor(state);
+    const drillCheckpoint = definition
+      ? nextDrillCheckpoint({
+          schedule: buildDrillCheckpointSchedule(definition, state.scenario),
+          currentIndex: state.currentIndex,
+          requestedIndex,
+          resolvedCheckpointIds: state.drillCheckpointResponses.map(
+            (response) => response.checkpointId,
+          ),
+        })
+      : undefined;
+    const majorEventPause = definition
+      ? undefined
+      : majorEventPauseFor(state, requestedIndex);
+    const nextIndex =
+      drillCheckpoint?.replayIndex ?? majorEventPause?.index ?? requestedIndex;
+    const isFinished =
+      !drillCheckpoint && nextIndex >= state.primaryCandlesLength - 1;
     const triggered = processTriggeredLimitOrders(
       state,
       state.currentIndex + 1,
@@ -2152,12 +2759,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       currentIndex: nextIndex,
       status: isFinished
         ? "finished"
-        : majorEventPause
+        : drillCheckpoint || majorEventPause
           ? "paused"
           : state.status === "playing"
             ? "playing"
             : "paused",
-      majorEventPauseNotice: isFinished ? undefined : majorEventPause?.notice,
+      majorEventPauseNotice:
+        isFinished || drillCheckpoint ? undefined : majorEventPause?.notice,
+      pendingDrillCheckpoint: drillCheckpoint,
+      rejectionMessage: drillCheckpoint
+        ? undefined
+        : triggered.rejectionMessage,
     });
     if (isFinished) {
       finalizeReport();
@@ -2253,6 +2865,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   finish: () => {
     const state = get();
     if (state.status === "finished") return;
+    if (activeDrillFor(state)) {
+      set({
+        rejectionMessage:
+          "Skip to end is disabled during a practice drill. Complete each checkpoint in replay order.",
+      });
+      return;
+    }
     if (state.mode === "blind" || state.mode === "challenge") {
       set({
         rejectionMessage:
@@ -2286,10 +2905,91 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     finalizeReport();
   },
 
+  submitDrillCheckpoint: (action, reflection) => {
+    const state = get();
+    const definition = activeDrillFor(state);
+    const checkpoint = state.pendingDrillCheckpoint;
+    if (!definition || !checkpoint) {
+      const message = "No practice checkpoint is awaiting a response.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+    const response: DrillCheckpointResponse = {
+      id: `drr_${Date.now().toString(36)}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`,
+      drillId: definition.id,
+      definitionVersion: definition.definitionVersion,
+      checkpointId: checkpoint.id,
+      replayTime: checkpoint.replayTime,
+      eventIds: [...checkpoint.eventIds],
+      status: "answered",
+      action,
+      reflection: reflection.trim(),
+      positionQuantity:
+        state.portfolio.positions[definition.primarySymbol]?.quantity ?? 0,
+      workingOrderIds: state.orders
+        .filter(isWorkingOrder)
+        .map((order) => order.id),
+    };
+    const visibleEventIds = visibleEvents(
+      state.scenario.events,
+      currentTimeFor(state),
+    ).map((event) => event.id);
+    const validation = validateDrillCheckpointResponse(
+      definition,
+      checkpoint,
+      response,
+      visibleEventIds,
+    );
+    if (!validation.valid) {
+      const message =
+        validation.issues[0]?.message ?? "Checkpoint response is invalid.";
+      const violation = drillViolation(
+        state,
+        "invalid_checkpoint_response",
+        message,
+        checkpoint.id,
+      );
+      set({
+        rejectionMessage: message,
+        drillRuleViolations: violation
+          ? [...state.drillRuleViolations, violation]
+          : state.drillRuleViolations,
+      });
+      return { ok: false, message };
+    }
+    set({
+      drillCheckpointResponses: [
+        ...state.drillCheckpointResponses,
+        response,
+      ],
+      pendingDrillCheckpoint: undefined,
+      status: "paused",
+      rejectionMessage: undefined,
+    });
+    return { ok: true };
+  },
+
   submitMarketOrder: (req) => {
     const state = get();
     if (state.status === "finished") {
       return { ok: false, message: "Scenario already finished." };
+    }
+    const planRejection = initialDrillPlanRejection(state, req.decisionPlan);
+    if (planRejection) {
+      const violation = drillViolation(
+        state,
+        "order_before_plan",
+        planRejection,
+      );
+      set({
+        rejectionMessage: planRejection,
+        drillRuleViolations: violation
+          ? [...state.drillRuleViolations, violation]
+          : state.drillRuleViolations,
+      });
+      return { ok: false, message: planRejection };
     }
     const currentTime = currentTimeFor(state);
     const tradablePrices = tradablePricesFor(
@@ -2372,6 +3072,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         set({
           orders: [...state.orders, result.order],
           auditEvents: [...state.auditEvents, placedAudit],
+          initialDrillPlan: initialPlanAfterAcceptedOrder(
+            state,
+            req.decisionPlan,
+          ),
           rejectionMessage: undefined,
         });
         return { ok: true };
@@ -2449,6 +3153,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       margin,
       risk,
       marginCallActive: liquidation.marginCallActive,
+      initialDrillPlan: initialPlanAfterAcceptedOrder(
+        state,
+        req.decisionPlan,
+      ),
       rejectionMessage: liquidation.rejectionMessage,
     });
     return { ok: true };
@@ -2458,6 +3166,21 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const state = get();
     if (state.status === "finished") {
       return { ok: false, message: "Scenario already finished." };
+    }
+    const planRejection = initialDrillPlanRejection(state, req.decisionPlan);
+    if (planRejection) {
+      const violation = drillViolation(
+        state,
+        "order_before_plan",
+        planRejection,
+      );
+      set({
+        rejectionMessage: planRejection,
+        drillRuleViolations: violation
+          ? [...state.drillRuleViolations, violation]
+          : state.drillRuleViolations,
+      });
+      return { ok: false, message: planRejection };
     }
     const currentTime = currentTimeFor(state);
     const tradablePrices = tradablePricesFor(
@@ -2510,6 +3233,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           symbol: req.symbol,
         }),
       ],
+      initialDrillPlan: result.ok
+        ? initialPlanAfterAcceptedOrder(state, req.decisionPlan)
+        : state.initialDrillPlan,
       rejectionMessage: result.ok ? undefined : result.reason,
     });
     return result.ok ? { ok: true } : { ok: false, message: result.reason };
@@ -2519,6 +3245,21 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const state = get();
     if (state.status === "finished") {
       return { ok: false, message: "Scenario already finished." };
+    }
+    const planRejection = initialDrillPlanRejection(state, req.decisionPlan);
+    if (planRejection) {
+      const violation = drillViolation(
+        state,
+        "order_before_plan",
+        planRejection,
+      );
+      set({
+        rejectionMessage: planRejection,
+        drillRuleViolations: violation
+          ? [...state.drillRuleViolations, violation]
+          : state.drillRuleViolations,
+      });
+      return { ok: false, message: planRejection };
     }
     const currentTime = currentTimeFor(state);
     const tradablePrices = tradablePricesFor(
@@ -2573,6 +3314,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           symbol: req.symbol,
         }),
       ],
+      initialDrillPlan: result.ok
+        ? initialPlanAfterAcceptedOrder(state, req.decisionPlan)
+        : state.initialDrillPlan,
       rejectionMessage: result.ok ? undefined : result.reason,
     });
     return result.ok ? { ok: true } : { ok: false, message: result.reason };
@@ -2959,6 +3703,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (typeof window === "undefined") return;
     try {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
     } catch {
       // Clearing persistence is best-effort in privacy-restricted browsers.
     }
@@ -2969,8 +3714,86 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   clearRejection: () => set({ rejectionMessage: undefined }),
 }));
 
-function finalizeReport(): void {
-  const state = useSessionStore.getState();
+function practiceDrillReportForState(
+  state: SessionState,
+  definition: NonNullable<ReturnType<typeof activeDrillFor>>,
+): PracticeDrillReportSnapshot {
+  const schedule = buildDrillCheckpointSchedule(definition, state.scenario);
+  const responseByCheckpoint = new Map(
+    state.drillCheckpointResponses
+      .filter((response) => response.status === "answered" && response.action)
+      .map((response) => [response.checkpointId, response]),
+  );
+  const eventById = new Map(
+    state.scenario.events.map((event) => [event.id, event]),
+  );
+
+  return {
+    definition: {
+      ...definition,
+      initialPlanRule: {
+        ...definition.initialPlanRule,
+        requiredFields: [...definition.initialPlanRule.requiredFields],
+      },
+      checkpointRule: {
+        ...definition.checkpointRule,
+        actions: [...definition.checkpointRule.actions],
+      },
+      rubric: {
+        ...definition.rubric,
+        weights: { ...definition.rubric.weights },
+      },
+    },
+    initialPlan: state.initialDrillPlan
+      ? copyDecisionPlan(state.initialDrillPlan)
+      : undefined,
+    checkpoints: schedule.map((checkpoint) => {
+      const response = responseByCheckpoint.get(checkpoint.id);
+      return {
+        checkpoint: {
+          ...checkpoint,
+          eventIds: [...checkpoint.eventIds],
+        },
+        response:
+          response?.status === "answered" && response.action
+            ? {
+                ...response,
+                status: "answered",
+                action: response.action,
+                reflection: response.reflection?.slice(
+                  0,
+                  PRACTICE_DRILL_REFLECTION_MAX_LENGTH,
+                ),
+                eventIds: [...response.eventIds],
+                workingOrderIds: response.workingOrderIds
+                  ? [...response.workingOrderIds]
+                  : undefined,
+              }
+            : undefined,
+        events: checkpoint.eventIds.flatMap((eventId) => {
+          const event = eventById.get(eventId);
+          return event
+            ? [
+                {
+                  id: event.id,
+                  publishedAt: event.publishedAt,
+                  title: event.title,
+                  type: event.type,
+                  importance: event.importance,
+                  source: event.source,
+                },
+              ]
+            : [];
+        }),
+      };
+    }),
+    violations: state.drillRuleViolations.map((violation) => ({
+      ...violation,
+    })),
+  };
+}
+
+function buildReportForState(state: SessionState): ReportPayload {
   const report = buildReport({
     scenario: state.scenario,
     fills: state.fills,
@@ -2983,7 +3806,31 @@ function finalizeReport(): void {
     financingCosts: state.financingCosts,
     journal: state.journal,
   });
-  useSessionStore.setState({ report });
+  const definition = activeDrillFor(state);
+  if (!definition) {
+    return report;
+  }
+  return {
+    ...report,
+    practiceDrill: practiceDrillReportForState(state, definition),
+    practiceAssessment: assessDrill({
+      definition,
+      checkpoints: buildDrillCheckpointSchedule(definition, state.scenario),
+      initialPlan: state.initialDrillPlan,
+      responses: state.drillCheckpointResponses,
+      violations: state.drillRuleViolations,
+      positionOpened: state.fills.some(
+        (fill) =>
+          fill.reason === "user_order" || fill.reason === "working_order",
+      ),
+      replayCompleted: state.status === "finished",
+    }),
+  };
+}
+
+function finalizeReport(): void {
+  const state = useSessionStore.getState();
+  useSessionStore.setState({ report: buildReportForState(state) });
 }
 
 export function selectSnapshot(state: SessionStore): ReplaySnapshot {

@@ -55,10 +55,37 @@ describe("RunHistory", () => {
         onReplay={vi.fn()}
         onRemove={vi.fn()}
         onExport={vi.fn()}
+        onImport={vi.fn()}
         onClear={vi.fn()}
       />,
     );
     expect(screen.getByText("Your first completed replay will appear here.")).toBeInTheDocument();
+  });
+
+  it("keeps archive controls when only compact practice evidence remains", () => {
+    const onExport = vi.fn();
+    const onClear = vi.fn();
+    render(
+      <RunHistory
+        runs={[]}
+        hasArchiveData
+        onViewReport={vi.fn()}
+        onReplay={vi.fn()}
+        onRemove={vi.fn()}
+        onExport={onExport}
+        onImport={vi.fn()}
+        onClear={onClear}
+      />,
+    );
+
+    expect(screen.getByText("No full replay reports are stored.")).toBeInTheDocument();
+    expect(screen.getByText(/Compact practice evidence remains available/)).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Export practice archive" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
+    expect(onExport).toHaveBeenCalledOnce();
+    expect(onClear).toHaveBeenCalledOnce();
   });
 
   it("renders progress and exposes report, replay, and removal actions", () => {
@@ -67,6 +94,7 @@ describe("RunHistory", () => {
     const onRemove = vi.fn();
     const onExport = vi.fn();
     const onClear = vi.fn();
+    const onImport = vi.fn();
     render(
       <RunHistory
         runs={[run]}
@@ -74,21 +102,28 @@ describe("RunHistory", () => {
         onReplay={onReplay}
         onRemove={onRemove}
         onExport={onExport}
+        onImport={onImport}
         onClear={onClear}
       />,
     );
 
     expect(screen.getByText("Scenario A")).toBeInTheDocument();
-    expect(screen.getByText("72 / 100")).toBeInTheDocument();
+    expect(screen.getByText("Not assessed")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View report" }));
     fireEvent.click(screen.getByRole("button", { name: "Replay" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    fireEvent.click(screen.getByRole("button", { name: "Export history" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Export practice archive" }),
+    );
+    fireEvent.change(screen.getByLabelText("Import practice archive JSON"), {
+      target: { files: [new File(["{}"], "archive.json")] },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Clear history" }));
     expect(onViewReport).toHaveBeenCalledWith(run);
     expect(onReplay).toHaveBeenCalledWith(run);
     expect(onRemove).toHaveBeenCalledWith(run);
     expect(onExport).toHaveBeenCalledTimes(1);
+    expect(onImport).toHaveBeenCalledTimes(1);
     expect(onClear).toHaveBeenCalledTimes(1);
   });
 });

@@ -8,6 +8,7 @@ const shippedScenarioModules = import.meta.glob<Record<string, unknown>>(
   [
     "./btc-2020-2021/index.ts",
     "./eurgbp-brexit-2016/index.ts",
+    "./eurusd-covid-liquidity-2020/index.ts",
     "./sp500-covid-2020/index.ts",
     "./qqq-rate-hike-2022/index.ts",
     "./kre-banking-crisis-2023/index.ts",

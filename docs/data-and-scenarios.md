@@ -6,6 +6,28 @@ Market Time Machine should grow through high-quality, open source historical sce
 
 A scenario is not only a price file. It is a complete, time-aware market environment with prices, events, benchmark data, broker assumptions, and metadata.
 
+## Shipped Data And Evidence Boundary
+
+The production catalog contains two source-reviewed FX scenarios whose daily
+reference-rate values come from the official ECB Data API:
+
+- Brexit Referendum: EUR/GBP 2016
+- COVID Liquidity Shock: EUR/USD 2020
+
+Both declare exact `dataVersion` strings and `mixed` fidelity. The ECB value is
+source-observed, while open/high/low repeat that daily observation and volume is
+zero. They support broad event-decision practice, not intraday execution claims.
+
+The QQQ and KRE scenarios combine official-source event timelines with synthetic
+sample market paths. They can run Event Discipline drills as rehearsal, but
+their practice-track units are preview-only and can never award completion
+credit. An official event source does not make a synthetic market series
+source-observed.
+
+Credit-bearing units are curated by exact scenario id, data version, fidelity,
+sample flag, drill definition, rubric, and mode. Imported lookalikes do not gain
+credit from titles or self-declared provenance.
+
 ## Scenario Package Structure
 
 Recommended package layout:
@@ -47,8 +69,34 @@ type Scenario = {
   benchmarkSymbol?: string;
   license: string;
   dataSources: string[];
+  dataVersion?: string;
+  dataFidelity?: "observed" | "derived" | "synthetic" | "mixed";
+  observedFields?: string[];
+  derivedFields?: string[];
 };
 ```
+
+The runtime `ScenarioPackage` also supports an optional data-only practice
+surface:
+
+```ts
+type ScenarioPackage = {
+  meta: ScenarioMeta;
+  instruments: Instrument[];
+  candles: Candle[];
+  events: MarketEvent[];
+  indicators: IndicatorSnapshot[];
+  benchmarks: BenchmarkPoint[];
+  broker: BrokerConfig;
+  drills?: DrillDefinition[];
+};
+```
+
+Authored drill definitions are validated against their scenario, symbol, mode,
+checkpoint mapping, supported actions, plan fields, and rubric. Valid definitions
+are runnable only with their containing scenario, cannot replace reserved
+built-ins, and do not automatically become credit-bearing. See
+[Scenario Authoring](scenario-authoring.md#optional-data-only-practice-drills).
 
 ## Instrument Schema
 
@@ -218,6 +266,9 @@ Scenario validation should check:
 - Symbols match known instruments
 - Broker assumptions are present
 - Scenario license is declared
+- Optional drill definitions are structurally valid, reference the containing
+  scenario and a known primary symbol, use supported modes/rules, and produce at
+  least one eligible checkpoint
 
 ## Open Source Scenario Philosophy
 
@@ -230,4 +281,3 @@ Good open source scenario data should be:
 - Clearly licensed
 - Explicit about limitations
 - Free of future leakage
-

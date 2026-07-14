@@ -1,5 +1,13 @@
 # Agent Handoff
 
+## 2026-07-14 15:09 +03 - Codex
+
+- Task: Completed Personal Decision Gym v2 as a coherent local product, including the full practice loop rather than a feature preview.
+- Changed: Shipped four versioned Event Discipline drills, the second source-reviewed ECB scenario, immutable practice-session identity, measured Practice Coach assignments, a 250-entry sanitized ledger, competency evidence/trends, exact-version tracks, detailed full-report drill debriefs, strict atomic V2 archive portability with V1 migration, and runnable scenario-authored drills. Updated V2/release/privacy/authoring docs and bumped the package to `0.3.0`.
+- Verified: Clean `npm ci`; `npm run check` passed lint, 545/545 tests across 45 files, TypeScript, production build, restricted-data/license boundary, and PWA validation; `npm audit` found 0 vulnerabilities; ECB EUR/USD import reproduced 104 observations and its 8 importer tests passed; `git diff --check` passed. Browser acceptance covered a clean start, complete plan, simulated order, 5/5 mandatory checkpoints, detailed debrief, 100/100 evidence claim, Decision Foundations 1/1 credit, desktop and 390x844 layouts without horizontal overflow, empty warning/error console, and offline reopen after the preview server stopped.
+- Memory: none; no repo semantic-memory system is installed. Durable product, evidence, privacy, session-identity, archive, and authoring contracts are documented under `docs/`.
+- Next: No local V2 product blocker. Public release remains a maintainer action: run the manual Pages workflow from `main`, then smoke-test installation and offline reopen on the deployed HTTPS URL.
+
 ## 2026-07-13 19:02 +03 - Codex
 
 - Task: Defined V2 as the local-first Personal Decision Gym and started it with a working Local Practice Coach vertical slice.

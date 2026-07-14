@@ -3,3 +3,4 @@ export * from "./scenario";
 export * from "./replay";
 export * from "./trading";
 export * from "./reporting";
+export * from "./practice";

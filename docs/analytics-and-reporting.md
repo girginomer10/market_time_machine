@@ -207,6 +207,31 @@ Realistic Practice may use stricter local scoring:
 10% journal clarity
 ```
 
+## V2 Process Evidence
+
+The overall report score remains a single-run outcome-and-process summary. V2
+does not relabel it as durable skill evidence.
+
+An Event Discipline drill produces a separate versioned, process-only
+assessment from four observable components:
+
+- initial-plan coverage;
+- event-checkpoint response coverage;
+- linkage to the visible eligible events;
+- rule adherence.
+
+Return, benchmark outperformance, and hindsight are not inputs to this drill
+score. Missing evidence stays unassessed rather than becoming zero. Evidence
+profile claims group compatible definitions by stable competency id and rubric
+version while retaining the exact drill and definition identities represented.
+Trend remains narrower and additionally requires the same scenario/data
+version, drill/definition, mode, and broker.
+
+Practice tracks apply a stricter completion policy than merely finishing a
+drill. Every criterion must pass in one exact-version attempt. The two synthetic
+Volatility Discipline units are available for rehearsal but are never
+credit-bearing.
+
 ## Journal Quality
 
 Journal quality should be measured lightly, not as a language contest.
@@ -266,5 +291,13 @@ The report offers four user-controlled outputs:
 
 No report is uploaded by the app. The browser keeps a bounded local history of
 up to 12 completed runs with a pruned report copy, score, benchmark comparison,
-and same-scenario attempt deltas. Users can view, replay, remove, export, or
-clear this history from the scenario library.
+and same-scenario attempt deltas. For completed drills, that full report also
+keeps a self-contained definition snapshot, initial plan, checkpoint actions,
+bounded raw reflections, safe event display fields, and violations so its
+debrief remains readable if an authored scenario is later removed. A separate
+250-entry compact ledger preserves factual counts and optional validated drill
+assessments without raw journal, plan, checkpoint-response, or reflection text.
+
+Users can view, replay, remove, export, import, or clear this history from the
+scenario library. The V2 practice archive carries both bounded layers and can
+migrate a V1 run-history export as factual, unassessed evidence.

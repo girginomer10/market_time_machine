@@ -7,8 +7,8 @@ function plan(overrides: Partial<PracticeCoachPlan> = {}): PracticeCoachPlan {
   return {
     kind: "first_run",
     rubricVersion: "practice-coach-v1",
-    trackId: "foundation",
-    trackTitle: "Decision Foundations",
+    trackId: "orientation",
+    trackTitle: "Practice orientation",
     completedMilestones: 0,
     totalMilestones: 3,
     title: "Make one complete, documented decision",
@@ -16,9 +16,11 @@ function plan(overrides: Partial<PracticeCoachPlan> = {}): PracticeCoachPlan {
     rationale: "A baseline is required before a focused recommendation.",
     scenarioId: "eurgbp-brexit-2016",
     scenarioTitle: "Brexit Referendum: EUR/GBP 2016",
+    drillId: "event-discipline-eurgbp-v1",
+    drillTitle: "EUR/GBP Brexit — Event Discipline",
     mode: "explorer",
     focusLabel: "Structured decision baseline",
-    steps: ["Brief", "Plan", "Review"],
+    steps: ["Brief", "Plan", "Execute", "Review"],
     milestones: [
       {
         id: "complete_replay",
@@ -50,10 +52,11 @@ describe("PracticeCoach", () => {
     const onPrepare = vi.fn();
     render(<PracticeCoach plan={plan()} onPrepare={onPrepare} />);
 
+    expect(screen.getByText("Personal Decision Gym v2")).toBeInTheDocument();
     expect(screen.getByText("Today’s practice")).toBeInTheDocument();
     expect(
       screen.getByRole("progressbar", {
-        name: "Decision Foundations progress",
+        name: "Practice orientation progress",
       }),
     ).toHaveAttribute("aria-valuenow", "0");
     expect(screen.getAllByText("Pending")).toHaveLength(3);

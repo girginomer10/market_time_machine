@@ -1,6 +1,6 @@
 {
   "name": "market-time-machine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Open source financial history lab for replaying past markets without seeing the future",
   "license": "MIT",
   "type": "module",
@@ -30,6 +30,7 @@
     "preview": "vite preview",
     "import:fred-sp500": "node scripts/import-fred-sp500.mjs",
     "import:ecb-eurgbp": "node scripts/import-ecb-eurgbp.mjs",
+    "import:ecb-eurusd": "node scripts/import-ecb-eurusd.mjs",
     "import:ohlcv": "node scripts/import-local-ohlcv.mjs",
     "check": "npm run lint && npm run test && npm run build && npm run check:bundle-license && npm run check:pwa",
     "check:bundle-license": "node scripts/check-production-bundle.mjs",

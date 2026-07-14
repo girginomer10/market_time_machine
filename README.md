@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/girginomer10/market_time_machine/actions/workflows/ci.yml/badge.svg)](https://github.com/girginomer10/market_time_machine/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-V2%20Preview-7BB7E0.svg)](#v2-personal-decision-gym-preview)
+[![Status](https://img.shields.io/badge/status-V2%20Shipped-2E8B57.svg)](#v2-personal-decision-gym)
 
 Market Time Machine is an open source financial history lab for replaying past markets without seeing the future.
 
@@ -16,16 +16,20 @@ device and can be exported, printed, or shared by the user.
 
 ## Project Status
 
-Market Time Machine Local Lab v1 is the complete local-first product scope: an
-installable historical replay lab with offline use, local progress, session
-backup/restore, user scenario-package import, and no required account or cloud
-service. It is not a broker, investment product, or production trading system.
+Market Time Machine V2 is the shipped local-first product: an installable
+historical replay lab plus a deliberate-practice layer, with offline use, local
+progress, versioned practice evidence, session and practice-archive
+portability, user scenario-package import, and no required account or cloud
+service. Local Lab v1 remains its replay, simulation, and reporting foundation.
+It is not a broker, investment product, or production trading system.
 
 Good fits today:
 
 - Replay curated historical regimes locally
 - Practice timing, sizing, and journaling
+- Complete versioned Event Discipline drills at visible market-event checkpoints
 - Review chronological decisions and compare repeat attempts
+- Inspect competency-scoped evidence confidence, comparable-run trends, and tracks
 - Import validated scenario packages and keep progress locally
 - Inspect the information-firewall architecture
 - Contribute new scenario packages
@@ -38,22 +42,40 @@ Hosted-platform boundaries:
 - Institutional-grade market data
 - Server-side accounts, leaderboards, or cohorts
 
-## V2: Personal Decision Gym Preview
+## V2: Personal Decision Gym
 
-V2 development has started on top of the completed Local Lab v1. Its purpose is
-to turn one-off replays into deliberate practice: report evidence becomes one
-focused next exercise, and progress is based on observable decision process
-rather than profit badges.
+V2 turns one-off replays into a local deliberate-practice loop. The Practice
+Coach prepares one assessment-backed next exercise—completion retry, measured
+component focus, cross-regime transfer, or comparable rerun. Broader unmeasured
+recommendations remain in the report. Event Discipline drills require a
+complete initial plan and explicit Hold, Reduce,
+Exit, or Wait responses when high-importance events become visible. The drill
+rubric scores observable plan coverage, checkpoint coverage, visible-event
+linkage, and rule adherence; missing evidence remains unassessed and profit is
+not treated as a durable skill rating.
 
-The first preview adds a Local Practice Coach to the scenario library. It gives
-new users a baseline assignment, turns the latest report's priority
-recommendation into a prepared next briefing, shows supported current/target
-values, and tracks three Decision Foundations milestones locally. It does not
-create a cross-scenario skill score or send journal content anywhere.
+The shipped evidence layer includes:
 
-See [V2 Product Definition](docs/v2-personal-decision-gym.md) for the product
-thesis, non-goals, success criteria, first Event Discipline drill, and delivery
-sequence.
+- a compact local ledger of up to 250 factual or drill-assessed attempts, without
+  raw journal, plan, checkpoint-response, or reflection text;
+- versioned competency evidence claims with evidence breadth, exact
+  source-scenario coverage, confidence, and same-context trend comparisons;
+- open Decision Foundations and Event Pressure Transfer tracks backed by the two
+  ECB reference-rate scenarios;
+- a Volatility Discipline preview using synthetic QQQ and KRE paths. These units
+  can rehearse the drill but cannot award unit or track credit;
+- a V2 practice archive containing up to 12 recent full reports plus the compact
+  ledger, with strict import, non-overwriting conflict handling, and migration
+  from V1 run-history exports. Full reports can contain private journal, plan,
+  checkpoint-decision, and reflection text; compact ledger entries cannot.
+
+Scenario packages may also carry validated, data-only drill definitions. A valid
+authored drill becomes runnable only with its containing scenario and cannot
+replace a reserved built-in definition. Credit-bearing track references remain
+separately curated; importing a runnable drill does not grant track credit.
+
+See [V2 Product Definition](docs/v2-personal-decision-gym.md) for the exact
+shipped scope, evidence boundaries, and non-goals.
 
 ## Quick Start
 
@@ -89,6 +111,7 @@ npm run test:watch       # Run Vitest in watch mode
 npm run check            # Run the complete release verification gate
 npm run check:pwa        # Validate service-worker syntax, manifest, and icons
 npm run import:ecb-eurgbp # Rebuild the shipped ECB EUR/GBP source snapshot
+npm run import:ecb-eurusd # Rebuild the shipped ECB EUR/USD source snapshot
 npm run import:fred-sp500 # Generate a local FRED SP500 scenario
 npm run import:ohlcv     # Generate a local scenario from licensed OHLCV CSV/JSON
 ```
@@ -103,19 +126,22 @@ does not register the service worker.
 The GitHub Pages deployment workflow is manual-only and does not change
 repository settings automatically. See [Release And Deployment](docs/release-and-deployment.md)
 for local production checks, install behavior, and the maintainer-run deployment
-process. Local Lab v1 includes a rights-reviewed, source-observed EUR/GBP
-onboarding scenario. Hosted accounts, server-enforced competition, and managed
-data services remain outside this release scope.
+process. V2 includes two rights-reviewed ECB reference-rate scenarios with
+source-observed daily values and explicit derived-field disclosure. Hosted
+accounts, server-enforced competition, and managed data services remain outside
+this release scope.
 
 ## Included Scenarios
 
-The repo ships one source-observed onboarding scenario plus synthetic sample
-scenarios that demonstrate the broader product loop and schema. Data fidelity
-and provenance are shown in-app for each lab.
+The repo ships two source-observed ECB scenarios, including the EUR/GBP
+onboarding lab, plus synthetic sample scenarios that demonstrate the broader
+product loop and schema. Data fidelity and provenance are shown in-app for each
+lab.
 
 | Scenario | Symbol | Theme | Data note |
 | --- | --- | --- | --- |
 | Brexit Referendum: EUR/GBP 2016 | `EURGBP` | Referendum, sterling uncertainty, Bank of England response | ECB daily reference-rate observations; OHLC repeat each daily point and volume is zero |
+| COVID Liquidity Shock: EUR/USD 2020 | `EURUSD` | Pandemic news, dollar funding, Federal Reserve and ECB liquidity response | ECB daily reference-rate observations; OHLC repeat each daily point and volume is zero |
 | Bitcoin 2020-2021 | `BTCUSD` | COVID crash, halving, bull cycle | Synthetic sample prices |
 | S&P 500 COVID Crash & Recovery | `SPY` | Pandemic crash, policy response, vaccine news | Synthetic sample prices |
 | Nasdaq 2022 Rate Shock | `QQQ` | Inflation, Fed tightening, growth-stock repricing | Synthetic sample prices |
@@ -129,6 +155,15 @@ npm run import:ecb-eurgbp -- --force=true --retrieved-at=2026-07-13T00:00:00.000
 
 Review the diff and current source terms before committing a refreshed
 snapshot; the script deliberately refuses to overwrite by default.
+
+The second observed ECB snapshot is reproduced with:
+
+```sh
+npm run import:ecb-eurusd -- --force=true --retrieved-at=2026-07-14T00:00:00.000Z
+```
+
+Its source manifest and field-level derivation disclosure are documented in
+[`src/data/scenarios/eurusd-covid-liquidity-2020/README.md`](src/data/scenarios/eurusd-covid-liquidity-2020/README.md).
 
 ### Optional FRED SP500 Local Import
 
@@ -166,7 +201,9 @@ leave market-hours enforcement off until you add a verified calendar.
 The browser exposes separate controls for restoring a session export and
 importing a complete Market Time Machine scenario package. Neither accepts raw
 OHLCV. User-owned JSON OHLCV is imported through the CLI above as an array of
-row objects. See [Privacy And Local Data](docs/privacy-and-local-data.md#three-different-json-paths)
+row objects. Session backups pin exact scenario/drill versions but do not embed
+an imported scenario package, so that package must be imported first in another
+browser. See [Privacy And Local Data](docs/privacy-and-local-data.md#four-different-json-paths)
 for an exact JSON example, storage boundaries, and deletion instructions.
 
 ## Core Principles
@@ -186,6 +223,8 @@ Scenario package
   -> portfolio module marks visible positions to market
   -> journal captures decision notes
   -> report engine unlocks full-session analysis after finish
+  -> practice engine assesses versioned drill process evidence
+  -> local ledger, evidence profile, and tracks guide the next practice
 ```
 
 Important source areas:
@@ -196,6 +235,9 @@ Important source areas:
 - `src/domain/portfolio/` - positions and P/L
 - `src/domain/analytics/` - metrics and behavioral flags
 - `src/domain/report/` - post-game report assembly
+- `src/domain/practice/` - drill rules, assessments, evidence, and track credit
+- `src/domain/history/` - bounded reports, compact ledger, and practice archive
+- `src/data/practice/` - curated drill and track definitions
 - `src/components/` - chart, controls, timeline, journal, and report UI
 
 ## Documentation
@@ -240,4 +282,4 @@ as legal advice.
 
 ## Disclaimer
 
-Market Time Machine is for education, research, and historical simulation. It is not investment advice, a broker, an exchange, a recommendation engine, or a guarantee of trading performance. Sample or derived prices are not executable market quotes. Sessions, completed-run history, imported scenarios, and journal notes are stored locally in the browser; review [Privacy and Local Data](docs/privacy-and-local-data.md) before using a shared device or exporting a session.
+Market Time Machine is for education, research, and historical simulation. It is not investment advice, a broker, an exchange, a recommendation engine, or a guarantee of trading performance. Sample or derived prices are not executable market quotes. Sessions, completed-run history, compact practice evidence, imported scenarios, and journal notes are stored locally in the browser; review [Privacy and Local Data](docs/privacy-and-local-data.md) before using a shared device or exporting a session or practice archive.

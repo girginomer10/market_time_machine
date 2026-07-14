@@ -9,6 +9,7 @@ import type {
   MarketCalendar,
   MarketEvent,
 } from "./market";
+import type { DrillDefinition } from "./practice";
 
 export type ScenarioMode = "explorer" | "professional" | "blind" | "challenge";
 
@@ -82,4 +83,6 @@ export type ScenarioPackage = {
   broker: BrokerConfig;
   marketCalendar?: MarketCalendar;
   corporateActions?: CorporateAction[];
+  /** Optional data-only practice definitions authored with this scenario. */
+  drills?: DrillDefinition[];
 };

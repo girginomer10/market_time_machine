@@ -23,25 +23,38 @@ challenge modes prevent a technical user from inspecting bundled future data.
 ## V2 Product Boundary: Personal Decision Gym
 
 V2 keeps the local, private architecture and adds a deliberate-practice layer.
-It connects completed-run evidence to one focused next exercise, then measures
-only the process signals that the simulator can actually observe.
+It connects a versioned process assessment to one focused next exercise, then
+measures only the process signals that the simulator can actually observe.
 
-V2 must:
+The shipped V2 product:
 
-- state why a practice was recommended and identify its source run;
-- show a current value and target only when the report supports both;
+- state why a practice was assigned and identify its retained source run when
+  available;
+- keep generic outcome recommendations in the report instead of relabeling them
+  as measured drill evidence;
+- show a current value and target only when the versioned assessment supports
+  both;
 - label every coaching rubric with a version;
 - leave missing or inapplicable evidence unassessed rather than treating it as
   poor performance;
 - keep the existing report score scoped to a run instead of claiming it is a
   durable cross-scenario skill rating;
+- keep Practice orientation milestones distinct from the credit-bearing
+  Decision Foundations track;
 - preserve active-session confirmations and the information firewall;
-- derive the first coach view from local history without adding telemetry or a
-  second copy of sensitive reports.
+- keep raw journal, plan, checkpoint-response, and reflection text out of the
+  compact evidence ledger;
+- award track credit only to exact curated scenario/data/drill/rubric versions
+  that meet every criterion in one attempt;
+- keep synthetic QQQ/KRE practice units visibly preview-only and non-creditable;
+- preserve recent reports and longer-lived compact evidence in a strict,
+  user-controlled V2 archive with V1 run-history migration;
+- validate and run scenario-authored drill definitions only with their
+  containing scenario, while keeping credit-bearing tracks separately curated.
 
-The first V2 slice is the Local Practice Coach and Decision Foundations track.
-The next slice is a versioned Event Discipline drill with high-importance event
-checkpoints. The complete definition is in
+V2 ships the Local Practice Coach, Event Discipline drills, a compact ledger,
+versioned evidence claims, and curated practice tracks. The complete definition
+and evidence boundary are in
 [V2 Product Definition](v2-personal-decision-gym.md).
 
 ## Product Thesis

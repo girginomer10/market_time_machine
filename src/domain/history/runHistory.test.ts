@@ -65,6 +65,7 @@ describe("run history", () => {
   it("archives a completed report and deduplicates the same replay", () => {
     const first = recordCompletedRun({
       report: report(),
+      runInstanceId: "run-one",
       mode: "explorer",
       brokerMode: "scenario",
       currency: "EUR",
@@ -73,6 +74,7 @@ describe("run history", () => {
     });
     const duplicate = recordCompletedRun({
       report: report(),
+      runInstanceId: "run-one",
       mode: "explorer",
       brokerMode: "scenario",
       completedAt: "2026-07-13T11:00:00.000Z",
@@ -83,12 +85,36 @@ describe("run history", () => {
     expect(loadRunHistory()).toHaveLength(1);
     expect(loadRunHistory()[0]).toMatchObject({
       scenarioTitle: "Scenario A",
+      id: "run-one",
+      runInstanceId: "run-one",
       currency: "EUR",
       pricePrecision: 5,
       score: 72,
       sampleData: false,
       journalCoverage: 1,
     });
+  });
+
+  it("keeps identical results from distinct replay sessions as separate evidence", () => {
+    recordCompletedRun({
+      report: report(),
+      runInstanceId: "run-one",
+      mode: "explorer",
+      brokerMode: "scenario",
+      completedAt: "2026-07-13T10:00:00.000Z",
+    });
+    recordCompletedRun({
+      report: report(),
+      runInstanceId: "run-two",
+      mode: "explorer",
+      brokerMode: "scenario",
+      completedAt: "2026-07-13T11:00:00.000Z",
+    });
+
+    expect(loadRunHistory().map((run) => run.id)).toEqual([
+      "run-two",
+      "run-one",
+    ]);
   });
 
   it("compares repeated runs and summarizes learner progress", () => {
@@ -150,6 +176,30 @@ describe("run history", () => {
       brokerMode: "scenario",
     });
     clearRunHistory();
+    expect(loadRunHistory()).toEqual([]);
+  });
+
+  it("drops a stored report with malformed nested render data", () => {
+    const saved = recordCompletedRun({
+      report: report(),
+      runInstanceId: "nested-malformed-run",
+      mode: "explorer",
+      brokerMode: "scenario",
+      completedAt: "2026-07-13T10:00:00.000Z",
+    }).run;
+    window.localStorage.setItem(
+      "market-time-machine.run-history.v1",
+      JSON.stringify([
+        {
+          ...saved,
+          report: {
+            ...saved.report,
+            behavioralFlags: [null],
+          },
+        },
+      ]),
+    );
+
     expect(loadRunHistory()).toEqual([]);
   });
 });

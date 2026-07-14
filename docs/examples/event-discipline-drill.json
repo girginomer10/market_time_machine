@@ -1,0 +1,36 @@
+{
+  "id": "my-fx-event-discipline-v1",
+  "competencyId": "event-discipline",
+  "definitionVersion": 1,
+  "rubricVersion": "event-discipline-process-v1",
+  "title": "FX Event Discipline",
+  "description": "Plan first and respond when important events become visible.",
+  "scenarioId": "my-fx-scenario",
+  "primarySymbol": "EURUSD",
+  "mode": "explorer",
+  "initialPlanRule": {
+    "requiredBeforeFirstOrder": true,
+    "requiredFields": [
+      "thesis",
+      "invalidation",
+      "exitPlan",
+      "acceptedRisk"
+    ]
+  },
+  "checkpointRule": {
+    "minimumImportance": 4,
+    "mapping": "next_primary_candle_close",
+    "groupSameReplayIndex": true,
+    "requireReflection": true,
+    "actions": ["hold", "reduce", "exit", "wait"]
+  },
+  "rubric": {
+    "weights": {
+      "plan_coverage": 0.3,
+      "checkpoint_coverage": 0.3,
+      "event_linkage": 0.2,
+      "rule_adherence": 0.2
+    },
+    "violationPenalty": 20
+  }
+}

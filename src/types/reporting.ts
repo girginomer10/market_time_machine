@@ -7,6 +7,67 @@ import type {
   JournalEntry,
   Order,
 } from "./trading";
+import type {
+  DrillAssessment,
+  DrillCheckpoint,
+  DrillCheckpointAction,
+  DrillCheckpointResponse,
+  DrillDefinition,
+  DrillRuleViolation,
+} from "./practice";
+
+/** Raw checkpoint reflection retained only in a full report/archive snapshot. */
+export const PRACTICE_DRILL_REFLECTION_MAX_LENGTH = 2_000;
+
+export type PracticeDrillPlanSnapshot = Readonly<
+  Omit<DecisionPlan, "linkedEventIds"> & {
+    linkedEventIds?: readonly string[];
+  }
+>;
+
+export type PracticeDrillEventSnapshot = Readonly<
+  Pick<
+    MarketEvent,
+    "id" | "publishedAt" | "title" | "type" | "importance" | "source"
+  >
+>;
+
+export type PracticeDrillCheckpointSnapshot = Readonly<
+  Omit<DrillCheckpoint, "eventIds"> & {
+    eventIds: readonly string[];
+  }
+>;
+
+/**
+ * A validated response captured at a resolved checkpoint. Skipped or malformed
+ * responses remain represented by the checkpoint and/or violation evidence.
+ */
+export type PracticeDrillAnsweredResponseSnapshot = Readonly<
+  Omit<
+    DrillCheckpointResponse,
+    "status" | "action" | "eventIds" | "workingOrderIds"
+  > & {
+    status: "answered";
+    action: DrillCheckpointAction;
+    eventIds: readonly string[];
+    workingOrderIds?: readonly string[];
+  }
+>;
+
+export type PracticeDrillCheckpointEvidence = Readonly<{
+  checkpoint: PracticeDrillCheckpointSnapshot;
+  response?: PracticeDrillAnsweredResponseSnapshot;
+  /** Safe display-only event fields; excludes summaries and source URLs. */
+  events: readonly PracticeDrillEventSnapshot[];
+}>;
+
+/** Self-contained drill evidence retained with a full report and its archive. */
+export type PracticeDrillReportSnapshot = Readonly<{
+  definition: Readonly<DrillDefinition>;
+  initialPlan?: PracticeDrillPlanSnapshot;
+  checkpoints: readonly PracticeDrillCheckpointEvidence[];
+  violations: readonly Readonly<DrillRuleViolation>[];
+}>;
 
 export type BehavioralFlagType =
   | "panic_sell"
@@ -223,4 +284,8 @@ export type ReportPayload = {
   auditSummary?: AuditSummary;
   orders?: Order[];
   auditEvents?: AuditEvent[];
+  /** Versioned process evidence from an active practice drill, when present. */
+  practiceAssessment?: DrillAssessment;
+  /** Detailed evidence is full-report-only and deliberately excluded from the compact ledger. */
+  practiceDrill?: PracticeDrillReportSnapshot;
 };

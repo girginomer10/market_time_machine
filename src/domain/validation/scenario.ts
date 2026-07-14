@@ -10,6 +10,7 @@ import type {
   ScenarioPackage,
 } from "../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../types/scenario";
+import { validateScenarioDrillDefinitions } from "../practice/drillAuthoring";
 import { timestampMs } from "../replay/timestamps";
 
 export type ValidationLevel = "error" | "warning";
@@ -1038,6 +1039,15 @@ export function validateScenarioPackage(
     });
   }
   issues.push(...validateCorporateActions(pkg.corporateActions, knownSymbols));
+  const authoredDrills = validateScenarioDrillDefinitions(pkg.drills, pkg);
+  issues.push(
+    ...authoredDrills.issues.map((issue) => ({
+      level: "error" as const,
+      code: issue.code,
+      message: issue.message,
+      path: issue.path,
+    })),
+  );
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");
   return {

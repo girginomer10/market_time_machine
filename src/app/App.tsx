@@ -17,6 +17,8 @@ import AuditTrail from "../components/audit/AuditTrail";
 import RunHistory from "../components/history/RunHistory";
 import PostGameReport from "../components/report/PostGameReport";
 import ScenarioLibrary from "../components/scenario/ScenarioLibrary";
+import ActiveDrillBanner from "../components/practice/ActiveDrillBanner";
+import EventCheckpointDialog from "../components/practice/EventCheckpointDialog";
 import {
   defaultScenarioId,
   getScenario,
@@ -27,21 +29,50 @@ import {
 } from "../data/scenarios";
 import {
   clearRunHistory,
-  exportRunHistory,
   loadRunHistory,
   recordCompletedRun,
   removeCompletedRun,
   type CompletedRun,
 } from "../domain/history/runHistory";
+import {
+  clearPracticeLedger,
+  loadPracticeLedger,
+  persistPracticeLedger,
+  reconcilePracticeLedger,
+  recordPracticeLedgerEntry,
+  removePracticeLedgerEntry,
+  type PracticeLedgerEntry,
+} from "../domain/history/practiceLedger";
+import {
+  exportPracticeArchive,
+  mergePracticeArchive,
+  parsePracticeArchive,
+} from "../domain/history/practiceArchive";
+import { persistPracticeArchiveAtomically } from "../domain/history/practiceArchiveStorage";
 import { buildPracticeCoachPlan } from "../domain/coaching/practiceCoach";
+import {
+  getDrillForScenario,
+  listAvailableDrills,
+} from "../data/practice/drills";
+import { listBuiltInPracticeTracks } from "../data/practice/tracks";
+import {
+  buildEvidenceProfile,
+  type ValidatedSourceScenario,
+} from "../domain/practice/evidenceProfile";
+import { practiceTrackProgress } from "../domain/practice/tracks";
 import { eventCoverageSummary } from "../domain/scenario/eventCoverage";
 import { selectSnapshot, useSessionStore } from "../store/sessionStore";
-import type { Candle, ReplayStatus, ScenarioMode } from "../types";
+import type {
+  Candle,
+  ReplayStatus,
+  ReportPayload,
+  ScenarioMode,
+} from "../types";
 import { formatCurrency, formatNumber, formatPct } from "../utils/format";
 import { scenarioModeLabel } from "../utils/scenarioMode";
 
 const ZERO_EPSILON = 0.0000001;
-const MAX_SCENARIO_IMPORT_BYTES = 25 * 1024 * 1024;
+const MAX_LOCAL_IMPORT_BYTES = 25 * 1024 * 1024;
 
 type PendingConfirmation =
   | { kind: "reset" }
@@ -52,6 +83,7 @@ type PendingConfirmation =
       scenarioId: string;
       title: string;
       mode: ScenarioMode;
+      drillId?: string;
     };
 
 function confirmationCopy(pending: PendingConfirmation): {
@@ -71,7 +103,7 @@ function confirmationCopy(pending: PendingConfirmation): {
       return {
         title: "Clear completed replay history?",
         description:
-          "Saved reports and progress comparisons will be removed from this browser. Export first if you want a copy.",
+          "Saved reports, compact practice evidence, and progress comparisons will be removed from this browser. Export first if you want a copy.",
         confirmLabel: "Clear history",
       };
     case "remove-scenario":
@@ -128,8 +160,41 @@ function pricePrecisionForScenario(scenarioId: string): number {
   return decimalPlacesForTickSize(instrument?.tickSize);
 }
 
+function previousComparablePracticeScore(
+  currentRunId: string,
+  report: ReportPayload,
+  mode: ScenarioMode,
+  brokerMode: CompletedRun["brokerMode"],
+  ledger: readonly PracticeLedgerEntry[],
+): number | undefined {
+  const assessment = report.practiceAssessment;
+  if (!assessment) return undefined;
+  return [...ledger]
+    .filter(
+      (entry) =>
+        entry.id !== currentRunId &&
+        entry.runId !== currentRunId &&
+        entry.runInstanceId !== currentRunId &&
+        entry.scenarioId === report.scenarioId &&
+        (entry.scenarioDataVersion ?? null) ===
+          (report.provenance?.dataVersion ?? null) &&
+        entry.mode === mode &&
+        entry.brokerMode === brokerMode &&
+        entry.assessment?.drillId === assessment.drillId &&
+        entry.assessment.definitionVersion === assessment.definitionVersion &&
+        entry.assessment.rubricVersion === assessment.rubricVersion &&
+        entry.assessment.overallScore !== undefined,
+    )
+    .sort(
+      (left, right) =>
+        Date.parse(right.completedAt) - Date.parse(left.completedAt) ||
+        right.id.localeCompare(left.id),
+    )[0]?.assessment?.overallScore;
+}
+
 export default function App() {
   const scenario = useSessionStore((s) => s.scenario);
+  const runInstanceId = useSessionStore((s) => s.runInstanceId);
   const status = useSessionStore((s) => s.status);
   const fills = useSessionStore((s) => s.fills);
   const orders = useSessionStore((s) => s.orders);
@@ -137,10 +202,22 @@ export default function App() {
   const report = useSessionStore((s) => s.report);
   const mode = useSessionStore((s) => s.mode);
   const brokerMode = useSessionStore((s) => s.brokerMode);
+  const activeDrillId = useSessionStore((s) => s.activeDrillId);
+  const initialDrillPlan = useSessionStore((s) => s.initialDrillPlan);
+  const drillCheckpointResponses = useSessionStore(
+    (s) => s.drillCheckpointResponses,
+  );
+  const pendingDrillCheckpoint = useSessionStore(
+    (s) => s.pendingDrillCheckpoint,
+  );
   const play = useSessionStore((s) => s.play);
   const pause = useSessionStore((s) => s.pause);
   const reset = useSessionStore((s) => s.resetScenario);
   const selectScenario = useSessionStore((s) => s.selectScenario);
+  const startPractice = useSessionStore((s) => s.startPractice);
+  const submitDrillCheckpoint = useSessionStore(
+    (s) => s.submitDrillCheckpoint,
+  );
   const setScenarioMode = useSessionStore((s) => s.setScenarioMode);
   const cancelOrder = useSessionStore((s) => s.cancelOrder);
   const updatePendingOrder = useSessionStore((s) => s.updatePendingOrder);
@@ -160,6 +237,12 @@ export default function App() {
   const [runHistory, setRunHistory] = useState<CompletedRun[]>(() =>
     loadRunHistory(),
   );
+  const [practiceLedger, setPracticeLedger] = useState<PracticeLedgerEntry[]>(
+    () =>
+      persistPracticeLedger(
+        reconcilePracticeLedger(loadPracticeLedger(), loadRunHistory()),
+      ),
+  );
   const [historicalRun, setHistoricalRun] = useState<CompletedRun>();
   const [hoveredEventId, setHoveredEventId] = useState<string | undefined>();
   const [sessionEpoch, setSessionEpoch] = useState(0);
@@ -170,6 +253,7 @@ export default function App() {
     kind: "status" | "error";
     text: string;
   }>();
+  const [archiveMessage, setArchiveMessage] = useState<string>();
   const brandButtonRef = useRef<HTMLButtonElement | null>(null);
   const primarySymbol = scenario.meta.symbols[0];
   const primaryInstrument = scenario.instruments.find(
@@ -179,8 +263,54 @@ export default function App() {
     primaryInstrument?.tickSize,
   );
   const practicePlan = useMemo(
-    () => buildPracticeCoachPlan(runHistory, scenarios),
-    [runHistory, scenarios],
+    () => buildPracticeCoachPlan(runHistory, scenarios, practiceLedger),
+    [practiceLedger, runHistory, scenarios],
+  );
+  const drillCatalog = useMemo(
+    () => listAvailableDrills(scenarios),
+    [scenarios],
+  );
+  const practiceTrackCatalog = useMemo(
+    () => listBuiltInPracticeTracks(),
+    [],
+  );
+  const validatedSourceScenarios = useMemo(() => {
+    const byVersion = new Map<string, ValidatedSourceScenario>();
+    for (const track of practiceTrackCatalog) {
+      for (const unit of track.units) {
+        if (
+          unit.status !== "validated" ||
+          !unit.evidenceScope.sourceReviewed ||
+          unit.scenario.dataVersion === null
+        ) {
+          continue;
+        }
+        const source = {
+          scenarioId: unit.scenario.id,
+          dataVersion: unit.scenario.dataVersion,
+        } satisfies ValidatedSourceScenario;
+        byVersion.set(`${source.scenarioId}:${source.dataVersion}`, source);
+      }
+    }
+    return [...byVersion.values()];
+  }, [practiceTrackCatalog]);
+  const evidenceProfile = useMemo(
+    () => buildEvidenceProfile(practiceLedger, validatedSourceScenarios),
+    [practiceLedger, validatedSourceScenarios],
+  );
+  const practiceTrackProgressEntries = useMemo(
+    () =>
+      practiceTrackCatalog.map((track) =>
+        practiceTrackProgress(track, practiceLedger),
+      ),
+    [practiceLedger, practiceTrackCatalog],
+  );
+  const activeDrill = useMemo(
+    () =>
+      activeDrillId
+        ? getDrillForScenario(activeDrillId, scenario)
+        : undefined,
+    [activeDrillId, scenario],
   );
 
   useEffect(() => {
@@ -191,17 +321,22 @@ export default function App() {
     if (!report) return;
     const recorded = recordCompletedRun({
       report,
+      runInstanceId,
       mode,
       brokerMode,
       currency: scenario.meta.baseCurrency,
       pricePrecision: primaryPricePrecision,
     });
     setRunHistory(recorded.history);
+    setPracticeLedger(
+      recordPracticeLedgerEntry(recorded.run, report.practiceAssessment),
+    );
   }, [
     brokerMode,
     mode,
     primaryPricePrecision,
     report,
+    runInstanceId,
     scenario.meta.baseCurrency,
   ]);
 
@@ -243,6 +378,19 @@ export default function App() {
     status === "finished";
   const restrictedReplay =
     status !== "finished" && isRestrictedScenarioMode(mode);
+  const displayActiveDrill = useMemo(
+    () =>
+      activeDrill && restrictedReplay
+        ? {
+            ...activeDrill,
+            title: "Guided practice drill",
+            description:
+              "Follow the versioned plan and checkpoint rules without revealing the hidden lab identity.",
+            primarySymbol: "Primary asset",
+          }
+        : activeDrill,
+    [activeDrill, restrictedReplay],
+  );
   useEffect(() => {
     if (restrictedReplay) setLibraryOpen(false);
   }, [restrictedReplay]);
@@ -377,14 +525,30 @@ export default function App() {
     setSessionEpoch((epoch) => epoch + 1);
   };
 
-  const startScenario = (scenarioId: string, nextMode: ScenarioMode) => {
+  const startScenario = (
+    scenarioId: string,
+    nextMode: ScenarioMode,
+    drillId?: string,
+  ) => {
     setReportOpen(false);
     setLibraryOpen(false);
     setLibraryCanClose(false);
     setPendingConfirmation(undefined);
     setSessionMessage(undefined);
-    selectScenario(scenarioId);
-    setScenarioMode(nextMode);
+    if (drillId) {
+      const result = startPractice(scenarioId, drillId);
+      if (!result.ok) {
+        setScenarioMessage({
+          kind: "error",
+          text: result.message ?? "Unable to start this practice drill.",
+        });
+        setLibraryOpen(true);
+        return;
+      }
+    } else {
+      selectScenario(scenarioId);
+      setScenarioMode(nextMode);
+    }
     setSessionEpoch((epoch) => epoch + 1);
   };
 
@@ -397,6 +561,7 @@ export default function App() {
   const requestStart = (
     scenarioId: string,
     nextMode: ScenarioMode,
+    drillId?: string,
   ) => {
     const candidate = scenarios.find(
       (candidate) => candidate.meta.id === scenarioId,
@@ -412,6 +577,19 @@ export default function App() {
     const resolvedMode = candidate.meta.supportedModes.includes(nextMode)
       ? nextMode
       : (candidate.meta.supportedModes[0] ?? "explorer");
+    const definition = drillId
+      ? getDrillForScenario(drillId, candidate)
+      : undefined;
+    if (
+      drillId &&
+      (!definition || definition.scenarioId !== candidate.meta.id)
+    ) {
+      setScenarioMessage({
+        kind: "error",
+        text: "That versioned practice drill is not available for this scenario.",
+      });
+      return;
+    }
     if (status === "playing") pause();
     if (sessionHasProgress) {
       setPendingConfirmation({
@@ -419,9 +597,10 @@ export default function App() {
         scenarioId,
         title,
         mode: resolvedMode,
+        drillId,
       });
     } else {
-      startScenario(scenarioId, resolvedMode);
+      startScenario(scenarioId, definition?.mode ?? resolvedMode, drillId);
     }
   };
 
@@ -435,11 +614,14 @@ export default function App() {
         startScenario(
           pendingConfirmation.scenarioId,
           pendingConfirmation.mode,
+          pendingConfirmation.drillId,
         );
         break;
       case "clear-history":
         clearRunHistory();
+        clearPracticeLedger();
         setRunHistory([]);
+        setPracticeLedger([]);
         setHistoricalRun(undefined);
         setPendingConfirmation(undefined);
         break;
@@ -501,18 +683,54 @@ export default function App() {
   };
 
   const downloadRunHistory = () => {
-    const serialized = exportRunHistory(runHistory);
+    const serialized = exportPracticeArchive(runHistory, practiceLedger);
     const blob = new Blob([serialized], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "market-time-machine-run-history.json";
+    link.download = "market-time-machine-practice-archive-v2.json";
     link.click();
     URL.revokeObjectURL(url);
     setScenarioMessage({
       kind: "status",
-      text: "Completed replay history exported.",
+      text: "Practice archive exported with recent reports and compact evidence.",
     });
+  };
+
+  const importPracticeArchive = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (file.size > MAX_LOCAL_IMPORT_BYTES) {
+      setArchiveMessage("Practice archive is larger than the 25 MB import limit.");
+      return;
+    }
+    try {
+      const imported = parsePracticeArchive(await file.text());
+      const merged = mergePracticeArchive(
+        { runs: runHistory, ledger: practiceLedger },
+        imported,
+      );
+      const { runs: savedRuns, ledger: savedLedger } =
+        persistPracticeArchiveAtomically(merged);
+      setRunHistory(savedRuns);
+      setPracticeLedger(savedLedger);
+      const conflictNote =
+        merged.conflictCount > 0
+          ? ` ${merged.conflictCount} conflicting item${merged.conflictCount === 1 ? " was" : "s were"} kept unchanged.`
+          : "";
+      setArchiveMessage(
+        `Imported ${merged.addedRunIds.length} report${merged.addedRunIds.length === 1 ? "" : "s"} and ${merged.addedLedgerIds.length} compact evidence entr${merged.addedLedgerIds.length === 1 ? "y" : "ies"}.${conflictNote}`,
+      );
+    } catch (error) {
+      setArchiveMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to import this practice archive.",
+      );
+    }
   };
 
   const requestRemoveScenario = (scenarioId: string, title: string) => {
@@ -530,14 +748,22 @@ export default function App() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    const result = importSession(await file.text());
-    if (result.ok) {
-      setReportOpen(false);
-      setLibraryCanClose(false);
-      setSessionEpoch((epoch) => epoch + 1);
-      setSessionMessage("Saved session restored.");
-    } else {
-      setSessionMessage(result.message ?? "Unable to restore this session.");
+    if (file.size > MAX_LOCAL_IMPORT_BYTES) {
+      setSessionMessage("Session file is larger than the 25 MB restore limit.");
+      return;
+    }
+    try {
+      const result = importSession(await file.text());
+      if (result.ok) {
+        setReportOpen(false);
+        setLibraryCanClose(false);
+        setSessionEpoch((epoch) => epoch + 1);
+        setSessionMessage("Saved session restored.");
+      } else {
+        setSessionMessage(result.message ?? "Unable to restore this session.");
+      }
+    } catch {
+      setSessionMessage("Unable to read this session file.");
     }
   };
 
@@ -545,7 +771,7 @@ export default function App() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (file.size > MAX_SCENARIO_IMPORT_BYTES) {
+    if (file.size > MAX_LOCAL_IMPORT_BYTES) {
       setScenarioMessage({
         kind: "error",
         text: "Scenario package is larger than the 25 MB local import limit.",
@@ -600,28 +826,41 @@ export default function App() {
           activeMode={mode}
           activeStatus={status}
           activeProgressPct={progressPct}
+          activeDrillId={activeDrillId}
           hasActiveSession={sessionHasProgress}
           hideActiveIdentity={restrictedReplay}
           history={
-            runHistory.length > 0 ? (
-              <RunHistory
+            <RunHistory
                 runs={runHistory}
+                hasArchiveData={
+                  runHistory.length > 0 || practiceLedger.length > 0
+                }
                 onViewReport={setHistoricalRun}
                 onReplay={(run) => {
                   setHistoricalRun(undefined);
-                  requestStart(run.scenarioId, run.mode);
+                  requestStart(
+                    run.scenarioId,
+                    run.mode,
+                    run.report.practiceAssessment?.drillId,
+                  );
                 }}
                 onRemove={(run) => {
                   setRunHistory(removeCompletedRun(run.id));
+                  setPracticeLedger(removePracticeLedgerEntry(run.id));
                 }}
                 onExport={downloadRunHistory}
+                onImport={importPracticeArchive}
+                importMessage={archiveMessage}
                 onClear={() =>
                   setPendingConfirmation({ kind: "clear-history" })
                 }
               />
-            ) : undefined
           }
           practicePlan={practicePlan}
+          drills={drillCatalog}
+          evidenceProfile={evidenceProfile}
+          practiceTracks={practiceTrackCatalog}
+          practiceTrackProgress={practiceTrackProgressEntries}
           sessionMessage={sessionMessage}
           scenarioMessage={scenarioMessage?.text}
           scenarioMessageKind={scenarioMessage?.kind}
@@ -655,6 +894,13 @@ export default function App() {
         {historicalRun ? (
           <PostGameReport
             report={historicalRun.report}
+            previousComparablePracticeScore={previousComparablePracticeScore(
+              historicalRun.id,
+              historicalRun.report,
+              historicalRun.mode,
+              historicalRun.brokerMode,
+              practiceLedger,
+            )}
             currency={
               historicalRun.currency ??
               getScenario(historicalRun.scenarioId)?.meta.baseCurrency ??
@@ -668,7 +914,11 @@ export default function App() {
             onReset={() => {
               const run = historicalRun;
               setHistoricalRun(undefined);
-              requestStart(run.scenarioId, run.mode);
+              requestStart(
+                run.scenarioId,
+                run.mode,
+                run.report.practiceAssessment?.drillId,
+              );
             }}
           />
         ) : null}
@@ -765,6 +1015,14 @@ export default function App() {
             Broker · {brokerModeLabel(brokerMode)}
           </span>
           <span className="header-badge">Mode · {scenarioModeLabel(mode)}</span>
+          {displayActiveDrill ? (
+            <span
+              className="header-badge drill"
+              title={displayActiveDrill.title}
+            >
+              Drill · {displayActiveDrill.title}
+            </span>
+          ) : null}
           {status === "finished" ? (
             <button className="btn primary" onClick={() => setReportOpen(true)}>
               View report
@@ -780,6 +1038,23 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {displayActiveDrill ? (
+        <div className="active-drill-slot">
+          <ActiveDrillBanner
+            definition={displayActiveDrill}
+            stage={
+              status === "finished"
+                ? "review"
+                : initialDrillPlan
+                  ? "execute"
+                  : "plan"
+            }
+            answeredCheckpointCount={drillCheckpointResponses.length}
+            initialPlan={initialDrillPlan}
+          />
+        </div>
+      ) : null}
 
       <main className="app-grid">
         <section className="panel chart-panel">
@@ -931,9 +1206,27 @@ export default function App() {
         </section>
       </main>
 
+      {displayActiveDrill && pendingDrillCheckpoint ? (
+        <EventCheckpointDialog
+          definition={displayActiveDrill}
+          checkpoint={pendingDrillCheckpoint}
+          visibleEvents={displayEventsChronological}
+          onSubmit={(action, reflection) => {
+            submitDrillCheckpoint(action, reflection);
+          }}
+        />
+      ) : null}
+
       {report && reportOpen ? (
         <PostGameReport
           report={report}
+          previousComparablePracticeScore={previousComparablePracticeScore(
+            runInstanceId,
+            report,
+            mode,
+            brokerMode,
+            practiceLedger,
+          )}
           currency={currency}
           pricePrecision={primaryPricePrecision}
           onClose={() => setReportOpen(false)}

@@ -1,10 +1,93 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import type { Candle, Order, ScenarioPackage } from "../types";
-import { defaultScenarioId } from "../data/scenarios";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  Candle,
+  DrillDefinition,
+  Order,
+  ScenarioPackage,
+} from "../types";
+import {
+  defaultScenarioId,
+  registerUserScenario,
+  removeUserScenario,
+} from "../data/scenarios";
+import {
+  EVENT_DISCIPLINE_EURGBP_V1_ID,
+  eventDisciplineEurGbpV1,
+} from "../data/practice/drills";
 import { emptyPortfolio } from "../domain/portfolio/portfolio";
 import { replayTimeline } from "../domain/replay/engine";
+import { assembleScenario } from "../domain/scenario/loader";
 import { makeBroker, makeScenario } from "../test/fixtures";
 import { useSessionStore } from "./sessionStore";
+
+const AUTHORED_PRACTICE_SCENARIO_ID = "authored-practice-runtime-test";
+const AUTHORED_PRACTICE_DRILL_ID = "authored-macro-discipline-v1";
+const COLLISION_PRACTICE_SCENARIO_ID = "authored-built-in-collision-test";
+
+afterEach(() => {
+  removeUserScenario(AUTHORED_PRACTICE_SCENARIO_ID);
+  removeUserScenario(COLLISION_PRACTICE_SCENARIO_ID);
+});
+
+function authoredPracticeScenario(input: {
+  scenarioId?: string;
+  drillId?: string;
+} = {}): ScenarioPackage {
+  const base = makeScenario();
+  const scenarioId = input.scenarioId ?? AUTHORED_PRACTICE_SCENARIO_ID;
+  const drill: DrillDefinition = {
+    id: input.drillId ?? AUTHORED_PRACTICE_DRILL_ID,
+    competencyId: "authored-macro-discipline",
+    definitionVersion: 1,
+    rubricVersion: "authored-event-process-v1",
+    title: "Custom Macro Discipline",
+    description: "A scenario-authored runtime practice drill.",
+    scenarioId,
+    primarySymbol: "TEST",
+    mode: "explorer",
+    initialPlanRule: {
+      requiredBeforeFirstOrder: true,
+      requiredFields: [
+        "thesis",
+        "invalidation",
+        "exitPlan",
+        "acceptedRisk",
+      ],
+    },
+    checkpointRule: {
+      minimumImportance: 4,
+      mapping: "next_primary_candle_close",
+      groupSameReplayIndex: true,
+      requireReflection: true,
+      actions: ["hold", "reduce", "exit", "wait"],
+    },
+    rubric: {
+      weights: {
+        plan_coverage: 0.3,
+        checkpoint_coverage: 0.3,
+        event_linkage: 0.2,
+        rule_adherence: 0.2,
+      },
+      violationPenalty: 20,
+    },
+  };
+  return assembleScenario({
+    scenario: {
+      ...base.meta,
+      id: scenarioId,
+      title: "Authored practice runtime fixture",
+      dataVersion: "authored-practice-data-v1",
+      supportedModes: ["explorer"],
+    },
+    instruments: base.instruments,
+    candles: base.candles,
+    events: base.events,
+    indicators: base.indicators,
+    benchmarks: base.benchmarks,
+    broker: base.broker,
+    drills: [drill],
+  });
+}
 
 function candle(
   symbol: string,
@@ -459,6 +542,505 @@ describe("sessionStore finish", () => {
       next.auditEvents.some((event) => event.type === "forced_liquidation"),
     ).toBe(true);
     expect(next.portfolio.positions[symbol].quantity).toBe(0);
+  });
+});
+
+describe("sessionStore Event Discipline practice", () => {
+  const drillId = "event-discipline-eurgbp-v1";
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useSessionStore.getState().selectScenario(defaultScenarioId);
+  });
+
+  function startPractice(): void {
+    expect(
+      useSessionStore.getState().startPractice(defaultScenarioId, drillId),
+    ).toEqual({ ok: true });
+    useSessionStore.getState().setSpeed("60x");
+  }
+
+  function advanceUntilCheckpointOrFinish(): void {
+    let guard = 0;
+    while (
+      !useSessionStore.getState().pendingDrillCheckpoint &&
+      useSessionStore.getState().status !== "finished" &&
+      guard < 500
+    ) {
+      useSessionStore.getState().play();
+      useSessionStore.getState().stepForward();
+      guard += 1;
+    }
+    expect(guard).toBeLessThan(500);
+  }
+
+  it("atomically starts the versioned drill and enforces a complete first plan", () => {
+    startPractice();
+    const state = useSessionStore.getState();
+    expect(state).toMatchObject({
+      scenario: { meta: { id: defaultScenarioId } },
+      mode: "explorer",
+      activeDrillId: drillId,
+      activeDrillDefinitionVersion: 1,
+      activeDrillIdentity: {
+        scenarioDataVersion: state.scenario.meta.dataVersion,
+        drillId,
+        competencyId: "event-discipline",
+        definitionVersion: 1,
+        rubricVersion: "event-discipline-process-v1",
+        definitionSnapshot: {
+          id: drillId,
+          competencyId: "event-discipline",
+          definitionVersion: 1,
+          rubricVersion: "event-discipline-process-v1",
+        },
+      },
+    });
+    expect(
+      JSON.parse(
+        window.localStorage.getItem("market-time-machine.session.v2") ?? "{}",
+      ),
+    ).toMatchObject({
+      version: 3,
+      scenarioId: defaultScenarioId,
+      scenarioDataVersion: state.scenario.meta.dataVersion,
+      activeDrillIdentity: {
+        scenarioDataVersion: state.scenario.meta.dataVersion,
+        drillId,
+        competencyId: "event-discipline",
+        rubricVersion: "event-discipline-process-v1",
+        definitionSnapshot: {
+          id: drillId,
+          title: eventDisciplineEurGbpV1.title,
+        },
+      },
+    });
+
+    const incomplete = state.submitMarketOrder({
+      symbol: state.primarySymbol,
+      side: "buy",
+      type: "market",
+      quantity: 100,
+      decisionPlan: { thesis: "Policy uncertainty may move the cross." },
+    });
+    expect(incomplete.ok).toBe(false);
+    expect(incomplete.message).toMatch(/invalidation, exitPlan, acceptedRisk/);
+    expect(useSessionStore.getState().drillRuleViolations).toHaveLength(1);
+    expect(useSessionStore.getState().fills).toHaveLength(0);
+
+    const completePlan = {
+      thesis: "Policy uncertainty may move the cross.",
+      invalidation: "Published policy contradicts the thesis.",
+      exitPlan: "Exit at the next checkpoint if invalidated.",
+      acceptedRisk: "No more than one percent of equity.",
+    };
+    expect(
+      useSessionStore.getState().submitMarketOrder({
+        symbol: state.primarySymbol,
+        side: "buy",
+        type: "market",
+        quantity: 100,
+        decisionPlan: completePlan,
+      }).ok,
+    ).toBe(true);
+    expect(useSessionStore.getState().initialDrillPlan).toEqual(completePlan);
+  });
+
+  it("cannot skip or advance past a mandatory checkpoint and restores it safely", () => {
+    startPractice();
+    useSessionStore.getState().finish();
+    expect(useSessionStore.getState().status).not.toBe("finished");
+    expect(useSessionStore.getState().rejectionMessage).toMatch(/disabled/i);
+
+    advanceUntilCheckpointOrFinish();
+    const pending = useSessionStore.getState().pendingDrillCheckpoint;
+    expect(pending).toBeDefined();
+    const checkpointIndex = useSessionStore.getState().currentIndex;
+
+    useSessionStore.getState().play();
+    expect(useSessionStore.getState().currentIndex).toBe(checkpointIndex);
+    expect(useSessionStore.getState().status).toBe("paused");
+    expect(
+      useSessionStore
+        .getState()
+        .drillRuleViolations.some(
+          (violation) => violation.code === "advance_while_checkpoint_open",
+        ),
+    ).toBe(true);
+
+    const serialized = useSessionStore.getState().exportSession();
+    expect(JSON.parse(serialized)).toMatchObject({
+      version: 3,
+      scenarioDataVersion: useSessionStore.getState().scenario.meta.dataVersion,
+      activeDrillId: drillId,
+      activeDrillDefinitionVersion: 1,
+      activeDrillIdentity: {
+        scenarioDataVersion: useSessionStore.getState().scenario.meta.dataVersion,
+        drillId,
+        competencyId: "event-discipline",
+        definitionVersion: 1,
+        rubricVersion: "event-discipline-process-v1",
+        definitionSnapshot: eventDisciplineEurGbpV1,
+      },
+    });
+    useSessionStore.getState().selectScenario(defaultScenarioId);
+    expect(useSessionStore.getState().importSession(serialized)).toEqual({
+      ok: true,
+    });
+    expect(useSessionStore.getState().pendingDrillCheckpoint?.id).toBe(
+      pending?.id,
+    );
+
+    const tampered = JSON.parse(serialized) as Record<string, unknown>;
+    tampered.pendingDrillCheckpointId = "future-or-unknown";
+    expect(
+      useSessionStore.getState().importSession(JSON.stringify(tampered)).ok,
+    ).toBe(false);
+
+    const changedDefinition = JSON.parse(serialized) as Record<string, unknown>;
+    const changedIdentity = changedDefinition.activeDrillIdentity as Record<
+      string,
+      unknown
+    >;
+    const changedSnapshot = changedIdentity.definitionSnapshot as Record<
+      string,
+      unknown
+    >;
+    changedSnapshot.title = "Changed after this session began";
+    const changedResult = useSessionStore
+      .getState()
+      .importSession(JSON.stringify(changedDefinition));
+    expect(changedResult.ok).toBe(false);
+    expect(changedResult.message).toMatch(/changed practice drill definition/i);
+
+    const changedScenarioVersion = JSON.parse(serialized) as Record<
+      string,
+      unknown
+    >;
+    changedScenarioVersion.scenarioDataVersion = "different-data-version";
+    const versionResult = useSessionStore
+      .getState()
+      .importSession(JSON.stringify(changedScenarioVersion));
+    expect(versionResult.ok).toBe(false);
+    expect(versionResult.message).toMatch(/different scenario data version/i);
+
+    for (const version of [1, 2]) {
+      const legacyDrill = JSON.parse(serialized) as Record<string, unknown>;
+      legacyDrill.version = version;
+      delete legacyDrill.scenarioDataVersion;
+      delete legacyDrill.activeDrillIdentity;
+      if (version === 1) delete legacyDrill.runInstanceId;
+      const legacyResult = useSessionStore
+        .getState()
+        .importSession(JSON.stringify(legacyDrill));
+      expect(legacyResult.ok).toBe(false);
+      expect(legacyResult.message).toMatch(/legacy practice sessions/i);
+    }
+  });
+
+  it("records each visible checkpoint and emits a process-only final assessment", () => {
+    startPractice();
+    const started = useSessionStore.getState();
+    expect(
+      started.submitMarketOrder({
+        symbol: started.primarySymbol,
+        side: "buy",
+        type: "market",
+        quantity: 100,
+        decisionPlan: {
+          thesis: "Visible policy uncertainty may move the currency cross.",
+          invalidation: "Published policy contradicts the thesis.",
+          exitPlan: "Exit at a checkpoint if the thesis is invalidated.",
+          acceptedRisk: "No more than one percent of equity.",
+        },
+      }).ok,
+    ).toBe(true);
+    let answered = 0;
+    let guard = 0;
+    while (useSessionStore.getState().status !== "finished" && guard < 500) {
+      advanceUntilCheckpointOrFinish();
+      const pending = useSessionStore.getState().pendingDrillCheckpoint;
+      if (pending) {
+        const response = useSessionStore
+          .getState()
+          .submitDrillCheckpoint(
+            "wait",
+            "The new public information changes the risk balance; I will wait for confirmation.",
+          );
+        expect(response.ok).toBe(true);
+        answered += 1;
+      } else if (useSessionStore.getState().status !== "finished") {
+        useSessionStore.getState().play();
+      }
+      guard += 1;
+    }
+
+    expect(guard).toBeLessThan(500);
+    expect(answered).toBe(5);
+    expect(useSessionStore.getState().report?.practiceAssessment).toMatchObject({
+      drillId,
+      competencyId: "event-discipline",
+      status: "completed",
+      answeredCheckpointCount: 5,
+      eligibleCheckpointCount: 5,
+      eligibleEventCount: 6,
+    });
+    expect(
+      useSessionStore.getState().report?.practiceAssessment?.methodology,
+    ).toMatch(/process-only/i);
+    const detailedEvidence = useSessionStore.getState().report?.practiceDrill;
+    expect(detailedEvidence).toMatchObject({
+      definition: { id: drillId, definitionVersion: 1 },
+      checkpoints: expect.arrayContaining([
+        expect.objectContaining({
+          response: expect.objectContaining({
+            status: "answered",
+            action: "wait",
+            reflection:
+              "The new public information changes the risk balance; I will wait for confirmation.",
+          }),
+        }),
+      ]),
+    });
+    expect(detailedEvidence?.checkpoints).toHaveLength(5);
+    expect(detailedEvidence?.checkpoints[0].events[0]).not.toHaveProperty(
+      "summary",
+    );
+    expect(detailedEvidence?.checkpoints[0].events[0]).not.toHaveProperty(
+      "sourceUrl",
+    );
+  });
+});
+
+describe("sessionStore scenario-authored practice runtime", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useSessionStore.getState().selectScenario(defaultScenarioId);
+  });
+
+  it("runs, restores, assesses, and resets an authored drill end to end", () => {
+    const scenario = authoredPracticeScenario();
+    expect(registerUserScenario(scenario)).toMatchObject({ ok: true });
+    expect(
+      useSessionStore
+        .getState()
+        .startPractice(AUTHORED_PRACTICE_SCENARIO_ID, AUTHORED_PRACTICE_DRILL_ID),
+    ).toEqual({ ok: true });
+    expect(useSessionStore.getState()).toMatchObject({
+      scenario: { meta: { id: AUTHORED_PRACTICE_SCENARIO_ID } },
+      activeDrillId: AUTHORED_PRACTICE_DRILL_ID,
+      activeDrillDefinitionVersion: 1,
+      mode: "explorer",
+    });
+
+    const incomplete = useSessionStore.getState().submitMarketOrder({
+      symbol: "TEST",
+      side: "buy",
+      type: "market",
+      quantity: 1,
+      decisionPlan: { thesis: "A testable event thesis." },
+    });
+    expect(incomplete).toMatchObject({ ok: false });
+    expect(incomplete.message).toContain("Custom Macro Discipline");
+    expect(incomplete.message).not.toContain("Event Discipline");
+
+    const completePlan = {
+      thesis: "A testable event thesis.",
+      invalidation: "The next public release contradicts the thesis.",
+      exitPlan: "Exit at the checkpoint if invalidated.",
+      acceptedRisk: "At most one percent of equity.",
+    };
+    expect(
+      useSessionStore.getState().submitMarketOrder({
+        symbol: "TEST",
+        side: "buy",
+        type: "market",
+        quantity: 1,
+        decisionPlan: completePlan,
+      }).ok,
+    ).toBe(true);
+    useSessionStore.getState().setSpeed("60x");
+    let guard = 0;
+    while (!useSessionStore.getState().pendingDrillCheckpoint && guard < 20) {
+      useSessionStore.getState().play();
+      useSessionStore.getState().stepForward();
+      guard += 1;
+    }
+    expect(guard).toBeLessThan(20);
+    const pending = useSessionStore.getState().pendingDrillCheckpoint;
+    expect(pending).toBeDefined();
+    const pendingId = pending!.id;
+    const pendingEventIds = [...pending!.eventIds];
+
+    const serialized = useSessionStore.getState().exportSession();
+    expect(JSON.parse(serialized)).toMatchObject({
+      version: 3,
+      scenarioId: AUTHORED_PRACTICE_SCENARIO_ID,
+      scenarioDataVersion: "authored-practice-data-v1",
+      activeDrillId: AUTHORED_PRACTICE_DRILL_ID,
+      activeDrillDefinitionVersion: 1,
+      activeDrillIdentity: {
+        scenarioDataVersion: "authored-practice-data-v1",
+        drillId: AUTHORED_PRACTICE_DRILL_ID,
+        competencyId: "authored-macro-discipline",
+        definitionVersion: 1,
+        rubricVersion: "authored-event-process-v1",
+        definitionSnapshot: {
+          id: AUTHORED_PRACTICE_DRILL_ID,
+          title: "Custom Macro Discipline",
+          scenarioId: AUTHORED_PRACTICE_SCENARIO_ID,
+        },
+      },
+      pendingDrillCheckpointId: pendingId,
+      initialDrillPlan: completePlan,
+    });
+    useSessionStore.getState().selectScenario(defaultScenarioId);
+    expect(useSessionStore.getState().importSession(serialized)).toEqual({
+      ok: true,
+    });
+    expect(useSessionStore.getState()).toMatchObject({
+      activeDrillId: AUTHORED_PRACTICE_DRILL_ID,
+      initialDrillPlan: completePlan,
+      pendingDrillCheckpoint: { id: pendingId },
+    });
+
+    useSessionStore.getState().play();
+    expect(useSessionStore.getState().rejectionMessage).toContain(
+      "Custom Macro Discipline",
+    );
+    expect(
+      useSessionStore
+        .getState()
+        .submitDrillCheckpoint(
+          "hold",
+          "The visible release does not invalidate the documented plan.",
+        ),
+    ).toEqual({ ok: true });
+    const answeredSerialized = useSessionStore.getState().exportSession();
+    useSessionStore.getState().selectScenario(defaultScenarioId);
+    expect(
+      useSessionStore.getState().importSession(answeredSerialized),
+    ).toEqual({ ok: true });
+    expect(useSessionStore.getState()).toMatchObject({
+      activeDrillId: AUTHORED_PRACTICE_DRILL_ID,
+      pendingDrillCheckpoint: undefined,
+      drillCheckpointResponses: [
+        {
+          checkpointId: pendingId,
+          drillId: AUTHORED_PRACTICE_DRILL_ID,
+          definitionVersion: 1,
+          status: "answered",
+        },
+      ],
+    });
+
+    guard = 0;
+    while (useSessionStore.getState().status !== "finished" && guard < 20) {
+      useSessionStore.getState().play();
+      useSessionStore.getState().stepForward();
+      guard += 1;
+    }
+    expect(guard).toBeLessThan(20);
+    expect(useSessionStore.getState().report?.practiceAssessment).toMatchObject({
+      drillId: AUTHORED_PRACTICE_DRILL_ID,
+      competencyId: "authored-macro-discipline",
+      definitionVersion: 1,
+      rubricVersion: "authored-event-process-v1",
+      status: "completed",
+      eligibleCheckpointCount: 1,
+      answeredCheckpointCount: 1,
+      eligibleEventCount: 1,
+      linkedEventCount: 1,
+    });
+    expect(useSessionStore.getState().report?.practiceDrill).toMatchObject({
+      definition: {
+        id: AUTHORED_PRACTICE_DRILL_ID,
+        title: "Custom Macro Discipline",
+        rubricVersion: "authored-event-process-v1",
+      },
+      initialPlan: completePlan,
+      checkpoints: [
+        {
+          checkpoint: { id: pendingId, eventIds: pendingEventIds },
+          response: {
+            action: "hold",
+            reflection:
+              "The visible release does not invalidate the documented plan.",
+          },
+          events: pendingEventIds.map((id) => expect.objectContaining({ id })),
+        },
+      ],
+    });
+    expect(
+      useSessionStore.getState().report?.practiceDrill?.violations.length,
+    ).toBeGreaterThan(0);
+
+    useSessionStore.getState().resetScenario();
+    expect(useSessionStore.getState()).toMatchObject({
+      scenario: { meta: { id: AUTHORED_PRACTICE_SCENARIO_ID } },
+      activeDrillId: AUTHORED_PRACTICE_DRILL_ID,
+      activeDrillDefinitionVersion: 1,
+      status: "idle",
+      drillCheckpointResponses: [],
+      drillRuleViolations: [],
+    });
+    expect(useSessionStore.getState().initialDrillPlan).toBeUndefined();
+    expect(useSessionStore.getState().report).toBeUndefined();
+  });
+
+  it("rejects authored practice restore after scenario data or drill content changes", () => {
+    const original = authoredPracticeScenario();
+    expect(registerUserScenario(original)).toMatchObject({ ok: true });
+    expect(
+      useSessionStore
+        .getState()
+        .startPractice(AUTHORED_PRACTICE_SCENARIO_ID, AUTHORED_PRACTICE_DRILL_ID),
+    ).toEqual({ ok: true });
+    const serialized = useSessionStore.getState().exportSession();
+
+    removeUserScenario(AUTHORED_PRACTICE_SCENARIO_ID);
+    const changedData = authoredPracticeScenario();
+    changedData.meta.dataVersion = "authored-practice-data-v2";
+    expect(registerUserScenario(changedData)).toMatchObject({ ok: true });
+    const changedDataResult = useSessionStore
+      .getState()
+      .importSession(serialized);
+    expect(changedDataResult.ok).toBe(false);
+    expect(changedDataResult.message).toMatch(/different scenario data version/i);
+
+    removeUserScenario(AUTHORED_PRACTICE_SCENARIO_ID);
+    const changedDrill = authoredPracticeScenario();
+    changedDrill.drills![0] = {
+      ...changedDrill.drills![0],
+      title: "Custom Macro Discipline — changed without a version bump",
+    };
+    expect(registerUserScenario(changedDrill)).toMatchObject({ ok: true });
+    const changedDrillResult = useSessionStore
+      .getState()
+      .importSession(serialized);
+    expect(changedDrillResult.ok).toBe(false);
+    expect(changedDrillResult.message).toMatch(
+      /changed practice drill definition/i,
+    );
+  });
+
+  it("does not let an authored definition with a built-in id start at runtime", () => {
+    const collision = authoredPracticeScenario({
+      scenarioId: COLLISION_PRACTICE_SCENARIO_ID,
+      drillId: EVENT_DISCIPLINE_EURGBP_V1_ID,
+    });
+    expect(registerUserScenario(collision)).toMatchObject({ ok: true });
+
+    const result = useSessionStore
+      .getState()
+      .startPractice(
+        COLLISION_PRACTICE_SCENARIO_ID,
+        EVENT_DISCIPLINE_EURGBP_V1_ID,
+      );
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("not available for scenario");
+    expect(useSessionStore.getState().activeDrillId).toBeUndefined();
   });
 });
 
@@ -1134,21 +1716,73 @@ describe("sessionStore professional lifecycle", () => {
   });
 
   it("exports, restores, and automatically persists a versioned session", () => {
+    const originalRunInstanceId = useSessionStore.getState().runInstanceId;
     useSessionStore.getState().addJournalNote("Preserve this decision.");
     const serialized = useSessionStore.getState().exportSession();
-    expect(JSON.parse(serialized).version).toBe(1);
-    expect(window.localStorage.getItem("market-time-machine.session.v1")).toBeTruthy();
+    expect(JSON.parse(serialized)).toMatchObject({
+      version: 3,
+      scenarioDataVersion: useSessionStore.getState().scenario.meta.dataVersion,
+    });
+    expect(JSON.parse(serialized).runInstanceId).toBe(originalRunInstanceId);
+    expect(window.localStorage.getItem("market-time-machine.session.v2")).toBeTruthy();
 
     useSessionStore.getState().resetScenario();
     expect(useSessionStore.getState().journal).toHaveLength(0);
+    expect(useSessionStore.getState().runInstanceId).not.toBe(
+      originalRunInstanceId,
+    );
     const restored = useSessionStore.getState().importSession(serialized);
     expect(restored.ok).toBe(true);
+    expect(useSessionStore.getState().runInstanceId).toBe(originalRunInstanceId);
     expect(useSessionStore.getState().journal[0].note).toBe(
       "Preserve this decision.",
     );
     expect(
       useSessionStore.getState().auditEvents.at(-1)?.type,
     ).toBe("session_restored");
+  });
+
+  it("migrates version-1 sessions to a stable legacy run identity", () => {
+    const legacy = JSON.parse(useSessionStore.getState().exportSession()) as Record<
+      string,
+      unknown
+    >;
+    legacy.version = 1;
+    delete legacy.runInstanceId;
+    const serialized = JSON.stringify(legacy);
+
+    expect(useSessionStore.getState().importSession(serialized).ok).toBe(true);
+    const firstIdentity = useSessionStore.getState().runInstanceId;
+    expect(firstIdentity).toMatch(/^legacy_/);
+    expect(JSON.parse(useSessionStore.getState().exportSession()).version).toBe(3);
+
+    useSessionStore.getState().resetScenario();
+    expect(useSessionStore.getState().importSession(serialized).ok).toBe(true);
+    expect(useSessionStore.getState().runInstanceId).toBe(firstIdentity);
+  });
+
+  it("restores an ordinary version-2 session without practice identity metadata", () => {
+    const originalRunInstanceId = useSessionStore.getState().runInstanceId;
+    useSessionStore.getState().addJournalNote("Version two ordinary replay.");
+    const legacy = JSON.parse(useSessionStore.getState().exportSession()) as Record<
+      string,
+      unknown
+    >;
+    legacy.version = 2;
+    delete legacy.scenarioDataVersion;
+    delete legacy.activeDrillIdentity;
+
+    useSessionStore.getState().resetScenario();
+    const restored = useSessionStore
+      .getState()
+      .importSession(JSON.stringify(legacy));
+    expect(restored).toEqual({ ok: true });
+    expect(useSessionStore.getState()).toMatchObject({
+      runInstanceId: originalRunInstanceId,
+      activeDrillId: undefined,
+      activeDrillIdentity: undefined,
+      journal: [{ note: "Version two ordinary replay." }],
+    });
   });
 
   it("persists major-event pause and defaults legacy Explorer sessions on", () => {

@@ -1,0 +1,533 @@
+.drill-debrief {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid rgba(123, 183, 224, 0.28);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(123, 183, 224, 0.09), transparent 38%),
+    rgba(14, 18, 26, 0.96);
+  box-shadow: inset 3px 0 0 rgba(123, 183, 224, 0.5);
+}
+
+.drill-debrief-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.drill-debrief-head > div > span,
+.drill-process-score > span,
+.drill-rubric span {
+  color: var(--info);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.drill-debrief-head h2 {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-family: var(--serif);
+  font-size: 27px;
+  font-weight: 500;
+}
+
+.drill-debrief-head p {
+  max-width: 680px;
+  margin: 7px 0 0;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.drill-completion-status {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.drill-completion-status.completed {
+  border-color: rgba(79, 197, 138, 0.34);
+  background: var(--pos-soft);
+  color: var(--pos);
+}
+
+.drill-completion-status.incomplete {
+  border-color: rgba(242, 182, 90, 0.34);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.drill-debrief-summary {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.65fr) minmax(0, 1.35fr);
+  gap: 10px;
+}
+
+.drill-process-score,
+.drill-evidence-counts,
+.drill-components li,
+.drill-rubric,
+.drill-plan-grid > div,
+.drill-checkpoint-record,
+.drill-violation-list > li {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.drill-process-score {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  padding: 16px;
+}
+
+.drill-process-score > strong {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 27px;
+}
+
+.drill-score-comparison {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.drill-score-comparison.up strong {
+  color: var(--pos);
+}
+
+.drill-score-comparison.down strong {
+  color: var(--neg);
+}
+
+.drill-score-comparison.flat strong {
+  color: var(--text-2);
+}
+
+.drill-evidence-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.drill-evidence-counts div {
+  min-width: 0;
+  padding: 15px;
+}
+
+.drill-evidence-counts div + div {
+  border-left: 1px solid var(--border);
+}
+
+.drill-evidence-counts dt {
+  color: var(--text-dim);
+  font-size: 9px;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.drill-evidence-counts dd {
+  margin: 7px 0 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.drill-debrief-section-head,
+.drill-component-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drill-debrief-section-head h3,
+.drill-component-title h4 {
+  margin: 0;
+  color: var(--text);
+}
+
+.drill-debrief-section-head > span,
+.drill-component-title span {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.drill-plan-review,
+.drill-checkpoint-review,
+.drill-violation-review {
+  display: grid;
+  gap: 9px;
+}
+
+.drill-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.drill-plan-grid > div {
+  min-width: 0;
+  padding: 13px;
+}
+
+.drill-plan-grid dt,
+.drill-recorded-action span {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.drill-plan-grid dd {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.drill-checkpoint-list,
+.drill-violation-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drill-checkpoint-record {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.drill-checkpoint-record > header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(123, 183, 224, 0.05);
+}
+
+.drill-checkpoint-record > header > div {
+  display: grid;
+  gap: 3px;
+}
+
+.drill-checkpoint-record > header span {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.drill-checkpoint-record > header h4 {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.drill-checkpoint-events,
+.drill-checkpoint-response {
+  min-width: 0;
+  padding: 14px;
+}
+
+.drill-checkpoint-response {
+  border-left: 1px solid var(--border);
+}
+
+.drill-checkpoint-events h5,
+.drill-checkpoint-response h5 {
+  margin: 0 0 9px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.drill-checkpoint-events > ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drill-checkpoint-events > ul > li {
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+  border: 1px solid rgba(123, 183, 224, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(123, 183, 224, 0.04);
+}
+
+.drill-checkpoint-events li > div {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.drill-checkpoint-events strong {
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.drill-checkpoint-events li span,
+.drill-checkpoint-events small {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.drill-checkpoint-events li span {
+  flex: 0 0 auto;
+}
+
+.drill-checkpoint-events > p,
+.drill-checkpoint-response > p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.drill-recorded-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drill-recorded-action strong {
+  color: var(--info);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.drill-checkpoint-response blockquote {
+  margin: 10px 0 0;
+  padding: 10px 11px;
+  border-left: 2px solid rgba(123, 183, 224, 0.45);
+  background: rgba(123, 183, 224, 0.05);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.drill-violation-list > li {
+  padding: 12px 13px;
+}
+
+.drill-violation-list > li > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drill-violation-list strong {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.drill-violation-list time,
+.drill-violation-list small {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.drill-violation-list p {
+  margin: 7px 0 0;
+  color: var(--text-2);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.drill-violation-list small {
+  display: block;
+  margin-top: 5px;
+}
+
+.drill-evidence-empty,
+.drill-legacy-evidence {
+  margin: 0;
+  padding: 12px 13px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.drill-legacy-evidence {
+  background: rgba(242, 182, 90, 0.05);
+}
+
+.drill-components ul {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.drill-components li {
+  padding: 13px;
+}
+
+.drill-component-title > div {
+  display: grid;
+  gap: 4px;
+}
+
+.drill-component-title > strong {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.drill-component-title > strong.assessed {
+  color: var(--info);
+}
+
+.drill-component-title > strong.unassessed {
+  color: var(--text-dim);
+}
+
+.drill-components li > p {
+  margin: 9px 0 0;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.drill-rubric {
+  display: grid;
+  grid-template-columns: minmax(150px, auto) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  padding: 13px;
+}
+
+.drill-rubric > div {
+  display: grid;
+  gap: 4px;
+}
+
+.drill-rubric strong {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.drill-rubric p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .drill-debrief-head,
+  .drill-debrief-section-head,
+  .drill-component-title {
+    align-items: flex-start;
+  }
+
+  .drill-debrief-summary,
+  .drill-rubric {
+    grid-template-columns: 1fr;
+  }
+
+  .drill-evidence-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .drill-evidence-counts div + div {
+    border-left: 0;
+  }
+
+  .drill-evidence-counts div:nth-child(even) {
+    border-left: 1px solid var(--border);
+  }
+
+  .drill-evidence-counts div:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+
+  .drill-components ul {
+    grid-template-columns: 1fr;
+  }
+
+  .drill-checkpoint-record {
+    grid-template-columns: 1fr;
+  }
+
+  .drill-checkpoint-response {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .drill-debrief-head {
+    flex-direction: column;
+  }
+
+  .drill-evidence-counts {
+    grid-template-columns: 1fr;
+  }
+
+  .drill-evidence-counts div:nth-child(even) {
+    border-left: 0;
+  }
+
+  .drill-evidence-counts div + div {
+    border-top: 1px solid var(--border);
+  }
+
+  .drill-plan-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .drill-checkpoint-record > header,
+  .drill-checkpoint-events li > div,
+  .drill-violation-list > li > div {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

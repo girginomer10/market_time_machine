@@ -2,7 +2,13 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { listScenarios } from "../../data/scenarios";
+import { listBuiltInDrills } from "../../data/practice/drills";
+import {
+  decisionFoundationsTrack,
+  volatilityDisciplineTrack,
+} from "../../data/practice/tracks";
 import { buildPracticeCoachPlan } from "../../domain/coaching/practiceCoach";
+import type { PracticeTrackProgress } from "../../domain/practice/tracks";
 import type { ScenarioPackage } from "../../types";
 import ScenarioLibrary from "./ScenarioLibrary";
 
@@ -45,6 +51,117 @@ function renderLibrary(
 }
 
 describe("ScenarioLibrary", () => {
+  it("shows the evidence dashboard and prepares a validated track briefing before start", () => {
+    const onStart = vi.fn();
+    const unit = decisionFoundationsTrack.units[0];
+    const trackProgress: PracticeTrackProgress = {
+      trackId: decisionFoundationsTrack.id,
+      trackVersion: decisionFoundationsTrack.version,
+      status: "not_started",
+      completedUnitCount: 0,
+      creditableUnitCount: 1,
+      units: [
+        {
+          unitId: unit.id,
+          unitVersion: unit.version,
+          status: "incomplete",
+        },
+      ],
+    };
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+    renderLibrary({
+      drills: listBuiltInDrills(),
+      evidenceProfile: {
+        ledgerEntryCount: 0,
+        assessedEntryCount: 0,
+        claims: [],
+      },
+      practiceTracks: [decisionFoundationsTrack],
+      practiceTrackProgress: [trackProgress],
+      onStart,
+    });
+
+    expect(screen.getByRole("heading", { name: "Evidence profile" })).toBeInTheDocument();
+    expect(screen.getByText("No process evidence yet")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Practice tracks" })).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: `Prepare ${unit.title}` }),
+    );
+
+    expect(onStart).not.toHaveBeenCalled();
+    expect(document.getElementById("briefing-title")).toHaveFocus();
+    expect(
+      screen.getByText("EUR/GBP Brexit — Event Discipline").closest("button"),
+    ).toHaveAttribute("aria-pressed", "true");
+    const start = screen.getByRole("button", { name: "Start guided drill" });
+    fireEvent.click(start);
+    expect(onStart).toHaveBeenCalledWith(
+      unit.scenario.id,
+      unit.drill.mode,
+      unit.drill.id,
+    );
+    raf.mockRestore();
+  });
+
+  it("keeps preview track preparation non-creditable and waits for Start", () => {
+    const onStart = vi.fn();
+    const unit = volatilityDisciplineTrack.units[0];
+    const previewProgress: PracticeTrackProgress = {
+      trackId: volatilityDisciplineTrack.id,
+      trackVersion: volatilityDisciplineTrack.version,
+      status: "preview",
+      completedUnitCount: 0,
+      creditableUnitCount: 0,
+      units: volatilityDisciplineTrack.units.map((candidate) => ({
+        unitId: candidate.id,
+        unitVersion: candidate.version,
+        status: "preview" as const,
+      })),
+    };
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        callback(0);
+        return 1;
+      });
+    renderLibrary({
+      drills: listBuiltInDrills(),
+      practiceTracks: [volatilityDisciplineTrack],
+      practiceTrackProgress: [previewProgress],
+      onStart,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Preview ${unit.title} — no credit`,
+      }),
+    );
+
+    expect(onStart).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Nasdaq 2022 Rate Shock",
+      }),
+    ).toHaveFocus();
+    expect(
+      screen.getByText("Preview practice · No completion credit"),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Start guided drill" }));
+    expect(onStart).toHaveBeenCalledWith(
+      unit.scenario.id,
+      unit.drill.mode,
+      unit.drill.id,
+    );
+    raf.mockRestore();
+  });
+
   it("briefs a fresh user on product boundaries and scenario rules", () => {
     renderLibrary();
 
@@ -114,6 +231,53 @@ describe("ScenarioLibrary", () => {
     );
 
     expect(onStart).toHaveBeenCalledWith("qqq-rate-hike-2022", "challenge");
+  });
+
+  it("supports roving focus and standard radiogroup keyboard navigation", () => {
+    renderLibrary();
+
+    const explorer = screen.getByRole("radio", { name: /Explorer/ });
+    const professional = screen.getByRole("radio", {
+      name: /Realistic practice/,
+    });
+    const blind = screen.getByRole("radio", { name: /Blind replay/ });
+    const challenge = screen.getByRole("radio", { name: /Local challenge/ });
+
+    expect(explorer).toHaveAttribute("tabindex", "0");
+    expect(professional).toHaveAttribute("tabindex", "-1");
+    expect(blind).toHaveAttribute("tabindex", "-1");
+    expect(challenge).toHaveAttribute("tabindex", "-1");
+
+    explorer.focus();
+    fireEvent.keyDown(explorer, { key: "ArrowRight" });
+    expect(professional).toBeChecked();
+    expect(professional).toHaveFocus();
+    expect(explorer).toHaveAttribute("tabindex", "-1");
+    expect(professional).toHaveAttribute("tabindex", "0");
+
+    fireEvent.keyDown(professional, { key: "ArrowDown" });
+    expect(blind).toBeChecked();
+    expect(blind).toHaveFocus();
+
+    fireEvent.keyDown(blind, { key: "End" });
+    expect(challenge).toBeChecked();
+    expect(challenge).toHaveFocus();
+
+    fireEvent.keyDown(challenge, { key: "ArrowRight" });
+    expect(explorer).toBeChecked();
+    expect(explorer).toHaveFocus();
+
+    fireEvent.keyDown(explorer, { key: "ArrowLeft" });
+    expect(challenge).toBeChecked();
+    expect(challenge).toHaveFocus();
+
+    fireEvent.keyDown(challenge, { key: "Home" });
+    expect(explorer).toBeChecked();
+    expect(explorer).toHaveFocus();
+
+    fireEvent.keyDown(explorer, { key: "ArrowUp" });
+    expect(challenge).toBeChecked();
+    expect(challenge).toHaveFocus();
   });
 
   it("prepares the coach assignment in the existing briefing before start", () => {

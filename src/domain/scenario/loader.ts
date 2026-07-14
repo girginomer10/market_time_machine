@@ -4,6 +4,7 @@ import type {
   IndicatorSnapshot,
   Instrument,
   CorporateAction,
+  DrillDefinition,
   MarketCalendar,
   MarketEvent,
   ScenarioPackage,
@@ -15,6 +16,7 @@ import {
   type ValidationIssue,
   type ValidationResult,
 } from "../validation/scenario";
+import { parseScenarioDrillDefinitions } from "../practice/drillAuthoring";
 
 export type RawScenarioFiles = {
   scenario: ScenarioMeta;
@@ -26,6 +28,7 @@ export type RawScenarioFiles = {
   broker: BrokerConfig;
   marketCalendar?: MarketCalendar;
   corporateActions?: CorporateAction[];
+  drills?: DrillDefinition[];
 };
 
 export function assembleScenario(raw: RawScenarioFiles): ScenarioPackage {
@@ -47,7 +50,7 @@ export function assembleScenario(raw: RawScenarioFiles): ScenarioPackage {
     (a, b) => compareTimestamps(a.effectiveAt, b.effectiveAt),
   );
 
-  return {
+  const assembled: ScenarioPackage = {
     meta: raw.scenario,
     instruments: raw.instruments,
     candles: sortedCandles,
@@ -58,6 +61,18 @@ export function assembleScenario(raw: RawScenarioFiles): ScenarioPackage {
     marketCalendar: raw.marketCalendar,
     corporateActions: sortedCorporateActions,
   };
+  const authoredDrills = parseScenarioDrillDefinitions(raw.drills, assembled);
+  if (!authoredDrills.valid) {
+    const detail = authoredDrills.issues
+      .map((issue) => `${issue.code} @ ${issue.path}: ${issue.message}`)
+      .join("\n");
+    throw new Error(
+      `Scenario "${raw.scenario.id}" has invalid authored drill definitions:\n${detail}`,
+    );
+  }
+  return raw.drills === undefined
+    ? assembled
+    : { ...assembled, drills: authoredDrills.drills };
 }
 
 export type ScenarioValidationIssue = ValidationIssue;

@@ -1,10 +1,11 @@
 # Release And Deployment
 
-Market Time Machine Local Lab v1 is the complete local-first release scope. This
-guide covers repeatable production builds and manual static deployment; it does
-not claim a semantic-version `1.0` stability contract or promote the local
-challenge into hosted anti-cheat. Accounts, server-side authorization, managed
-cohorts, and broker connectivity remain hosted-platform work outside this scope.
+Market Time Machine `0.3.0` ships Personal Decision Gym v2 on the Local Lab v1
+replay foundation. This guide covers repeatable production builds and manual
+static deployment; it does not claim a semantic-version `1.0` stability contract
+or promote the local challenge into hosted anti-cheat. Accounts, server-side
+authorization, managed cohorts, and broker connectivity remain hosted-platform
+work outside this scope.
 
 ## Supported Toolchain
 
@@ -44,13 +45,15 @@ The shipped scenarios are compiled into the static app assets, so they are
 available offline after a successful first load. A first visit cannot work
 offline. Browser persistence and offline files are separate stores:
 
-- replay state, completed-run history, and imported scenarios are in
-  `localStorage`;
+- replay state, completed-run history, the compact practice ledger, and imported
+  scenarios are in `localStorage`;
 - static PWA files are in Cache Storage.
 
 See [Privacy And Local Data](privacy-and-local-data.md) for deletion and export
-details. When service-worker cache behavior changes, bump `CACHE_VERSION` in
-`public/sw.js` so obsolete Market Time Machine caches are removed on activation.
+details. V2 uses the `personal-decision-gym-v2` service-worker cache version so
+older Local Lab app-shell/runtime caches are removed on activation. When cache
+behavior or a release-critical static surface changes again, bump
+`CACHE_VERSION` in `public/sw.js`.
 
 ## Manual GitHub Pages Deployment
 
@@ -82,24 +85,36 @@ GitHub Pages is a public static host. Every shipped scenario is downloaded to
 the browser, so it remains inspectable by a technical user. Do not describe a
 Pages deployment as secure challenge-mode anti-cheat.
 
-## Local Lab Release Checklist
+## Personal Decision Gym v2 Release Checklist
 
 - [x] `npm ci` and `npm run check` pass on a supported Node.js release.
 - [x] Every production scenario is in the explicit shipped allowlist and its
       redistribution rights have been reviewed.
 - [x] No `local-*`, generated FRED, credential, or private user-data file is in
       the production bundle.
-- [x] First load, refresh, and offline reopen are smoke-tested in desktop Chrome
-      on `localhost`; the responsive product flow is also verified at a 390 px
-      mobile viewport.
-- [x] Session export/restore, imported-lab removal, and browser-data deletion
-      have regression coverage.
+- [x] First load, refresh, and offline reopen are smoke-tested in a desktop
+      Chromium browser on `localhost`; the responsive product flow is also
+      verified at a 390 px mobile viewport.
+- [x] Session export/restore pins exact scenario/drill identity, imported-lab
+      removal and browser-data deletion have regression coverage, and imported
+      scenario packages remain an explicit separate prerequisite.
+- [x] Event Discipline plan enforcement, checkpoint scheduling, process-only
+      assessment, and save/restore behavior have regression coverage.
+- [x] Compact-ledger sanitization, competency/rubric evidence grouping,
+      exact-context trends, exact-version track credit, and synthetic preview
+      non-credit are covered by tests.
+- [x] V2 practice archive export/import is deep-validated, atomically persisted
+      with rollback, bounded to 12 full reports and 250 compact entries,
+      conflict-safe, and compatible with V1 history exports.
 - [x] Financial-safety and data-quality language remains accurate.
 - [x] `CHANGELOG.md` reflects the release candidate.
-- [x] The ECB-based EUR/GBP hero scenario's source, reuse conditions, derived
-      fields, and attribution have been reviewed for this release.
-- [x] Local Lab v1 is described as a local product boundary, not as a hosted
-      anti-cheat platform or a semantic-version `1.0` stability guarantee.
+- [x] The ECB-based EUR/GBP and EUR/USD scenarios' sources, reuse conditions,
+      derived fields, and attribution have been reviewed for this release.
+- [x] Synthetic QQQ/KRE practice units are visibly preview-only and cannot award
+      unit or track credit.
+- [x] V2 is described as a local deliberate-practice product boundary, not as a
+      hosted anti-cheat platform, real-world skill certification, or a
+      semantic-version `1.0` stability guarantee.
 
 ## Post-Deployment Checks
 

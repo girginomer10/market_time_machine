@@ -11,7 +11,7 @@
   --text: #eef2f8;
   --text-2: #b6c0ce;
   --text-dim: #8995a4;
-  --text-mute: #5c6776;
+  --text-mute: #808c9c;
   --accent: #f2b65a;
   --accent-2: #ffd08a;
   --accent-soft: rgba(242, 182, 90, 0.13);
@@ -512,6 +512,12 @@ textarea:focus {
   border-color: rgba(242, 182, 90, 0.27);
 }
 
+.header-badge.drill {
+  max-width: min(360px, 100%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .firewall-chip,
 .firewall-badge {
   color: var(--info);
@@ -591,6 +597,10 @@ textarea:focus {
   grid-template-rows: minmax(430px, 60vh) auto;
   gap: 12px;
   padding: 12px 18px 18px;
+}
+
+.active-drill-slot {
+  padding: 12px 18px 0;
 }
 
 .panel {
@@ -3072,6 +3082,44 @@ textarea:focus {
   margin: 6px 0 12px;
   color: var(--text);
   font-size: 15px;
+}
+
+.mode-briefing .library-step:not(:first-child) {
+  display: block;
+  margin-top: 18px;
+}
+
+.library-practice-options {
+  display: grid;
+  gap: 8px;
+}
+
+.library-practice-option {
+  display: grid;
+  gap: 5px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.018);
+  color: var(--text);
+  text-align: left;
+}
+
+.library-practice-option:hover,
+.library-practice-option.active {
+  border-color: rgba(79, 197, 138, 0.5);
+  background: var(--pos-soft);
+}
+
+.library-practice-option span,
+.library-practice-option small {
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.library-practice-option small {
+  font-family: var(--mono);
+  font-size: 9px;
 }
 
 .library-mode-grid {

@@ -1,0 +1,255 @@
+.checkpoint-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  overflow-y: auto;
+  background: rgba(3, 5, 9, 0.86);
+  backdrop-filter: blur(10px);
+}
+
+.checkpoint-dialog {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 22px;
+  border: 1px solid rgba(242, 182, 90, 0.46);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(135deg, rgba(242, 182, 90, 0.09), transparent 38%),
+    #0e1219;
+  box-shadow: var(--shadow), inset 3px 0 0 rgba(242, 182, 90, 0.64);
+  outline: none;
+}
+
+.checkpoint-dialog-head > span {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.checkpoint-dialog-head h2 {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-family: var(--serif);
+  font-size: clamp(24px, 4vw, 32px);
+  font-weight: 500;
+}
+
+.checkpoint-dialog-head p {
+  max-width: 650px;
+  margin: 8px 0 0;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.checkpoint-events {
+  margin-top: 18px;
+}
+
+.checkpoint-section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.checkpoint-section-title h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.checkpoint-section-title > span {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.checkpoint-events ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.checkpoint-events li,
+.checkpoint-events-missing {
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.checkpoint-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 12px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.checkpoint-event-meta > span {
+  color: var(--accent-2);
+}
+
+.checkpoint-events h4 {
+  margin: 7px 0 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.checkpoint-events li > p,
+.checkpoint-events-missing {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.checkpoint-events a,
+.checkpoint-events small {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--info);
+  font-size: 10px;
+}
+
+.checkpoint-response {
+  display: grid;
+  gap: 15px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.checkpoint-response fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.checkpoint-response legend,
+.checkpoint-reflection > span {
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.checkpoint-reflection > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.checkpoint-reflection > span em {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.checkpoint-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.checkpoint-actions label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-2);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.checkpoint-actions label:hover,
+.checkpoint-actions label:focus-within,
+.checkpoint-actions label.selected {
+  border-color: rgba(242, 182, 90, 0.58);
+  background: var(--accent-soft);
+  color: var(--accent-2);
+}
+
+.checkpoint-actions input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.checkpoint-reflection {
+  display: grid;
+}
+
+.checkpoint-reflection textarea {
+  resize: vertical;
+  min-height: 92px;
+  padding: 11px;
+  line-height: 1.45;
+}
+
+.checkpoint-reflection > small {
+  margin-top: 5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-align: right;
+}
+
+.checkpoint-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.checkpoint-submit-row p {
+  max-width: 440px;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.checkpoint-submit-row .btn {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 640px) {
+  .checkpoint-overlay {
+    align-items: start;
+    padding: 10px;
+  }
+
+  .checkpoint-dialog {
+    max-height: calc(100vh - 20px);
+    padding: 16px;
+  }
+
+  .checkpoint-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .checkpoint-submit-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
