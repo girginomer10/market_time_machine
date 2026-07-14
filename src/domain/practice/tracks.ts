@@ -522,6 +522,7 @@ export function ledgerAttemptCompletesTrackUnit(
   const criteria = unit.completionCriteria;
   if (
     !assessment ||
+    attempt.facts.executionCount <= 0 ||
     assessment.drillId !== unit.drill.id ||
     assessment.definitionVersion !== unit.drill.definitionVersion ||
     assessment.rubricVersion !== unit.drill.rubricVersion ||

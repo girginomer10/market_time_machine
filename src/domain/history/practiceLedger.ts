@@ -238,9 +238,15 @@ export function parseDrillAssessment(value: unknown): DrillAssessment | undefine
     ) > 0.000001 ||
     (value.status === "completed" &&
       (overallScore === undefined ||
+        eligibleCheckpointCount <= 0 ||
+        eligibleEventCount <= 0 ||
         answeredCheckpointCount !== eligibleCheckpointCount ||
         skippedCheckpointCount !== 0 ||
-        linkedEventCount !== eligibleEventCount)) ||
+        linkedEventCount !== eligibleEventCount ||
+        (components as DrillAssessmentComponent[]).some(
+          (component) =>
+            component.status !== "assessed" || component.score === undefined,
+        ))) ||
     (overallScore !== undefined &&
       (expectedOverallScore === undefined ||
         Math.abs(overallScore - expectedOverallScore) > 0.11))
@@ -335,10 +341,18 @@ export function parsePracticeLedgerEntry(
   const scenarioTitle = nonEmptyString(value.scenarioTitle);
   const scenarioDataVersion = optionalString(value.scenarioDataVersion);
   const facts = parseFacts(value.facts);
-  const assessment =
+  const parsedAssessment =
     value.assessment === undefined
       ? undefined
       : parseDrillAssessment(value.assessment);
+  const inconsistentCompletedAssessment = Boolean(
+    parsedAssessment?.status === "completed" &&
+      facts &&
+      facts.executionCount <= 0,
+  );
+  const assessment = inconsistentCompletedAssessment
+    ? undefined
+    : parsedAssessment;
   if (
     !id ||
     !runId ||
@@ -356,7 +370,7 @@ export function parsePracticeLedgerEntry(
     !facts ||
     (options.rejectMalformedAssessment &&
       value.assessment !== undefined &&
-      assessment === undefined)
+      (parsedAssessment === undefined || inconsistentCompletedAssessment))
   ) {
     return undefined;
   }

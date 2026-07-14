@@ -379,6 +379,20 @@ describe("evidence profile", () => {
     });
   });
 
+  it("does not count a completed label without an executed decision", () => {
+    const noDecision = ledgerEntry("no-decision", time(1), 100);
+    noDecision.facts = { ...noDecision.facts, executionCount: 0 };
+
+    const profile = buildEvidenceProfile([noDecision], []);
+
+    expect(profile).toMatchObject({ assessedEntryCount: 0 });
+    expect(profile.claims[0]).toMatchObject({
+      status: "unassessed",
+      attemptCount: 1,
+      evidenceCount: 0,
+    });
+  });
+
   it("breaks timestamp ties by run id for stable latest evidence", () => {
     const sameTime = time(1);
     const profile = buildEvidenceProfile(

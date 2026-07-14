@@ -271,6 +271,12 @@ describe("practice track progress", () => {
     const attempt = attemptFor(foundationUnit);
 
     expect(ledgerAttemptCompletesTrackUnit(foundationUnit, attempt)).toBe(true);
+    expect(
+      ledgerAttemptCompletesTrackUnit(foundationUnit, {
+        ...attempt,
+        facts: { ...attempt.facts, executionCount: 0 },
+      }),
+    ).toBe(false);
     expect(practiceTrackProgress(decisionFoundationsTrack, [attempt])).toEqual({
       trackId: decisionFoundationsTrack.id,
       trackVersion: 1,

@@ -10,6 +10,7 @@ import {
   derivePracticeLedgerEntry,
   loadPracticeLedger,
   parseDrillAssessment,
+  parsePracticeLedgerEntry,
   persistPracticeLedger,
   reconcilePracticeLedger,
   recordPracticeLedgerEntry,
@@ -207,6 +208,43 @@ describe("practice ledger", () => {
       ),
     };
     expect(parseDrillAssessment(invalidWeights)).toBeUndefined();
+
+    const completedWithoutMeasuredPlan = {
+      ...current,
+      components: current.components.map((component) =>
+        component.id === "plan_coverage"
+          ? {
+              ...component,
+              status: "not_applicable" as const,
+              score: undefined,
+            }
+          : component,
+      ),
+    };
+    expect(parseDrillAssessment(completedWithoutMeasuredPlan)).toBeUndefined();
+    expect(
+      parseDrillAssessment({
+        ...current,
+        eligibleCheckpointCount: 0,
+        answeredCheckpointCount: 0,
+        eligibleEventCount: 0,
+        linkedEventCount: 0,
+      }),
+    ).toBeUndefined();
+
+    const inconsistentEntry = {
+      ...derivePracticeLedgerEntry(completedRun(), current),
+      facts: {
+        ...derivePracticeLedgerEntry(completedRun(), current).facts,
+        executionCount: 0,
+      },
+    };
+    expect(parsePracticeLedgerEntry(inconsistentEntry)?.assessment).toBeUndefined();
+    expect(
+      parsePracticeLedgerEntry(inconsistentEntry, {
+        rejectMalformedAssessment: true,
+      }),
+    ).toBeUndefined();
 
     persistPracticeLedger([
       derivePracticeLedgerEntry(completedRun(), current),

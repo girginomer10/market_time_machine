@@ -261,7 +261,12 @@ export function buildEvidenceProfile(
       entry,
       assessment,
       score:
-        assessment.status === "completed"
+        assessment.status === "completed" &&
+        entry.facts.executionCount > 0 &&
+        assessment.components.every(
+          (component) =>
+            component.status === "assessed" && component.score !== undefined,
+        )
           ? finiteScore(assessment.overallScore)
           : undefined,
     });
