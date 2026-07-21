@@ -30,7 +30,11 @@ type Props = {
   definition: DrillDefinition;
   checkpoint: DrillCheckpoint;
   visibleEvents: readonly MarketEvent[];
-  onSubmit: (action: DrillCheckpointAction, reflection: string) => void;
+  onSubmit: (
+    action: DrillCheckpointAction,
+    reflection: string,
+    linkedEventIds: string[],
+  ) => void;
 };
 
 function publishedLabel(value: string): string {
@@ -58,6 +62,7 @@ export default function EventCheckpointDialog({
   const titleId = useId();
   const descriptionId = useId();
   const requirementId = useId();
+  const linkHelpId = useId();
   const reflectionId = useId();
   const reflectionLabelId = useId();
   const reflectionHelpId = useId();
@@ -65,6 +70,9 @@ export default function EventCheckpointDialog({
   const firstActionRef = useRef<HTMLInputElement | null>(null);
   const [action, setAction] = useState<DrillCheckpointAction>();
   const [reflection, setReflection] = useState("");
+  const [linkedEventIds, setLinkedEventIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const reflectionRequired = definition.checkpointRule.requireReflection;
 
   const checkpointEvents = useMemo(() => {
@@ -118,7 +126,22 @@ export default function EventCheckpointDialog({
     event.preventDefault();
     const trimmedReflection = reflection.trim();
     if (!action || (reflectionRequired && !trimmedReflection)) return;
-    onSubmit(action, trimmedReflection);
+    onSubmit(
+      action,
+      trimmedReflection,
+      checkpointEvents
+        .map((checkpointEvent) => checkpointEvent.id)
+        .filter((eventId) => linkedEventIds.has(eventId)),
+    );
+  }
+
+  function toggleEventLink(eventId: string, checked: boolean): void {
+    setLinkedEventIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(eventId);
+      else next.delete(eventId);
+      return next;
+    });
   }
 
   return (
@@ -152,9 +175,14 @@ export default function EventCheckpointDialog({
             </span>
           </div>
           {checkpointEvents.length > 0 ? (
-            <ol>
-              {checkpointEvents.map((event) => (
-                <li key={event.id}>
+            <>
+              <p className="checkpoint-link-help" id={linkHelpId} role="note">
+                Select only the visible events that influenced this decision.
+                Leaving every event unselected records that no event was linked.
+              </p>
+              <ol>
+                {checkpointEvents.map((event) => (
+                  <li key={event.id}>
                   <div className="checkpoint-event-meta">
                     <span>Importance {event.importance}/5</span>
                     <time dateTime={event.publishedAt}>
@@ -170,9 +198,22 @@ export default function EventCheckpointDialog({
                   ) : event.source ? (
                     <small>Source: {event.source}</small>
                   ) : null}
-                </li>
-              ))}
-            </ol>
+                  <label className="checkpoint-event-link">
+                    <input
+                      type="checkbox"
+                      aria-label={`Link ${event.title} to my decision`}
+                      aria-describedby={linkHelpId}
+                      checked={linkedEventIds.has(event.id)}
+                      onChange={(changeEvent) =>
+                        toggleEventLink(event.id, changeEvent.target.checked)
+                      }
+                    />
+                    <span>Link this event to my decision</span>
+                  </label>
+                  </li>
+                ))}
+              </ol>
+            </>
           ) : (
             <p className="checkpoint-events-missing" role="note">
               Event details are unavailable in the current visible snapshot.

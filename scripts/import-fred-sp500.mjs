@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 
-import {
-  access,
-  mkdir,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  assertSafeScenarioOutputDirectory,
+  sha256DataVersion,
+  writeScenarioOutputFiles,
+} from "./scenario-import-utils.mjs";
 
 export const DEFAULT_START = "2020-01-02";
 export const DEFAULT_END = "2020-12-31";
@@ -40,7 +38,9 @@ export async function main(
   const scenariosRoot = resolve(process.cwd(), "src/data/scenarios");
   const defaultOutDir = resolve(process.cwd(), DEFAULT_OUT);
   const outDir = resolve(process.cwd(), args.out ?? DEFAULT_OUT);
-  assertSafeOutputDirectory(outDir, scenariosRoot);
+  const safeOutDir = await assertSafeScenarioOutputDirectory(outDir, {
+    scenariosRoot,
+  });
   const force = parseBoolean(args.force ?? "false", "force");
   const timeoutMs = args.timeoutMs
     ? positiveInteger(args.timeoutMs, "timeoutMs")
@@ -68,6 +68,12 @@ export async function main(
 
   const candles = buildCloseOnlyCandles(records);
   const identity = scenarioIdentity(start, end);
+  const importedDataVersion = fredImportedDataVersion({
+    candles,
+    requestedStartDate: start,
+    requestedEndDate: end,
+    scenarioId: identity.id,
+  });
   const sourceUrl = fredUrl.toString();
   const scenarioSource = renderScenario({
     candles,
@@ -77,6 +83,7 @@ export async function main(
     requestedEndDate: end,
     observationStartDate: records[0].date,
     observationEndDate: records[records.length - 1].date,
+    importedDataVersion,
     ...identity,
   });
   const readme = renderReadme({
@@ -90,7 +97,7 @@ export async function main(
     title: identity.title,
   });
 
-  await writeOutputFiles(outDir, scenarioSource, readme, force);
+  await writeScenarioOutputFiles(safeOutDir, scenarioSource, readme, force);
 
   console.log(
     `Generated local FRED scenario with ${records.length} observations at ${outDir}`,
@@ -105,7 +112,7 @@ export async function main(
     );
   }
 
-  return { outDir, records, candles, ...identity };
+  return { outDir, records, candles, importedDataVersion, ...identity };
 }
 
 export function parseArgs(rawArgs) {
@@ -362,60 +369,12 @@ function round2(value) {
   return Math.round(value * 100) / 100;
 }
 
-function assertSafeOutputDirectory(outDir, scenariosRoot) {
-  if (
-    containsPath(outDir, scenariosRoot) ||
-    containsPath(outDir, resolve(process.cwd()))
-  ) {
-    throw new Error(`Refusing unsafe output directory: ${outDir}`);
-  }
-}
-
-function containsPath(parent, child) {
-  const path = relative(parent, child);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
-}
-
-async function exists(path) {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export async function writeOutputFiles(
-  outDir,
-  scenarioSource,
-  readme,
-  force = false,
-) {
-  await mkdir(outDir, { recursive: true });
-  const indexPath = resolve(outDir, "index.ts");
-  const readmePath = resolve(outDir, "README.md");
-  if (!force && ((await exists(indexPath)) || (await exists(readmePath)))) {
-    throw new Error(
-      `Output already exists at ${outDir}; pass --force=true to replace it.`,
-    );
-  }
-
-  const suffix = `.tmp-${process.pid}-${Date.now()}`;
-  const indexTemp = `${indexPath}${suffix}`;
-  const readmeTemp = `${readmePath}${suffix}`;
-  try {
-    await Promise.all([
-      writeFile(indexTemp, scenarioSource, "utf8"),
-      writeFile(readmeTemp, readme, "utf8"),
-    ]);
-    await rename(indexTemp, indexPath);
-    await rename(readmeTemp, readmePath);
-  } finally {
-    await Promise.all([
-      rm(indexTemp, { force: true }),
-      rm(readmeTemp, { force: true }),
-    ]);
-  }
+export function fredImportedDataVersion(input) {
+  return sha256DataVersion({
+    schema: "market-time-machine-fred-sp500-close-only-v2",
+    seriesId: SERIES_ID,
+    ...input,
+  });
 }
 
 export function renderScenario({
@@ -426,6 +385,7 @@ export function renderScenario({
   requestedEndDate,
   observationStartDate,
   observationEndDate,
+  importedDataVersion,
   id,
   title,
   tags,
@@ -452,6 +412,7 @@ const GENERATED_AT = ${JSON.stringify(generatedAt)};
 const SOURCE_URL = ${JSON.stringify(sourceUrl)};
 const REQUESTED_EVENT_START = ${JSON.stringify(`${requestedStartDate}T00:00:00.000Z`)};
 const REQUESTED_EVENT_END = ${JSON.stringify(`${requestedEndDate}T23:59:59.999Z`)};
+const IMPORTED_DATA_VERSION = ${JSON.stringify(importedDataVersion)};
 
 const meta: ScenarioMeta = {
   id: ${JSON.stringify(id)},
@@ -476,13 +437,27 @@ const meta: ScenarioMeta = {
     "Source URL: " + SOURCE_URL,
     "FRED SP500 closes are copyright S&P Dow Jones Indices LLC; generated data should remain local unless separately licensed.",
     "Only close values are source observations. Open/high/low are derived from adjacent closes and volume is set to 0.",
+    "Candle timestamps use derived regular 09:30-16:00 America/New_York sessions; exchange early-close exceptions are not modeled.",
     "Generated at " + GENERATED_AT,
   ],
-  dataVersion: ${JSON.stringify(`local-${generatedAt.slice(0, 10)}`)},
-  sourceManifest: ["FRED:SP500"],
+  dataVersion:
+    IMPORTED_DATA_VERSION + ";events:" + sp500Covid2020Scenario.meta.dataVersion,
+  sourceManifest: [
+    "FRED:SP500 " + IMPORTED_DATA_VERSION,
+    "Bundled event layer " + sp500Covid2020Scenario.meta.dataVersion,
+  ],
   generatedAt: GENERATED_AT,
   priceAdjustment: "raw",
   isSampleData: true,
+  dataFidelity: "mixed",
+  observedFields: ["FRED SP500 daily close observations"],
+  derivedFields: [
+    "Open uses the previous close; high and low bracket open and close",
+    "Open/close timestamps use regular 09:30-16:00 America/New_York sessions; exchange early-close exceptions are not modeled",
+    "Volume is unavailable and set to zero",
+    "Indicators and benchmarks are derived from the close observations",
+    "Event context is inherited from the versioned bundled S&P 500 lab",
+  ],
   description:
     "Local close-only S&P 500 replay generated from FRED. Useful for broad timing and information-firewall practice; not suitable for intraday OHLC, volume, or limit-order realism.",
 };
@@ -636,16 +611,22 @@ reproduction requires prior written permission from S&P. Keep generated files
 local unless you have separate redistribution rights.
 
 The default src/data/scenarios/sp500-covid-2020-fred output directory is ignored
-by git. Custom output paths may be git-visible. In either case, a production
-bundle built while this scenario exists includes the generated data; do not
-publish it unless your use complies with the upstream terms.
+by git and excluded from the normal production scenario registry. Custom output
+paths may be git-visible, and manually wiring a generated module into a build
+would include its market data. Do not commit or publish it unless your use
+complies with the upstream terms.
 
 Only close values are source observations. Open, high, and low are derived from
 adjacent closes so the replay engine can use the existing candle model. Volume
 is set to 0. This is useful for broad timing practice, not for intraday or
 limit-order realism. Because part of each OHLC candle is derived rather than a
-source observation, the generated scenario sets isSampleData to true and is
-shown as Sample data in the app.
+source observation, the generated scenario sets mixed fidelity metadata and
+lists observed versus derived fields in the app.
+
+Candle open and close timestamps are also derived using regular 09:30-16:00
+America/New_York session hours. Exchange early-close exceptions are not modeled,
+so these timestamps are not source observations and should not be used for
+intraday or event-time claims.
 `;
 }
 

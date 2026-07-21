@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { estimateOneWaySpreadCost } from "./costEstimates";
 import TradePanel from "./TradePanel";
 import { selectSnapshot, useSessionStore } from "../../store/sessionStore";
+import { eventDisciplineEurGbpV1 } from "../../data/practice/drills";
+import { defaultScenarioId } from "../../data/scenarios";
 
 describe("estimateOneWaySpreadCost", () => {
   it("matches the broker's half-spread-per-side execution model", () => {
@@ -12,7 +14,7 @@ describe("estimateOneWaySpreadCost", () => {
 
 describe("TradePanel order entry", () => {
   beforeEach(() => {
-    useSessionStore.getState().resetScenario();
+    useSessionStore.getState().selectScenario(defaultScenarioId);
   });
 
   it("places a market order from the ticket", () => {
@@ -130,6 +132,56 @@ describe("TradePanel order entry", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /place market buy/i }));
     expect(useSessionStore.getState().fills).toHaveLength(1);
+  });
+
+  it("blocks an incomplete drill plan in the ticket without recording a violation", () => {
+    expect(
+      useSessionStore
+        .getState()
+        .startPractice("eurgbp-brexit-2016", eventDisciplineEurGbpV1.id),
+    ).toEqual({ ok: true });
+    const state = useSessionStore.getState();
+    const snapshot = selectSnapshot(state);
+    render(
+      <TradePanel
+        tradablePrice={snapshot.tradablePrices[0]}
+        cash={snapshot.portfolio.cash}
+        positionsValue={snapshot.portfolio.positionsValue}
+        totalValue={snapshot.portfolio.totalValue}
+        realizedPnl={snapshot.portfolio.realizedPnl}
+        unrealizedPnl={snapshot.portfolio.unrealizedPnl}
+        initialCash={state.scenario.meta.initialCash}
+        margin={snapshot.margin}
+        risk={snapshot.risk}
+      />,
+    );
+
+    expect(screen.getByText(/required before the first order/i)).toHaveTextContent(
+      "thesis, invalidation, exit plan, accepted risk",
+    );
+    fireEvent.change(screen.getByLabelText("Decision thesis"), {
+      target: { value: "Trade only after the event confirms the setup." },
+    });
+    fireEvent.change(screen.getByLabelText("Accepted risk"), {
+      target: { value: "0.5% of equity" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /place market buy/i }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "invalidation, exit plan",
+    );
+    expect(useSessionStore.getState().drillRuleViolations).toHaveLength(0);
+    expect(useSessionStore.getState().orders).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText("Invalidation"), {
+      target: { value: "Close if the policy response invalidates the setup." },
+    });
+    fireEvent.change(screen.getByLabelText("Exit plan"), {
+      target: { value: "Exit at the predefined target or invalidation." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /place market buy/i }));
+    expect(useSessionStore.getState().fills).toHaveLength(1);
+    expect(useSessionStore.getState().drillRuleViolations).toHaveLength(0);
   });
 
   it("passes the selected GTC time in force to a working order", () => {
@@ -288,6 +340,42 @@ describe("TradePanel order entry", () => {
     expect(screen.getByText(/1 working/i)).toBeInTheDocument();
   });
 
+  it("keeps broker selection locked after an accepted order is cancelled", () => {
+    const state = useSessionStore.getState();
+    const quote = selectSnapshot(state).tradablePrices[0];
+    expect(
+      state.submitLimitOrder({
+        symbol: state.primarySymbol,
+        side: "buy",
+        type: "limit",
+        quantity: 0.05,
+        limitPrice: quote.price * 0.5,
+      }).ok,
+    ).toBe(true);
+    const orderId = useSessionStore.getState().orders[0].id;
+    expect(useSessionStore.getState().cancelOrder(orderId).ok).toBe(true);
+
+    const next = useSessionStore.getState();
+    const snapshot = selectSnapshot(next);
+    render(
+      <TradePanel
+        tradablePrice={snapshot.tradablePrices[0]}
+        cash={snapshot.portfolio.cash}
+        positionsValue={snapshot.portfolio.positionsValue}
+        totalValue={snapshot.portfolio.totalValue}
+        realizedPnl={snapshot.portfolio.realizedPnl}
+        unrealizedPnl={snapshot.portfolio.unrealizedPnl}
+        initialCash={next.scenario.meta.initialCash}
+        margin={snapshot.margin}
+        risk={snapshot.risk}
+      />,
+    );
+
+    expect(
+      screen.getByRole("radio", { name: /Scenario Curated assumptions/i }),
+    ).toBeDisabled();
+  });
+
   it("uses gross exposure for short positions", () => {
     const state = useSessionStore.getState();
     const snapshot = selectSnapshot(state);
@@ -369,5 +457,56 @@ describe("TradePanel order entry", () => {
     expect(useSessionStore.getState().fills.at(-1)?.symbol).toBe(
       state.primarySymbol,
     );
+  });
+
+  it("does not render raw position symbols during a restricted replay", () => {
+    useSessionStore.getState().setScenarioMode("challenge");
+    useSessionStore.setState((state) => ({
+      portfolio: {
+        ...state.portfolio,
+        positions: {
+          [state.primarySymbol]: {
+            symbol: state.primarySymbol,
+            quantity: 1,
+            averagePrice: 1.2,
+            marketPrice: 1.21,
+            marketValue: 1.21,
+            unrealizedPnl: 0.01,
+            realizedPnl: 0,
+          },
+          SECRET_SECONDARY: {
+            symbol: "SECRET_SECONDARY",
+            quantity: -2,
+            averagePrice: 100,
+            marketPrice: 95,
+            marketValue: -190,
+            unrealizedPnl: 10,
+            realizedPnl: 0,
+          },
+        },
+      },
+    }));
+    const state = useSessionStore.getState();
+    const snapshot = selectSnapshot(state);
+
+    render(
+      <TradePanel
+        tradablePrice={snapshot.tradablePrices[0]}
+        cash={snapshot.portfolio.cash}
+        positionsValue={snapshot.portfolio.positionsValue}
+        totalValue={snapshot.portfolio.totalValue}
+        realizedPnl={snapshot.portfolio.realizedPnl}
+        unrealizedPnl={snapshot.portfolio.unrealizedPnl}
+        initialCash={state.scenario.meta.initialCash}
+        margin={snapshot.margin}
+        risk={snapshot.risk}
+      />,
+    );
+
+    const positions = screen.getByLabelText("Open positions");
+    expect(positions).toHaveTextContent("Primary asset");
+    expect(positions).toHaveTextContent("Hidden asset");
+    expect(positions).not.toHaveTextContent(state.primarySymbol);
+    expect(positions).not.toHaveTextContent("SECRET_SECONDARY");
   });
 });

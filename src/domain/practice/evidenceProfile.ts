@@ -1,5 +1,22 @@
 import type { PracticeLedgerEntry } from "../history/practiceLedger";
-import type { DataFidelity, DrillAssessment } from "../../types";
+import type { CompletedRun } from "../history/runHistory";
+import type {
+  DataFidelity,
+  DrillAssessment,
+  ReportPayload,
+  ScenarioMode,
+} from "../../types";
+import {
+  assessmentMatchesCheckpointScheduleFingerprint,
+  assessmentHasConsistentRubricFingerprint,
+  completedAssessmentMatchesAggregateEvidence,
+  effectiveAssessmentRubricFingerprint,
+} from "./drills";
+import { isBrokerConfigFingerprint } from "../broker/executionModels";
+import {
+  canonicalScenarioDataVersion,
+  scenarioDataVersionsEqual,
+} from "../../data/scenarios/dataVersions";
 
 export type EvidenceConfidence =
   | "insufficient_evidence"
@@ -20,6 +37,20 @@ export type EvidenceTrendStatus =
 export type ValidatedSourceScenario = {
   scenarioId: string;
   dataVersion: string | null;
+  dataFidelity: DataFidelity;
+  sampleData: boolean;
+  sourceReviewed: boolean;
+};
+
+export type ValidatedPracticeSchedule = {
+  scenarioId: string;
+  dataVersion: string | null;
+  drillId: string;
+  definitionVersion: number;
+  rubricVersion: string;
+  rubricFingerprint: string;
+  checkpointScheduleFingerprint: string;
+  mode: ScenarioMode;
 };
 
 export type EvidenceTrend = {
@@ -40,6 +71,7 @@ export type PracticeEvidenceClaim = {
   id: string;
   competencyId: string;
   rubricVersion: string;
+  rubricFingerprint: string;
   drillDefinitions: EvidenceDrillDefinitionIdentity[];
   status: "assessed" | "unassessed";
   attemptCount: number;
@@ -89,24 +121,151 @@ function finiteScore(value: number | undefined): number | undefined {
     : undefined;
 }
 
+export function completedPracticeAssessmentScore(
+  assessment: DrillAssessment | undefined,
+  executionCount: number,
+): number | undefined {
+  return assessment?.status === "completed" &&
+    assessment.eventLinkageEvidenceVersion === 1 &&
+    Boolean(assessment.rubricFingerprint?.trim()) &&
+    assessmentMatchesCheckpointScheduleFingerprint(assessment) &&
+    assessmentHasConsistentRubricFingerprint(assessment) &&
+    completedAssessmentMatchesAggregateEvidence(assessment) &&
+    executionCount > 0 &&
+    assessment.components.every(
+      (component) =>
+        component.status === "assessed" && component.score !== undefined,
+    )
+    ? finiteScore(assessment.overallScore)
+    : undefined;
+}
+
+export function practiceEvidenceScore(
+  entry: PracticeLedgerEntry,
+): number | undefined {
+  return completedPracticeAssessmentScore(
+    entry.assessment,
+    entry.facts.executionCount,
+  );
+}
+
+export function previousComparablePracticeScore(
+  currentRunId: string,
+  report: ReportPayload,
+  mode: ScenarioMode,
+  brokerMode: CompletedRun["brokerMode"],
+  brokerFingerprint: string | undefined,
+  ledger: readonly PracticeLedgerEntry[],
+): number | undefined {
+  const assessment = report.practiceAssessment;
+  if (!assessment || !isBrokerConfigFingerprint(brokerFingerprint)) {
+    return undefined;
+  }
+  const rubricFingerprint = effectiveAssessmentRubricFingerprint(assessment);
+  const currentEntry = ledger.find(
+    (entry) =>
+      entry.id === currentRunId ||
+      entry.runId === currentRunId ||
+      entry.runInstanceId === currentRunId,
+  );
+  if (
+    !currentEntry ||
+    currentEntry.scenarioId !== report.scenarioId ||
+    !scenarioDataVersionsEqual(
+      currentEntry.scenarioId,
+      currentEntry.scenarioDataVersion,
+      report.provenance?.dataVersion,
+    ) ||
+    currentEntry.mode !== mode ||
+    currentEntry.brokerMode !== brokerMode ||
+    currentEntry.brokerFingerprint !== brokerFingerprint ||
+    currentEntry.assessment?.drillId !== assessment.drillId ||
+    competencyIdFor(currentEntry.assessment) !== competencyIdFor(assessment) ||
+    currentEntry.assessment.definitionVersion !== assessment.definitionVersion ||
+    currentEntry.assessment.rubricVersion !== assessment.rubricVersion ||
+    effectiveAssessmentRubricFingerprint(currentEntry.assessment) !==
+      rubricFingerprint ||
+    currentEntry.assessment.checkpointScheduleFingerprint !==
+      assessment.checkpointScheduleFingerprint ||
+    practiceEvidenceScore(currentEntry) === undefined
+  ) {
+    return undefined;
+  }
+  const previous = [...ledger]
+    .filter(
+      (entry) =>
+        entry.id !== currentRunId &&
+        entry.runId !== currentRunId &&
+        entry.runInstanceId !== currentRunId &&
+        entry.scenarioId === report.scenarioId &&
+        scenarioDataVersionsEqual(
+          entry.scenarioId,
+          entry.scenarioDataVersion,
+          report.provenance?.dataVersion,
+        ) &&
+        entry.mode === mode &&
+        entry.brokerMode === brokerMode &&
+        entry.brokerFingerprint === brokerFingerprint &&
+        entry.assessment?.drillId === assessment.drillId &&
+        competencyIdFor(entry.assessment) === competencyIdFor(assessment) &&
+        entry.assessment.definitionVersion === assessment.definitionVersion &&
+        entry.assessment.rubricVersion === assessment.rubricVersion &&
+        effectiveAssessmentRubricFingerprint(entry.assessment) ===
+          rubricFingerprint &&
+        entry.assessment.checkpointScheduleFingerprint ===
+          assessment.checkpointScheduleFingerprint &&
+        practiceEvidenceScore(entry) !== undefined,
+    )
+    .sort(
+      (left, right) =>
+        Date.parse(right.completedAt) - Date.parse(left.completedAt) ||
+        right.id.localeCompare(left.id),
+    )[0];
+  return previous ? practiceEvidenceScore(previous) : undefined;
+}
+
+export function rubricContentReference(fingerprint: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < fingerprint.length; index += 1) {
+    hash ^= fingerprint.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `content-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
 function competencyIdFor(assessment: DrillAssessment): string {
   return assessment.competencyId?.trim() || assessment.drillId;
 }
 
-function claimId(assessment: DrillAssessment): string {
+function claimBaseId(assessment: DrillAssessment): string {
   return [competencyIdFor(assessment), assessment.rubricVersion].join(":");
 }
 
-function comparableContextKey(item: AssessmentEntry): string {
+function claimGroupKey(assessment: DrillAssessment): string {
+  return JSON.stringify([
+    competencyIdFor(assessment),
+    assessment.rubricVersion,
+    effectiveAssessmentRubricFingerprint(assessment),
+  ]);
+}
+
+function comparableContextKey(item: AssessmentEntry): string | undefined {
   const { entry, assessment } = item;
+  if (!isBrokerConfigFingerprint(entry.brokerFingerprint)) return undefined;
   return JSON.stringify([
     entry.scenarioId,
-    entry.scenarioDataVersion ?? null,
+    canonicalScenarioDataVersion(
+      entry.scenarioId,
+      entry.scenarioDataVersion,
+    ),
     assessment.drillId,
     assessment.definitionVersion,
     assessment.rubricVersion,
+    effectiveAssessmentRubricFingerprint(assessment),
+    assessment.checkpointScheduleFingerprint ?? "<legacy-schedule>",
     entry.mode,
     entry.brokerMode,
+    entry.brokerFingerprint,
   ]);
 }
 
@@ -157,6 +316,13 @@ export function trendForComparableAssessments(
   const current = assessed.at(-1);
   if (!current) return { status: "insufficient_evidence" };
   const currentContext = comparableContextKey(current);
+  if (!currentContext) {
+    return {
+      status: "insufficient_evidence",
+      currentRunId: current.entry.runId,
+      currentScore: current.score,
+    };
+  }
   const previous = [...assessed]
     .slice(0, -1)
     .reverse()
@@ -189,11 +355,45 @@ function isValidatedSourceEntry(
   entry: PracticeLedgerEntry,
   validated: readonly ValidatedSourceScenario[],
 ): boolean {
-  const dataVersion = entry.scenarioDataVersion ?? null;
   return validated.some(
     (reference) =>
       reference.scenarioId === entry.scenarioId &&
-      reference.dataVersion === dataVersion,
+      scenarioDataVersionsEqual(
+        entry.scenarioId,
+        reference.dataVersion,
+        entry.scenarioDataVersion,
+      ) &&
+      entry.scenarioDataFidelity === reference.dataFidelity &&
+      entry.sampleData === false &&
+      reference.sampleData === false &&
+      reference.sourceReviewed === true,
+  );
+}
+
+function matchesValidatedPracticeSchedule(
+  entry: PracticeLedgerEntry,
+  references: readonly ValidatedPracticeSchedule[],
+): boolean {
+  const assessment = entry.assessment;
+  return Boolean(
+    assessment?.rubricFingerprint &&
+      assessment.checkpointScheduleFingerprint &&
+      references.some(
+        (reference) =>
+          reference.scenarioId === entry.scenarioId &&
+          scenarioDataVersionsEqual(
+            entry.scenarioId,
+            reference.dataVersion,
+            entry.scenarioDataVersion,
+          ) &&
+          reference.drillId === assessment.drillId &&
+          reference.definitionVersion === assessment.definitionVersion &&
+          reference.rubricVersion === assessment.rubricVersion &&
+          reference.rubricFingerprint === assessment.rubricFingerprint &&
+          reference.checkpointScheduleFingerprint ===
+            assessment.checkpointScheduleFingerprint &&
+          reference.mode === entry.mode,
+      ),
   );
 }
 
@@ -224,9 +424,10 @@ function claimFor(
   ) as DataFidelity[];
   const evidenceCount = assessed.length;
   return {
-    id: claimId(first.assessment),
+    id: claimBaseId(first.assessment),
     competencyId: competencyIdFor(first.assessment),
     rubricVersion: first.assessment.rubricVersion,
+    rubricFingerprint: effectiveAssessmentRubricFingerprint(first.assessment),
     drillDefinitions: exactDrillDefinitions(ordered),
     status: evidenceCount > 0 ? "assessed" : "unassessed",
     attemptCount: ordered.length,
@@ -250,30 +451,41 @@ function claimFor(
 export function buildEvidenceProfile(
   entries: readonly PracticeLedgerEntry[],
   validatedSourceScenarios: readonly ValidatedSourceScenario[],
+  validatedPracticeSchedules?: readonly ValidatedPracticeSchedule[],
 ): PracticeEvidenceProfile {
   const groups = new Map<string, AssessmentEntry[]>();
   for (const entry of [...entries].sort(compareOldestFirst)) {
     if (!entry.assessment) continue;
     const assessment = entry.assessment;
-    const id = claimId(assessment);
+    const id = claimGroupKey(assessment);
     const group = groups.get(id) ?? [];
     group.push({
       entry,
       assessment,
       score:
-        assessment.status === "completed" &&
-        entry.facts.executionCount > 0 &&
-        assessment.components.every(
-          (component) =>
-            component.status === "assessed" && component.score !== undefined,
-        )
-          ? finiteScore(assessment.overallScore)
+        validatedPracticeSchedules === undefined ||
+        matchesValidatedPracticeSchedule(entry, validatedPracticeSchedules)
+          ? practiceEvidenceScore(entry)
           : undefined,
     });
     groups.set(id, group);
   }
-  const claims = [...groups.values()]
-    .map((items) => claimFor(items, validatedSourceScenarios))
+  const groupedClaims = [...groups.values()].map((items) =>
+    claimFor(items, validatedSourceScenarios),
+  );
+  const baseIdCounts = new Map<string, number>();
+  for (const claim of groupedClaims) {
+    baseIdCounts.set(claim.id, (baseIdCounts.get(claim.id) ?? 0) + 1);
+  }
+  const claims = groupedClaims
+    .map((claim) =>
+      baseIdCounts.get(claim.id) === 1
+        ? claim
+        : {
+            ...claim,
+            id: `${claim.id}:${claim.rubricFingerprint}`,
+          },
+    )
     .sort((left, right) => left.id.localeCompare(right.id));
   return {
     ledgerEntryCount: entries.length,

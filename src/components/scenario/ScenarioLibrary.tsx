@@ -8,7 +8,16 @@ import {
   type ReactNode,
 } from "react";
 import { replayTimeline } from "../../domain/replay/engine";
-import type { PracticeCoachPlan } from "../../domain/coaching/practiceCoach";
+import type {
+  PracticeCoachPlan,
+  PracticeCoachStartContext,
+} from "../../domain/coaching/practiceCoach";
+import { scenarioDataVersionsEqual } from "../../data/scenarios/dataVersions";
+import { drillRubricFingerprint } from "../../domain/practice/drills";
+import {
+  brokerConfigFingerprint,
+  getBrokerPreset,
+} from "../../domain/broker/executionModels";
 import type { PracticeEvidenceProfile } from "../../domain/practice/evidenceProfile";
 import type {
   PracticeTrack,
@@ -54,7 +63,9 @@ type Props = {
     scenarioId: string,
     mode: ScenarioMode,
     drillId?: string,
+    context?: PracticeCoachStartContext,
   ) => void;
+  onStartSurprise: (mode: "blind" | "challenge") => void;
   onClose?: () => void;
   onExport: () => void;
   onRestore: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -63,6 +74,44 @@ type Props = {
   onViewPracticeSource?: (runId: string) => void;
   onClearSavedSession: () => void;
 };
+
+function brokerFingerprintForTrackContext(
+  scenario: ScenarioPackage,
+  mode: PracticeTrackUnit["broker"]["mode"],
+): string {
+  const broker =
+    mode === "scenario"
+      ? scenario.broker
+      : {
+          ...getBrokerPreset(mode),
+          baseCurrency: scenario.meta.baseCurrency,
+        };
+  return brokerConfigFingerprint(broker);
+}
+
+function trackUnitMatchesSelection(
+  unit: PracticeTrackUnit,
+  scenario: ScenarioPackage,
+  drill: DrillDefinition,
+): boolean {
+  return (
+    unit.scenario.id === scenario.meta.id &&
+    scenarioDataVersionsEqual(
+      unit.scenario.id,
+      unit.scenario.dataVersion,
+      scenario.meta.dataVersion,
+    ) &&
+    unit.scenario.dataFidelity === scenario.meta.dataFidelity &&
+    unit.scenario.sampleData === (scenario.meta.isSampleData ?? false) &&
+    unit.drill.id === drill.id &&
+    unit.drill.definitionVersion === drill.definitionVersion &&
+    unit.drill.rubricVersion === drill.rubricVersion &&
+    unit.drill.rubricFingerprint === drillRubricFingerprint(drill.rubric) &&
+    unit.drill.mode === drill.mode &&
+    unit.broker.fingerprint ===
+      brokerFingerprintForTrackContext(scenario, unit.broker.mode)
+  );
+}
 
 export default function ScenarioLibrary({
   scenarios,
@@ -85,6 +134,7 @@ export default function ScenarioLibrary({
   userScenarioIds,
   onContinue,
   onStart,
+  onStartSurprise,
   onClose,
   onExport,
   onRestore,
@@ -102,6 +152,8 @@ export default function ScenarioLibrary({
   const [selectedDrillId, setSelectedDrillId] = useState<string | undefined>(
     activeDrillId,
   );
+  const [preparedCoachPlan, setPreparedCoachPlan] =
+    useState<PracticeCoachPlan>();
   const [preparedTrackUnit, setPreparedTrackUnit] =
     useState<PracticeTrackUnit>();
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
@@ -122,12 +174,19 @@ export default function ScenarioLibrary({
     setSelectedDrillId(
       activeDrillId,
     );
+    setPreparedCoachPlan(undefined);
     setPreparedTrackUnit(undefined);
   }, [activeDrillId, activeMode, activeScenario]);
 
   useEffect(() => {
     titleRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    setPreparedCoachPlan((current) =>
+      current && current !== practicePlan ? undefined : current,
+    );
+  }, [practicePlan]);
 
   const selectedScenario = useMemo(
     () =>
@@ -146,10 +205,42 @@ export default function ScenarioLibrary({
   const selectedDrill = scenarioDrills.find(
     (definition) => definition.id === selectedDrillId,
   );
+  const preparedTrackUnitMatches = Boolean(
+    selectedDrill &&
+      preparedTrackUnit &&
+      trackUnitMatchesSelection(
+        preparedTrackUnit,
+        selectedScenario,
+        selectedDrill,
+      ),
+  );
+  const selectedValidatedTrackUnit = selectedDrill
+    ? preparedTrackUnitMatches
+      ? preparedTrackUnit?.status === "validated"
+        ? preparedTrackUnit
+        : undefined
+      : practiceTracks
+          .flatMap((track) => track.units)
+          .find(
+            (unit) =>
+              unit.status === "validated" &&
+              unit.broker.mode === "scenario" &&
+              trackUnitMatchesSelection(
+                unit,
+                selectedScenario,
+                selectedDrill,
+              ),
+          )
+    : undefined;
+  const surpriseModes = (["blind", "challenge"] as const).filter((mode) =>
+    scenarios.some((candidate) => candidate.meta.supportedModes.includes(mode)),
+  );
+  const selectedSampleDisclosure = sampleDataDisclosure(selectedScenario);
 
   function chooseScenario(candidate: ScenarioPackage): void {
     setSelectedScenarioId(candidate.meta.id);
     setSelectedDrillId(undefined);
+    setPreparedCoachPlan(undefined);
     setPreparedTrackUnit(undefined);
     setSelectedMode(supportedMode(candidate, selectedMode));
   }
@@ -168,9 +259,19 @@ export default function ScenarioLibrary({
     const candidate = scenarios.find(
       (scenario) => scenario.meta.id === plan.scenarioId,
     );
-    if (!candidate) return;
+    if (
+      !candidate ||
+      !scenarioDataVersionsEqual(
+        candidate.meta.id,
+        candidate.meta.dataVersion,
+        plan.scenarioDataVersion,
+      )
+    ) {
+      return;
+    }
     setSelectedScenarioId(candidate.meta.id);
     setSelectedDrillId(plan.drillId);
+    setPreparedCoachPlan(plan);
     setPreparedTrackUnit(undefined);
     setSelectedMode(plan.mode);
     focusBriefing();
@@ -188,19 +289,76 @@ export default function ScenarioLibrary({
         drill.rubricVersion === unit.drill.rubricVersion &&
         drill.mode === unit.drill.mode,
     );
-    if (!candidate || !definition) return;
+    if (
+      !candidate ||
+      !definition ||
+      !trackUnitMatchesSelection(unit, candidate, definition)
+    ) {
+      return;
+    }
     setSelectedScenarioId(candidate.meta.id);
     setSelectedDrillId(definition.id);
     setSelectedMode(definition.mode);
+    setPreparedCoachPlan(undefined);
     setPreparedTrackUnit(unit);
     focusBriefing();
+  }
+
+  function startSelectedPractice(): void {
+    if (!selectedDrill) {
+      onStart(selectedScenario.meta.id, selectedMode);
+      return;
+    }
+    const coachContext =
+      preparedCoachPlan &&
+      preparedCoachPlan === practicePlan &&
+      preparedCoachPlan.scenarioId === selectedScenario.meta.id &&
+      preparedCoachPlan.drillId === selectedDrill.id &&
+      preparedCoachPlan.mode === selectedDrill.mode
+          ? {
+            scenarioDataVersion: preparedCoachPlan.scenarioDataVersion,
+            brokerMode: preparedCoachPlan.brokerMode,
+            brokerFingerprint: preparedCoachPlan.brokerFingerprint,
+          }
+        : undefined;
+    const trackUnitContext =
+      preparedTrackUnitMatches && preparedTrackUnit
+        ? {
+            scenarioDataVersion: preparedTrackUnit.scenario.dataVersion,
+            brokerMode: preparedTrackUnit.broker.mode,
+            brokerFingerprint: preparedTrackUnit.broker.fingerprint,
+          }
+        : selectedValidatedTrackUnit
+          ? {
+              scenarioDataVersion: selectedValidatedTrackUnit.scenario.dataVersion,
+              brokerMode: selectedValidatedTrackUnit.broker.mode,
+              brokerFingerprint: selectedValidatedTrackUnit.broker.fingerprint,
+            }
+          : undefined;
+    const preparedContext = coachContext ?? trackUnitContext;
+    if (preparedContext) {
+      onStart(
+        selectedScenario.meta.id,
+        selectedDrill.mode,
+        selectedDrill.id,
+        preparedContext,
+      );
+      return;
+    }
+    onStart(
+      selectedScenario.meta.id,
+      selectedDrill.mode,
+      selectedDrill.id,
+    );
   }
 
   function handleModeKeyDown(
     event: KeyboardEvent<HTMLButtonElement>,
     currentMode: ScenarioMode,
   ): void {
-    const modes = selectedScenario.meta.supportedModes;
+    const modes = selectedDrill
+      ? [selectedDrill.mode]
+      : selectedScenario.meta.supportedModes;
     const currentIndex = modes.indexOf(currentMode);
     if (currentIndex < 0 || modes.length === 0) return;
 
@@ -314,7 +472,7 @@ export default function ScenarioLibrary({
         {hasActiveSession ? (
           <section className="continue-card" aria-labelledby="continue-title">
             <div>
-              <span className="continue-kicker">Saved on this device</span>
+              <span className="continue-kicker">Active in this browser</span>
               <h2 id="continue-title">{activeTitle}</h2>
               <p>{activeProgressLabel}</p>
             </div>
@@ -345,6 +503,42 @@ export default function ScenarioLibrary({
         ) : null}
 
         {history ? <div className="library-history-card">{history}</div> : null}
+
+        {surpriseModes.length > 0 ? (
+          <section
+            className="library-section surprise-replay-card"
+            aria-labelledby="surprise-replay-title"
+          >
+            <div className="library-section-head">
+              <div>
+                <span className="library-step">Surprise self-test</span>
+                <h2 id="surprise-replay-title">Start without choosing the lab</h2>
+              </div>
+              <p>
+                The app selects an eligible lab only after you start, so the
+                scenario choice itself does not reveal the identity first.
+              </p>
+            </div>
+            <div className="surprise-replay-actions">
+              {surpriseModes.map((mode) => (
+                <button
+                  className="btn primary"
+                  type="button"
+                  key={mode}
+                  onClick={() => onStartSurprise(mode)}
+                >
+                  Start surprise {scenarioModeLabel(mode)}
+                </button>
+              ))}
+            </div>
+            <p className="surprise-replay-boundary" role="note">
+              Scenario identity and the ending are masked during the replay, but
+              this is a local self-test—not secure anti-cheat. Decision-relevant
+              historical time and bundled future data remain inspectable by a
+              technical user.
+            </p>
+          </section>
+        ) : null}
 
         <section className="library-section" aria-labelledby="scenario-list-title">
           <div className="library-section-head">
@@ -486,23 +680,22 @@ export default function ScenarioLibrary({
                 ) : null}
               </div>
             ) : null}
-            {selectedScenario.meta.isSampleData ? (
+            {selectedSampleDisclosure ? (
               <div className="sample-warning" role="note">
-                <strong>Demo price path</strong>
-                <span>
-                  Prices are deterministic synthetic samples shaped around the
-                  documented historical regime. Use this lab to learn the product,
-                  not to infer historical execution results.
-                </span>
+                <strong>{selectedSampleDisclosure.title}</strong>
+                <span>{selectedSampleDisclosure.detail}</span>
               </div>
             ) : null}
-            {preparedTrackUnit?.status === "preview" ? (
+            {selectedDrill && !selectedValidatedTrackUnit ? (
               <div className="sample-warning" role="note">
                 <strong>Preview practice · No completion credit</strong>
                 <span>
-                  This unit rehearses the guided process, but it cannot award
-                  unit or track completion credit. Its market path uses
-                  synthetic sample data.
+                  This drill rehearses the guided process, but its exact
+                  scenario and definition are not a validated track unit. It
+                  cannot award unit or track completion credit
+                  {selectedScenario.meta.isSampleData
+                    ? "; its market path uses synthetic sample data."
+                    : "."}
                 </span>
               </div>
             ) : null}
@@ -524,6 +717,7 @@ export default function ScenarioLibrary({
                   aria-pressed={definition.id === selectedDrill?.id}
                   onClick={() => {
                     setSelectedDrillId(definition.id);
+                    setPreparedCoachPlan(undefined);
                     setPreparedTrackUnit(undefined);
                     setSelectedMode(definition.mode);
                   }}
@@ -543,6 +737,7 @@ export default function ScenarioLibrary({
                 aria-pressed={!selectedDrill}
                 onClick={() => {
                   setSelectedDrillId(undefined);
+                  setPreparedCoachPlan(undefined);
                   setPreparedTrackUnit(undefined);
                 }}
               >
@@ -591,15 +786,7 @@ export default function ScenarioLibrary({
             <button
               className="btn primary library-start"
               type="button"
-              onClick={() =>
-                selectedDrill
-                  ? onStart(
-                      selectedScenario.meta.id,
-                      selectedDrill.mode,
-                      selectedDrill.id,
-                    )
-                  : onStart(selectedScenario.meta.id, selectedMode)
-              }
+              onClick={startSelectedPractice}
             >
               {selectedDrill
                 ? "Start guided drill"
@@ -788,6 +975,31 @@ function dataFidelityLabel(scenario: ScenarioPackage): string {
     case "mixed":
       return "Observed + derived data";
   }
+}
+
+function sampleDataDisclosure(
+  scenario: ScenarioPackage,
+): { title: string; detail: string } | undefined {
+  if (!scenario.meta.isSampleData) return undefined;
+  if (scenario.meta.dataFidelity === "mixed") {
+    return {
+      title: "Observed values with derived fields",
+      detail:
+        "Some values come from the declared source while other replay fields are derived or unavailable. Review the observed and derived field lists above before using the lab.",
+    };
+  }
+  if (scenario.meta.dataFidelity === "derived") {
+    return {
+      title: "Derived replay series",
+      detail:
+        "This replay is derived from the declared source rather than a complete observed market path. Review the derivation limits above before interpreting results.",
+    };
+  }
+  return {
+    title: "Demo price path",
+    detail:
+      "Prices are deterministic synthetic samples shaped around the documented historical regime. Use this lab to learn the product, not to infer historical execution results.",
+  };
 }
 
 function brokerRulesLabel(scenario: ScenarioPackage): string {

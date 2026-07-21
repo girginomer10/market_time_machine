@@ -76,9 +76,17 @@ function rawScenario(
   };
 }
 
+function versionedScenario(): ScenarioPackage {
+  const scenario = makeScenario();
+  return {
+    ...scenario,
+    meta: { ...scenario.meta, dataVersion: "test-data-v1" },
+  };
+}
+
 describe("scenario-authored drill parsing", () => {
   it("parses, domain-validates, and defensively copies a valid definition", () => {
-    const scenario = makeScenario();
+    const scenario = versionedScenario();
     const source = authoredDrill();
     const result = parseScenarioDrillDefinitions([source], scenario);
 
@@ -94,7 +102,7 @@ describe("scenario-authored drill parsing", () => {
   });
 
   it("never crashes on malformed nested unknown input", () => {
-    const scenario = makeScenario();
+    const scenario = versionedScenario();
     const malformed = [
       null,
       {
@@ -142,7 +150,7 @@ describe("scenario-authored drill parsing", () => {
   });
 
   it("requires a stable non-empty competency identity", () => {
-    const scenario = makeScenario();
+    const scenario = versionedScenario();
     const { competencyId: _omitted, ...missingCompetency } = authoredDrill();
 
     for (const input of [missingCompetency, authoredDrill({ competencyId: " " })]) {
@@ -169,7 +177,7 @@ describe("scenario-authored drill parsing", () => {
           primarySymbol: "MISSING",
         }),
       ],
-      makeScenario(),
+      versionedScenario(),
     );
 
     expect(result.valid).toBe(false);
@@ -183,8 +191,31 @@ describe("scenario-authored drill parsing", () => {
     );
   });
 
+  it("rejects an authored drill with no required initial-plan fields", () => {
+    const result = parseScenarioDrillDefinitions(
+      [
+        authoredDrill({
+          initialPlanRule: {
+            requiredBeforeFirstOrder: true,
+            requiredFields: [],
+          },
+        }),
+      ],
+      versionedScenario(),
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.drills).toEqual([]);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "drills.definition.plan_fields_empty",
+        path: "drills[0].initialPlanRule.requiredFields",
+      }),
+    );
+  });
+
   it("requires a positive definition version and unique ids", () => {
-    const scenario = makeScenario();
+    const scenario = versionedScenario();
     const duplicate = authoredDrill();
     const result = parseScenarioDrillDefinitions(
       [duplicate, { ...duplicate }, authoredDrill({ id: "bad-version", definitionVersion: 0 })],
@@ -206,7 +237,12 @@ describe("scenario package integration", () => {
   it("assembleScenario validates and copies authored definitions", () => {
     const base = makeScenario();
     const source = authoredDrill();
-    const assembled = assembleScenario(rawScenario(base, [source]));
+    const assembled = assembleScenario(
+      rawScenario(
+        { ...base, meta: { ...base.meta, dataVersion: "test-data-v1" } },
+        [source],
+      ),
+    );
 
     expect(assembled.drills).toEqual([source]);
     expect(assembled.drills?.[0]).not.toBe(source);
@@ -219,8 +255,44 @@ describe("scenario package integration", () => {
     ).toEqual([]);
   });
 
-  it("assembleScenario rejects a structurally valid but mismatched drill", () => {
+  it("requires a non-empty scenario data version for authored drills", () => {
     const base = makeScenario();
+    const versionless = { ...base, drills: [authoredDrill()] };
+    const blankVersion = {
+      ...base,
+      meta: { ...base.meta, dataVersion: "   " },
+      drills: [authoredDrill()],
+    };
+
+    for (const scenario of [versionless, blankVersion]) {
+      expect(validateScenarioPackage(scenario)).toMatchObject({
+        valid: false,
+        errors: [
+          expect.objectContaining({
+            code: "meta.data_version_required_for_drills",
+            path: "meta.dataVersion",
+          }),
+        ],
+      });
+    }
+    expect(() =>
+      assembleScenario(rawScenario(base, [authoredDrill()])),
+    ).toThrow(/meta\.data_version_required_for_drills/);
+    expect(() =>
+      assembleScenario(rawScenario(blankVersion, [authoredDrill()])),
+    ).toThrow(/meta\.data_version_required_for_drills/);
+
+    expect(
+      validateScenarioPackage({
+        ...base,
+        meta: { ...base.meta, dataVersion: "test-data-v1" },
+        drills: [authoredDrill()],
+      }).valid,
+    ).toBe(true);
+  });
+
+  it("assembleScenario rejects a structurally valid but mismatched drill", () => {
+    const base = versionedScenario();
     expect(() =>
       assembleScenario(
         rawScenario(base, [authoredDrill({ scenarioId: "wrong" })]),
@@ -230,7 +302,7 @@ describe("scenario package integration", () => {
 
   it("validateScenarioPackage reports malformed nested drills without throwing", () => {
     const scenario = {
-      ...makeScenario(),
+      ...versionedScenario(),
       drills: [{ ...authoredDrill(), checkpointRule: null }],
     } as unknown as ScenarioPackage;
 
@@ -251,7 +323,7 @@ describe("scenario package integration", () => {
 describe("available drill catalog", () => {
   it("merges validated authored drills without mutating the built-in catalog", () => {
     const builtInsBefore = listBuiltInDrills();
-    const scenario = { ...makeScenario(), drills: [authoredDrill()] };
+    const scenario = { ...versionedScenario(), drills: [authoredDrill()] };
 
     expect(listAvailableDrills([scenario])).toEqual([authoredDrill()]);
     expect(getDrillForScenario("test-event-discipline-v1", scenario)).toEqual(
@@ -293,7 +365,7 @@ describe("available drill catalog", () => {
 
   it("does not expose any authored drill when its package drill set is invalid", () => {
     const scenario = {
-      ...makeScenario(),
+      ...versionedScenario(),
       drills: [
         authoredDrill(),
         { ...authoredDrill({ id: "invalid-v1" }), rubric: null },

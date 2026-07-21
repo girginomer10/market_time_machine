@@ -1,9 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { eventDisciplineEurGbpV1 } from "../../data/practice/drills";
+import {
+  eventDisciplineEurGbpV1,
+  eventDisciplineEurUsdV1,
+  listBuiltInDrills,
+} from "../../data/practice/drills";
 import { listScenarios } from "../../data/scenarios";
-import type { DrillAssessment, ReportPayload } from "../../types";
+import type {
+  DrillAssessment,
+  DrillDefinition,
+  ReportPayload,
+  ScenarioPackage,
+} from "../../types";
 import type { CompletedRun } from "../history/runHistory";
 import { derivePracticeLedgerEntry } from "../history/practiceLedger";
+import {
+  buildDrillCheckpointSchedule,
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+} from "../practice/drills";
+import {
+  brokerConfigFingerprint,
+  getBrokerPreset,
+} from "../broker/executionModels";
 import {
   buildPracticeCoachPlan,
   foundationMilestones,
@@ -49,6 +67,31 @@ function completedRun(
     },
     ...reportOverrides,
   };
+  const sourceScenario = listScenarios().find(
+    (scenario) => scenario.meta.id === report.scenarioId,
+  );
+  if (!report.provenance && sourceScenario) {
+    report.provenance = {
+      license: sourceScenario.meta.license,
+      dataSources: [...sourceScenario.meta.dataSources],
+      dataVersion: sourceScenario.meta.dataVersion,
+      isSampleData: sourceScenario.meta.isSampleData ?? true,
+    };
+  }
+  const brokerMode = overrides.brokerMode ?? "scenario";
+  const broker =
+    brokerMode === "scenario"
+      ? sourceScenario?.broker
+      : sourceScenario
+        ? {
+            ...getBrokerPreset(brokerMode),
+            baseCurrency: sourceScenario.meta.baseCurrency,
+          }
+        : getBrokerPreset(brokerMode);
+  const hasBrokerFingerprintOverride = Object.prototype.hasOwnProperty.call(
+    overrides,
+    "brokerFingerprint",
+  );
   return {
     id: "run-a",
     completedAt: "2026-07-13T10:00:00.000Z",
@@ -69,12 +112,26 @@ function completedRun(
     journalCoverage: 1,
     report,
     ...overrides,
+    brokerFingerprint: hasBrokerFingerprintOverride
+      ? overrides.brokerFingerprint
+      : broker
+        ? brokerConfigFingerprint(broker)
+        : undefined,
   };
 }
 
 function drillAssessment(
   overrides: Partial<DrillAssessment> = {},
+  definition = eventDisciplineEurGbpV1,
 ): DrillAssessment {
+  const scenario = listScenarios().find(
+    (candidate) => candidate.meta.id === definition.scenarioId,
+  );
+  if (!scenario) throw new Error("Fixture drill scenario is unavailable.");
+  const checkpointSchedule = buildDrillCheckpointSchedule(definition, scenario);
+  const eligibleEventCount = new Set(
+    checkpointSchedule.flatMap((checkpoint) => checkpoint.eventIds),
+  ).size;
   const componentScores = {
     plan_coverage: 100,
     checkpoint_coverage: 100,
@@ -82,10 +139,15 @@ function drillAssessment(
     rule_adherence: 100,
   } as const;
   return {
-    drillId: eventDisciplineEurGbpV1.id,
-    competencyId: eventDisciplineEurGbpV1.competencyId,
-    definitionVersion: eventDisciplineEurGbpV1.definitionVersion,
-    rubricVersion: eventDisciplineEurGbpV1.rubricVersion,
+    drillId: definition.id,
+    competencyId: definition.competencyId,
+    definitionVersion: definition.definitionVersion,
+    rubricVersion: definition.rubricVersion,
+    rubricFingerprint: drillRubricFingerprint(definition.rubric),
+    checkpointScheduleFingerprint: drillCheckpointScheduleFingerprint(
+      buildDrillCheckpointSchedule(definition, scenario),
+    ),
+    eventLinkageEvidenceVersion: 1,
     status: "completed",
     overallScore: 100,
     methodology: "Process-only fixture rubric.",
@@ -93,26 +155,59 @@ function drillAssessment(
       id: id as DrillAssessment["components"][number]["id"],
       label: id,
       weight:
-        eventDisciplineEurGbpV1.rubric.weights[
+        definition.rubric.weights[
           id as DrillAssessment["components"][number]["id"]
         ],
       status: "assessed" as const,
       score,
       evidence: "Fixture evidence.",
     })),
-    eligibleCheckpointCount: 5,
-    answeredCheckpointCount: 5,
+    eligibleCheckpointCount: checkpointSchedule.length,
+    answeredCheckpointCount: checkpointSchedule.length,
     skippedCheckpointCount: 0,
-    eligibleEventCount: 6,
-    linkedEventCount: 6,
+    eligibleEventCount,
+    linkedEventCount: eligibleEventCount,
     violationCount: 0,
     ...overrides,
   };
 }
 
+function authoredDefinitionFrom(
+  definition: DrillDefinition,
+): DrillDefinition {
+  return {
+    ...definition,
+    id: `authored-${definition.id}`,
+    competencyId: "authored-release-discipline",
+    rubricVersion: "authored-release-discipline-v1",
+    title: `Authored ${definition.title}`,
+    rubric: {
+      weights: { ...definition.rubric.weights },
+      violationPenalty: 15,
+    },
+  };
+}
+
+function withAuthoredDefinition(
+  scenarios: ScenarioPackage[],
+  definition: DrillDefinition,
+): ScenarioPackage[] {
+  return scenarios.map((scenario) =>
+    scenario.meta.id === definition.scenarioId
+      ? {
+          ...scenario,
+          drills: [...(scenario.drills ?? []), definition],
+        }
+      : scenario,
+  );
+}
+
 describe("practice coach", () => {
   it("starts a fresh learner with an explicit EUR/GBP baseline", () => {
     const plan = buildPracticeCoachPlan([], listScenarios());
+    const scenario = listScenarios().find(
+      (candidate) => candidate.meta.id === "eurgbp-brexit-2016",
+    );
 
     expect(plan).toMatchObject({
       kind: "first_run",
@@ -121,6 +216,8 @@ describe("practice coach", () => {
       completedMilestones: 0,
       evidenceRunCount: 0,
       rubricVersion: "practice-coach-v1",
+      scenarioDataVersion: scenario?.meta.dataVersion,
+      brokerMode: "scenario",
     });
     expect(plan?.milestones.every((milestone) => !milestone.complete)).toBe(true);
   });
@@ -245,6 +342,63 @@ describe("practice coach", () => {
     ).toBe(false);
   });
 
+  it("does not count no-trade replays as cross-regime practice", () => {
+    const noTrade = completedRun(
+      { executionCount: 0 },
+      {
+        totalTrades: 0,
+        journalQuality: {
+          status: "insufficient_evidence",
+          executedDecisionCount: 0,
+          linkedEntryCount: 0,
+          coverageRate: 0,
+          reasonRate: 0,
+          riskPlanRate: 0,
+          structuredPlanRate: 0,
+          eventLinkRate: 0,
+          evidence: [],
+        },
+      },
+    );
+    const secondNoTrade = completedRun(
+      {
+        id: "no-trade-second-regime",
+        scenarioId: "qqq-rate-hike-2022",
+        scenarioTitle: "Nasdaq 2022 Rate Shock",
+        executionCount: 0,
+      },
+      {
+        scenarioId: "qqq-rate-hike-2022",
+        scenarioTitle: "Nasdaq 2022 Rate Shock",
+        totalTrades: 0,
+        journalQuality: {
+          status: "insufficient_evidence",
+          executedDecisionCount: 0,
+          linkedEntryCount: 0,
+          coverageRate: 0,
+          reasonRate: 0,
+          riskPlanRate: 0,
+          structuredPlanRate: 0,
+          eventLinkRate: 0,
+          evidence: [],
+        },
+      },
+    );
+
+    expect(
+      foundationMilestones([noTrade, secondNoTrade]).find(
+        (milestone) => milestone.id === "practice_two_scenarios",
+      )?.complete,
+    ).toBe(false);
+    expect(
+      foundationMilestones([], [
+        derivePracticeLedgerEntry(noTrade),
+        derivePracticeLedgerEntry(secondNoTrade),
+      ]).find((milestone) => milestone.id === "practice_two_scenarios")
+        ?.complete,
+    ).toBe(false);
+  });
+
   it("derives foundation milestones only from observable run evidence", () => {
     const documented = completedRun();
     const second = completedRun({
@@ -357,28 +511,44 @@ describe("practice coach", () => {
     });
   });
 
+  it("repeats a legacy completed attempt without claiming automatic event links", () => {
+    const run = completedRun({}, {
+      practiceAssessment: drillAssessment({
+        eventLinkageEvidenceVersion: undefined,
+      }),
+    });
+
+    expect(buildPracticeCoachPlan([run], listScenarios())).toMatchObject({
+      title: "Repeat with explicit event links",
+      focusLabel: "Explicit event evidence",
+      target: { current: "Legacy linkage unassessed" },
+    });
+  });
+
   it("assigns the weakest measured component in the same drill context", () => {
-    const weakPlan = drillAssessment({
-      overallScore: 85,
+    const weakEventLinkage = drillAssessment({
+      overallScore: 90,
+      linkedEventCount: 3,
       components: drillAssessment().components.map((component) =>
-        component.id === "plan_coverage"
+        component.id === "event_linkage"
           ? { ...component, score: 50 }
           : component,
       ),
     });
-    const run = completedRun({}, { practiceAssessment: weakPlan });
+    const run = completedRun({}, { practiceAssessment: weakEventLinkage });
 
     expect(buildPracticeCoachPlan([run], listScenarios())).toMatchObject({
-      title: "Complete the plan before taking risk",
+      title: "Link each decision to visible evidence",
       scenarioId: eventDisciplineEurGbpV1.scenarioId,
       drillId: eventDisciplineEurGbpV1.id,
-      focusLabel: "Initial plan coverage",
-      target: { current: "50%", target: "At least 80%" },
+      focusLabel: "Visible-event linkage",
+      target: { current: "50%", target: "At least 100%" },
+      brokerMode: "scenario",
     });
   });
 
   it("transfers a clean completed drill to the next available regime", () => {
-    const run = completedRun({}, {
+    const run = completedRun({ brokerMode: "ideal" }, {
       practiceAssessment: drillAssessment(),
     });
 
@@ -386,7 +556,267 @@ describe("practice coach", () => {
       title: "Transfer clean Event Discipline to a new regime",
       scenarioId: "eurusd-covid-liquidity-2020",
       focusLabel: "Cross-regime process transfer",
+      brokerMode: "scenario",
     });
+  });
+
+  it("does not let an authored completion stand in for the built-in drill on the same regime", () => {
+    const authoredEurUsd = authoredDefinitionFrom(eventDisciplineEurUsdV1);
+    const scenarios = withAuthoredDefinition(
+      listScenarios(),
+      authoredEurUsd,
+    );
+    const eurUsdScenario = scenarios.find(
+      (scenario) => scenario.meta.id === authoredEurUsd.scenarioId,
+    )!;
+    const authoredAttempt = completedRun(
+      {
+        id: "authored-eurusd-completion",
+        completedAt: "2026-07-13T10:00:00.000Z",
+        scenarioId: eurUsdScenario.meta.id,
+        scenarioTitle: eurUsdScenario.meta.title,
+      },
+      {
+        scenarioId: eurUsdScenario.meta.id,
+        scenarioTitle: eurUsdScenario.meta.title,
+        practiceAssessment: drillAssessment({}, authoredEurUsd),
+      },
+    );
+    const latestBuiltIn = completedRun(
+      {
+        id: "latest-built-in-eurgbp",
+        completedAt: "2026-07-14T10:00:00.000Z",
+      },
+      { practiceAssessment: drillAssessment() },
+    );
+
+    const plan = buildPracticeCoachPlan(
+      [authoredAttempt, latestBuiltIn],
+      scenarios,
+    );
+
+    expect(plan).toMatchObject({
+      title: "Transfer clean Event Discipline to a new regime",
+      scenarioId: eventDisciplineEurUsdV1.scenarioId,
+      drillId: eventDisciplineEurUsdV1.id,
+      brokerMode: "scenario",
+      focusLabel: "Cross-regime process transfer",
+    });
+    expect(plan?.drillId).not.toBe(authoredEurUsd.id);
+  });
+
+  it("does not mark a transfer candidate complete under a different broker context", () => {
+    const scenarios = listScenarios();
+    const eurUsdScenario = scenarios.find(
+      (scenario) => scenario.meta.id === eventDisciplineEurUsdV1.scenarioId,
+    )!;
+    const idealBrokerAttempt = completedRun(
+      {
+        id: "ideal-broker-eurusd-completion",
+        completedAt: "2026-07-13T10:00:00.000Z",
+        scenarioId: eurUsdScenario.meta.id,
+        scenarioTitle: eurUsdScenario.meta.title,
+        brokerMode: "ideal",
+      },
+      {
+        scenarioId: eurUsdScenario.meta.id,
+        scenarioTitle: eurUsdScenario.meta.title,
+        practiceAssessment: drillAssessment({}, eventDisciplineEurUsdV1),
+      },
+    );
+    const latestBuiltIn = completedRun(
+      {
+        id: "latest-scenario-broker-eurgbp",
+        completedAt: "2026-07-14T10:00:00.000Z",
+      },
+      { practiceAssessment: drillAssessment() },
+    );
+
+    const plan = buildPracticeCoachPlan(
+      [idealBrokerAttempt, latestBuiltIn],
+      scenarios,
+    );
+
+    expect(plan).toMatchObject({
+      title: "Transfer clean Event Discipline to a new regime",
+      scenarioId: eventDisciplineEurUsdV1.scenarioId,
+      drillId: eventDisciplineEurUsdV1.id,
+      brokerMode: "scenario",
+    });
+  });
+
+  it("repeats an exact authored context when no compatible transfer catalog exists", () => {
+    const authoredEurGbp = authoredDefinitionFrom(eventDisciplineEurGbpV1);
+    const scenarios = withAuthoredDefinition(
+      listScenarios(),
+      authoredEurGbp,
+    );
+    const run = completedRun(
+      { brokerMode: "ideal" },
+      { practiceAssessment: drillAssessment({}, authoredEurGbp) },
+    );
+
+    const plan = buildPracticeCoachPlan([run], scenarios);
+
+    expect(plan).toMatchObject({
+      title: "Repeat the same context for a comparable trend",
+      scenarioId: authoredEurGbp.scenarioId,
+      drillId: authoredEurGbp.id,
+      drillTitle: authoredEurGbp.title,
+      mode: authoredEurGbp.mode,
+      brokerMode: "ideal",
+      focusLabel: "Comparable process trend",
+      target: { label: `${authoredEurGbp.title} process` },
+    });
+    expect(plan?.rationale).toMatch(/exact authored competency and rubric/i);
+  });
+
+  it("repeats the latest exact context after every current regime is complete", () => {
+    const scenarios = listScenarios();
+    const runs = listBuiltInDrills().map((definition, index) => {
+      const scenario = scenarios.find(
+        (candidate) => candidate.meta.id === definition.scenarioId,
+      )!;
+      return completedRun(
+        {
+          id: `complete-${index}`,
+          completedAt: new Date(
+            Date.UTC(2026, 6, 13 + index),
+          ).toISOString(),
+          scenarioId: scenario.meta.id,
+          scenarioTitle: scenario.meta.title,
+          brokerMode:
+            index === listBuiltInDrills().length - 1 ? "ideal" : "scenario",
+        },
+        {
+          scenarioId: scenario.meta.id,
+          scenarioTitle: scenario.meta.title,
+          practiceAssessment: drillAssessment({}, definition),
+        },
+      );
+    });
+    const latestDefinition = listBuiltInDrills().at(-1)!;
+    const latestScenario = scenarios.find(
+      (scenario) => scenario.meta.id === latestDefinition.scenarioId,
+    )!;
+
+    const plan = buildPracticeCoachPlan(runs, scenarios);
+
+    expect(plan).toMatchObject({
+      title: "Repeat the same context for a comparable trend",
+      scenarioId: latestScenario.meta.id,
+      scenarioDataVersion: latestScenario.meta.dataVersion,
+      drillId: latestDefinition.id,
+      mode: latestDefinition.mode,
+      brokerMode: "ideal",
+      focusLabel: "Comparable process trend",
+      sourceRunId: `complete-${runs.length - 1}`,
+    });
+    expect(plan?.objective).toMatch(/exact scenario data, drill, mode, and broker/i);
+  });
+
+  it("creates a new baseline instead of claiming comparability after data drift", () => {
+    const scenarios = listScenarios();
+    const currentScenario = scenarios.find(
+      (scenario) => scenario.meta.id === eventDisciplineEurGbpV1.scenarioId,
+    )!;
+    const run = completedRun(
+      { brokerMode: "ideal" },
+      {
+        practiceAssessment: drillAssessment(),
+        provenance: {
+          license: currentScenario.meta.license,
+          dataSources: [...currentScenario.meta.dataSources],
+          dataVersion: "unreviewed-prior-data-version",
+          isSampleData: currentScenario.meta.isSampleData ?? true,
+        },
+      },
+    );
+
+    const plan = buildPracticeCoachPlan([run], scenarios);
+
+    expect(plan).toMatchObject({
+      title: "Re-establish Event Discipline on current data",
+      scenarioId: currentScenario.meta.id,
+      scenarioDataVersion: currentScenario.meta.dataVersion,
+      brokerMode: "scenario",
+      focusLabel: "Current-data process baseline",
+    });
+    expect(plan?.rationale).toMatch(/fresh baseline/i);
+    expect(plan?.title).not.toMatch(/comparable trend/i);
+    expect(plan?.availabilityNote).toMatch(/new comparison baseline/i);
+    expect(plan?.target?.current).toBe("No current comparable score");
+    expect(plan?.evidence).toMatch(/not shown as a current measured score/i);
+    expect(plan?.evidence).not.toMatch(/100%/);
+  });
+
+  it("does not present a self-consistent partial schedule as a measured coach score", () => {
+    const scenarios = listScenarios();
+    const scenario = scenarios.find(
+      (candidate) => candidate.meta.id === eventDisciplineEurGbpV1.scenarioId,
+    )!;
+    const partialSchedule = buildDrillCheckpointSchedule(
+      eventDisciplineEurGbpV1,
+      scenario,
+    ).slice(0, 1);
+    const partialEventCount = new Set(
+      partialSchedule.flatMap((checkpoint) => checkpoint.eventIds),
+    ).size;
+    const run = completedRun(
+      { brokerMode: "ideal" },
+      {
+        practiceAssessment: drillAssessment({
+          checkpointScheduleFingerprint:
+            drillCheckpointScheduleFingerprint(partialSchedule),
+          eligibleCheckpointCount: partialSchedule.length,
+          answeredCheckpointCount: partialSchedule.length,
+          eligibleEventCount: partialEventCount,
+          linkedEventCount: partialEventCount,
+        }),
+      },
+    );
+
+    const plan = buildPracticeCoachPlan([run], scenarios);
+
+    expect(plan).toMatchObject({
+      title: "Re-establish Event Discipline on current data",
+      focusLabel: "Current-data process baseline",
+      target: { current: "No current comparable score" },
+    });
+    expect(plan?.evidence).toMatch(/not shown as a current measured score/i);
+    expect(plan?.evidence).not.toMatch(/100%/);
+  });
+
+  it("does not treat a legacy weight-only rubric as an exact coach context", () => {
+    const scenarios = listScenarios();
+    const currentScenario = scenarios.find(
+      (scenario) => scenario.meta.id === eventDisciplineEurGbpV1.scenarioId,
+    )!;
+    const run = completedRun(
+      { brokerMode: "ideal" },
+      {
+        practiceAssessment: drillAssessment({
+          rubricFingerprint: undefined,
+          overallScore: 85,
+          components: drillAssessment().components.map((component) =>
+            component.id === "plan_coverage"
+              ? { ...component, score: 50 }
+              : component,
+          ),
+        }),
+      },
+    );
+
+    const plan = buildPracticeCoachPlan([run], scenarios);
+
+    expect(plan).toMatchObject({
+      title: "Re-establish Event Discipline on current data",
+      scenarioId: currentScenario.meta.id,
+      scenarioDataVersion: currentScenario.meta.dataVersion,
+      brokerMode: "scenario",
+      focusLabel: "Current-data process baseline",
+    });
+    expect(plan?.availabilityNote).toMatch(/new comparison baseline/i);
   });
 
   it("falls back safely when the source scenario was removed", () => {

@@ -882,4 +882,54 @@ describe("broker simulator", () => {
       expect(result.fill.slippage).toBeGreaterThan(0.095);
     }
   });
+
+  it("keeps trigger-price policy after a triggered order waits for liquidity", () => {
+    const result = executePendingOrderFill({
+      order: {
+        id: "deferred-stop",
+        createdAt: TIME,
+        triggeredAt: "2024-01-03T00:00:00.000Z",
+        symbol: "TEST",
+        side: "sell",
+        type: "stop_loss",
+        quantity: 1,
+        remainingQuantity: 1,
+        triggerPrice: 95,
+        status: "pending",
+      },
+      broker: makeBroker({
+        commissionRateBps: 0,
+        spreadBps: 0,
+        slippageModel: "none",
+        stopFillPolicy: "trigger_price",
+      }),
+      cash: 0,
+      position: {
+        symbol: "TEST",
+        quantity: 1,
+        averagePrice: 100,
+        marketPrice: 120,
+        marketValue: 120,
+        unrealizedPnl: 20,
+        realizedPnl: 0,
+      },
+      currentTime: "2024-01-04T00:00:00.000Z",
+      candle: {
+        symbol: "TEST",
+        openTime: "2024-01-03T00:00:00.000Z",
+        closeTime: "2024-01-04T00:00:00.000Z",
+        open: 120,
+        high: 121,
+        low: 119,
+        close: 120,
+        volume: 1000,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.fill.price).toBe(95);
+      expect(result.fill.executionPriceSource).toBe("stop_trigger");
+    }
+  });
 });

@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { validateScenarioPackage } from "../../domain/validation/scenario";
-import { buildScenarioRegistry, listScenarios } from "./index";
+import { buildScenarioRegistry, getScenario, listScenarios } from "./index";
 import { btc20202021Scenario } from "./btc-2020-2021";
 import { eurGbpBrexit2016Scenario } from "./eurgbp-brexit-2016";
 import { eurUsdCovidLiquidity2020Scenario } from "./eurusd-covid-liquidity-2020";
 import { kreBankingCrisis2023Scenario } from "./kre-banking-crisis-2023";
 import { qqqRateHike2022Scenario } from "./qqq-rate-hike-2022";
 import { sp500Covid2020Scenario } from "./sp500-covid-2020";
+import {
+  EURGBP_BREXIT_2016_DATA_VERSION,
+  EURUSD_COVID_LIQUIDITY_2020_DATA_VERSION,
+  scenarioReplayContractDataVersion,
+} from "./dataVersions";
 
 describe("scenario registry", () => {
   it("ships at least one scenario", () => {
@@ -26,10 +31,57 @@ describe("scenario registry", () => {
     }
   });
 
+  it("pins every bundled scenario to a non-empty data version", () => {
+    for (const pkg of [
+      btc20202021Scenario,
+      eurGbpBrexit2016Scenario,
+      eurUsdCovidLiquidity2020Scenario,
+      kreBankingCrisis2023Scenario,
+      qqqRateHike2022Scenario,
+      sp500Covid2020Scenario,
+    ]) {
+      expect(
+        pkg.meta.dataVersion?.trim(),
+        `${pkg.meta.id} dataVersion`,
+      ).toBeTruthy();
+    }
+  });
+
   it("rejects duplicate scenario ids instead of silently overwriting them", () => {
     expect(() =>
       buildScenarioRegistry([btc20202021Scenario, btc20202021Scenario]),
     ).toThrow("Duplicate scenario id: btc-2020-2021");
+  });
+
+  it("keeps bundled replay-contract content recursively immutable", () => {
+    const scenario = getScenario("eurgbp-brexit-2016")!;
+    const originalClose = scenario.candles[0].close;
+
+    expect(Object.isFrozen(scenario)).toBe(true);
+    expect(Object.isFrozen(scenario.meta)).toBe(true);
+    expect(Object.isFrozen(scenario.candles)).toBe(true);
+    expect(Object.isFrozen(scenario.candles[0])).toBe(true);
+    expect(Object.isFrozen(scenario.broker)).toBe(true);
+    expect(() => {
+      scenario.candles[0].close = originalClose + 1;
+    }).toThrow(TypeError);
+    expect(scenario.candles[0].close).toBe(originalClose);
+    expect(scenarioReplayContractDataVersion(scenario)).toBe(
+      scenario.meta.dataVersion,
+    );
+  });
+});
+
+describe("btc-2020-2021 scenario", () => {
+  it("reveals the March 15 emergency Fed decision at the official 21:00Z publication time", () => {
+    expect(
+      btc20202021Scenario.events.find(
+        (event) => event.id === "evt-2020-03-15-fed",
+      ),
+    ).toMatchObject({
+      happenedAt: "2020-03-15T21:00:00.000Z",
+      publishedAt: "2020-03-15T21:00:00.000Z",
+    });
   });
 });
 
@@ -42,6 +94,9 @@ describe("eurgbp-brexit-2016 scenario", () => {
       dataFidelity: "mixed",
     });
     expect(eurGbpBrexit2016Scenario.candles).toHaveLength(152);
+    expect(eurGbpBrexit2016Scenario.meta.dataVersion).toBe(
+      EURGBP_BREXIT_2016_DATA_VERSION,
+    );
     expect(
       eurGbpBrexit2016Scenario.candles.every(
         (candle) =>
@@ -65,6 +120,12 @@ describe("eurgbp-brexit-2016 scenario", () => {
     expect(eurGbpBrexit2016Scenario.meta.observedFields?.[0]).toContain(
       "ECB reference rate",
     );
+    expect(eurGbpBrexit2016Scenario.meta.derivedFields).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("00:00Z-15:00Z"),
+        expect.stringContaining("15:00Z replay close"),
+      ]),
+    );
   });
 });
 
@@ -86,6 +147,9 @@ describe("eurusd-covid-liquidity-2020 scenario", () => {
       dataFidelity: "mixed",
     });
     expect(eurUsdCovidLiquidity2020Scenario.candles).toHaveLength(104);
+    expect(eurUsdCovidLiquidity2020Scenario.meta.dataVersion).toBe(
+      EURUSD_COVID_LIQUIDITY_2020_DATA_VERSION,
+    );
     expect(eurUsdCovidLiquidity2020Scenario.candles[0]).toMatchObject({
       symbol: "EURUSD",
       closeTime: "2020-02-03T15:00:00.000Z",
@@ -104,14 +168,22 @@ describe("eurusd-covid-liquidity-2020 scenario", () => {
           candle.volume === 0,
       ),
     ).toBe(true);
+    expect(eurUsdCovidLiquidity2020Scenario.meta.derivedFields).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("00:00Z-15:00Z"),
+        expect.stringContaining("15:00Z replay close"),
+      ]),
+    );
   });
 
   it("uses the same observed reference series as its benchmark", () => {
     expect(eurUsdCovidLiquidity2020Scenario.benchmarks).toHaveLength(
       eurUsdCovidLiquidity2020Scenario.candles.length,
     );
-    for (const [index, point] of
-      eurUsdCovidLiquidity2020Scenario.benchmarks.entries()) {
+    for (const [
+      index,
+      point,
+    ] of eurUsdCovidLiquidity2020Scenario.benchmarks.entries()) {
       const candle = eurUsdCovidLiquidity2020Scenario.candles[index];
       expect(point).toMatchObject({
         symbol: candle.symbol,
@@ -128,11 +200,7 @@ describe("eurusd-covid-liquidity-2020 scenario", () => {
       ),
     );
     expect(sourceHosts).toEqual(
-      new Set([
-        "www.ecb.europa.eu",
-        "www.federalreserve.gov",
-        "www.who.int",
-      ]),
+      new Set(["www.ecb.europa.eu", "www.federalreserve.gov", "www.who.int"]),
     );
     expect(
       eurUsdCovidLiquidity2020Scenario.events.every(
@@ -163,9 +231,9 @@ describe("btc-2020-2021 scenario", () => {
     const candles = btc20202021Scenario.candles;
     expect(candles.length).toBeGreaterThan(700);
     expect(candles[0].symbol).toBe("BTCUSD");
-    expect(
-      Date.parse(candles[candles.length - 1].closeTime),
-    ).toBeGreaterThan(Date.parse(candles[0].closeTime));
+    expect(Date.parse(candles[candles.length - 1].closeTime)).toBeGreaterThan(
+      Date.parse(candles[0].closeTime),
+    );
   });
 
   it("ships every event with both happenedAt and publishedAt", () => {
@@ -183,7 +251,9 @@ describe("btc-2020-2021 scenario", () => {
 
   it("ships every event with a traceable source URL", () => {
     expect(btc20202021Scenario.events.length).toBeGreaterThan(10);
-    expect(btc20202021Scenario.events.every((event) => event.source)).toBe(true);
+    expect(btc20202021Scenario.events.every((event) => event.source)).toBe(
+      true,
+    );
     expect(btc20202021Scenario.events.every((event) => event.sourceUrl)).toBe(
       true,
     );
@@ -222,9 +292,9 @@ describe("sp500-covid-2020 scenario", () => {
     expect(Date.parse(candles[0].closeTime)).toBeLessThan(
       Date.parse("2020-01-03T00:00:00.000Z"),
     );
-    expect(
-      Date.parse(candles[candles.length - 1].closeTime),
-    ).toBeGreaterThan(Date.parse("2020-12-30T00:00:00.000Z"));
+    expect(Date.parse(candles[candles.length - 1].closeTime)).toBeGreaterThan(
+      Date.parse("2020-12-30T00:00:00.000Z"),
+    );
   });
 
   it("does not create candles on U.S. market holidays", () => {
@@ -266,7 +336,8 @@ describe("sp500-covid-2020 scenario", () => {
       .slice(0, 11)
       .slice(1)
       .map((candle, index) => candle.close / candles[index].close - 1);
-    const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
+    const mean =
+      returns.reduce((sum, value) => sum + value, 0) / returns.length;
     const variance =
       returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) /
       (returns.length - 1);
@@ -296,7 +367,6 @@ describe("sp500-covid-2020 scenario", () => {
       expect(candleTimes.has(point.time)).toBe(true);
     }
   });
-
 });
 
 describe("qqq-rate-hike-2022 scenario", () => {
@@ -315,9 +385,9 @@ describe("qqq-rate-hike-2022 scenario", () => {
     expect(Date.parse(candles[0].closeTime)).toBeLessThan(
       Date.parse("2022-01-04T00:00:00.000Z"),
     );
-    expect(
-      Date.parse(candles[candles.length - 1].closeTime),
-    ).toBeGreaterThan(Date.parse("2022-12-29T00:00:00.000Z"));
+    expect(Date.parse(candles[candles.length - 1].closeTime)).toBeGreaterThan(
+      Date.parse("2022-12-29T00:00:00.000Z"),
+    );
   });
 
   it("includes official-source inflation and central-bank events", () => {
@@ -363,9 +433,9 @@ describe("kre-banking-crisis-2023 scenario", () => {
     expect(Date.parse(candles[0].closeTime)).toBeLessThan(
       Date.parse("2023-03-02T00:00:00.000Z"),
     );
-    expect(
-      Date.parse(candles[candles.length - 1].closeTime),
-    ).toBeGreaterThan(Date.parse("2023-06-29T00:00:00.000Z"));
+    expect(Date.parse(candles[candles.length - 1].closeTime)).toBeGreaterThan(
+      Date.parse("2023-06-29T00:00:00.000Z"),
+    );
   });
 
   it("includes official-source bank failure and policy response events", () => {

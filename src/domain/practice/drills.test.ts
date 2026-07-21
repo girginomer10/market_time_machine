@@ -21,9 +21,15 @@ import type {
   DrillRuleViolation,
 } from "../../types";
 import {
+  assessmentHasConsistentRubricFingerprint,
+  assessmentMatchesRubricFingerprint,
   assessDrill,
   buildDrillCheckpointSchedule,
+  completedAssessmentMatchesAggregateEvidence,
+  drillRubricFingerprint,
+  effectiveAssessmentRubricFingerprint,
   nextDrillCheckpoint,
+  parseDrillRubricFingerprint,
   validateDrillCheckpointResponse,
   validateDrillDefinition,
 } from "./drills";
@@ -39,6 +45,7 @@ function responseFor(
     checkpointId: checkpoint.id,
     replayTime: checkpoint.replayTime,
     eventIds: [...checkpoint.eventIds],
+    linkedEventIds: [...checkpoint.eventIds],
     status: "answered",
     action: "hold",
     reflection: "The visible event changes the risk balance, but not the plan yet.",
@@ -88,6 +95,46 @@ function testDefinition(scenarioId = "test"): DrillDefinition {
 }
 
 describe("built-in practice drill catalog", () => {
+  it("fingerprints complete rubric content deterministically", () => {
+    const definition = testDefinition();
+    const sameRubricDifferentKeyOrder = {
+      violationPenalty: definition.rubric.violationPenalty,
+      weights: {
+        rule_adherence: 0.2,
+        event_linkage: 0.2,
+        checkpoint_coverage: 0.3,
+        plan_coverage: 0.3,
+      },
+    } satisfies DrillDefinition["rubric"];
+    const changedPenalty = {
+      ...definition.rubric,
+      violationPenalty: 10,
+    };
+
+    const fingerprint = drillRubricFingerprint(definition.rubric);
+    expect(drillRubricFingerprint(sameRubricDifferentKeyOrder)).toBe(fingerprint);
+    expect(parseDrillRubricFingerprint(fingerprint)).toEqual(
+      definition.rubric,
+    );
+    expect(
+      parseDrillRubricFingerprint(
+        `${fingerprint.slice(0, -1)},"unexpected":true}`,
+      ),
+    ).toBeUndefined();
+    expect(drillRubricFingerprint(changedPenalty)).not.toBe(fingerprint);
+    expect(
+      drillRubricFingerprint({
+        ...definition.rubric,
+        weights: {
+          plan_coverage: 0.4,
+          checkpoint_coverage: 0.2,
+          event_linkage: 0.2,
+          rule_adherence: 0.2,
+        },
+      }),
+    ).not.toBe(fingerprint);
+  });
+
   it("exposes a valid versioned EUR/GBP Event Discipline definition", () => {
     expect(getBuiltInDrill(EVENT_DISCIPLINE_EURGBP_V1_ID)).toBe(
       eventDisciplineEurGbpV1,
@@ -218,6 +265,27 @@ describe("drill checkpoint schedule", () => {
 });
 
 describe("drill validation", () => {
+  it("rejects drills that cannot produce assessed initial-plan evidence", () => {
+    const scenario = makeScenario();
+    const definition = {
+      ...testDefinition(),
+      initialPlanRule: {
+        requiredBeforeFirstOrder: true,
+        requiredFields: [],
+      },
+    } satisfies DrillDefinition;
+
+    const result = validateDrillDefinition(definition, scenario);
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "definition.plan_fields_empty",
+        path: "initialPlanRule.requiredFields",
+      }),
+    );
+  });
+
   it("reports definition mismatches, invalid weights, and unmappable events", () => {
     const scenario = makeScenario();
     const invalid = {
@@ -290,6 +358,46 @@ describe("drill validation", () => {
       "response.reflection_too_long",
     );
   });
+
+  it("accepts an explicit subset or no links and rejects forged links", () => {
+    const checkpoint = buildDrillCheckpointSchedule(
+      eventDisciplineEurGbpV1,
+      eurGbpBrexit2016Scenario,
+    ).find((candidate) => candidate.eventIds.length > 1)!;
+
+    for (const linkedEventIds of [[], [checkpoint.eventIds[0]]]) {
+      expect(
+        validateDrillCheckpointResponse(
+          eventDisciplineEurGbpV1,
+          checkpoint,
+          responseFor(checkpoint, { linkedEventIds }),
+          checkpoint.eventIds,
+        ),
+      ).toEqual({ valid: true, issues: [] });
+    }
+
+    const duplicate = validateDrillCheckpointResponse(
+      eventDisciplineEurGbpV1,
+      checkpoint,
+      responseFor(checkpoint, {
+        linkedEventIds: [checkpoint.eventIds[0], checkpoint.eventIds[0]],
+      }),
+      checkpoint.eventIds,
+    );
+    expect(duplicate.issues.map((issue) => issue.code)).toContain(
+      "response.linked_events_invalid",
+    );
+
+    const outside = validateDrillCheckpointResponse(
+      eventDisciplineEurGbpV1,
+      checkpoint,
+      responseFor(checkpoint, { linkedEventIds: ["future-event"] }),
+      [...checkpoint.eventIds, "future-event"],
+    );
+    expect(outside.issues.map((issue) => issue.code)).toContain(
+      "response.linked_event_not_visible",
+    );
+  });
 });
 
 describe("process-only drill assessment", () => {
@@ -325,7 +433,52 @@ describe("process-only drill assessment", () => {
       eligibleEventCount: 6,
       linkedEventCount: 6,
       violationCount: 0,
+      rubricFingerprint: drillRubricFingerprint(
+        eventDisciplineEurGbpV1.rubric,
+      ),
+      eventLinkageEvidenceVersion: 1,
     });
+    expect(
+      assessmentMatchesRubricFingerprint(
+        assessment,
+        drillRubricFingerprint(eventDisciplineEurGbpV1.rubric),
+      ),
+    ).toBe(true);
+    expect(effectiveAssessmentRubricFingerprint(assessment)).toBe(
+      assessment.rubricFingerprint,
+    );
+    const forgedAssessment = {
+      ...assessment,
+      components: assessment.components.map((component) =>
+        component.id === "plan_coverage"
+          ? { ...component, weight: component.weight + 0.1 }
+          : component.id === "checkpoint_coverage"
+            ? { ...component, weight: component.weight - 0.1 }
+            : component,
+      ),
+    };
+    expect(assessmentHasConsistentRubricFingerprint(forgedAssessment)).toBe(
+      false,
+    );
+    expect(
+      assessmentMatchesRubricFingerprint(
+        forgedAssessment,
+        drillRubricFingerprint(eventDisciplineEurGbpV1.rubric),
+      ),
+    ).toBe(false);
+    const legacyWithoutFingerprint = {
+      ...assessment,
+      rubricFingerprint: undefined,
+    };
+    expect(
+      assessmentMatchesRubricFingerprint(
+        legacyWithoutFingerprint,
+        drillRubricFingerprint(eventDisciplineEurGbpV1.rubric),
+      ),
+    ).toBe(false);
+    expect(effectiveAssessmentRubricFingerprint(legacyWithoutFingerprint)).toMatch(
+      /^legacy-drill-rubric-v1:/,
+    );
     expect(assessment.components.map(({ id, score }) => [id, score])).toEqual([
       ["plan_coverage", 100],
       ["checkpoint_coverage", 100],
@@ -333,6 +486,52 @@ describe("process-only drill assessment", () => {
       ["rule_adherence", 100],
     ]);
     expect(assessment.methodology).toContain("Process-only score");
+    expect(completedAssessmentMatchesAggregateEvidence(assessment)).toBe(true);
+  });
+
+  it("rejects completed aggregate scores that contradict their recorded counts", () => {
+    const assessment = assessDrill({
+      definition: eventDisciplineEurGbpV1,
+      checkpoints: schedule,
+      initialPlan: completePlan,
+      responses: schedule.map((checkpoint) => responseFor(checkpoint)),
+      violations: [],
+      positionOpened: true,
+      replayCompleted: true,
+    });
+    const eventComponent = assessment.components.find(
+      (component) => component.id === "event_linkage",
+    )!;
+
+    expect(
+      completedAssessmentMatchesAggregateEvidence({
+        ...assessment,
+        linkedEventCount: 0,
+      }),
+    ).toBe(false);
+    expect(
+      completedAssessmentMatchesAggregateEvidence({
+        ...assessment,
+        components: assessment.components.map((component) =>
+          component.id === "event_linkage"
+            ? { ...component, score: 0 }
+            : component,
+        ),
+      }),
+    ).toBe(false);
+    expect(
+      completedAssessmentMatchesAggregateEvidence({
+        ...assessment,
+        violationCount: 1,
+      }),
+    ).toBe(false);
+    expect(
+      completedAssessmentMatchesAggregateEvidence({
+        ...assessment,
+        linkedEventCount: Number.NaN,
+      }),
+    ).toBe(false);
+    expect(eventComponent.score).toBe(100);
   });
 
   it("leaves absent evidence unscored instead of converting it to zero", () => {
@@ -395,6 +594,54 @@ describe("process-only drill assessment", () => {
     expect(
       assessment.components.find((entry) => entry.id === "rule_adherence"),
     ).toMatchObject({ status: "assessed", score: 80 });
+  });
+
+  it("scores only explicitly selected events and leaves legacy membership unassessed", () => {
+    const partialResponses = schedule.map((checkpoint, index) =>
+      responseFor(checkpoint, {
+        linkedEventIds: index === 0 ? [checkpoint.eventIds[0]] : [],
+      }),
+    );
+    const partial = assessDrill({
+      definition: eventDisciplineEurGbpV1,
+      checkpoints: schedule,
+      initialPlan: completePlan,
+      responses: partialResponses,
+      violations: [],
+      positionOpened: true,
+      replayCompleted: true,
+    });
+
+    expect(partial).toMatchObject({
+      status: "completed",
+      eventLinkageEvidenceVersion: 1,
+      linkedEventCount: 1,
+    });
+    expect(
+      partial.components.find((entry) => entry.id === "event_linkage"),
+    ).toMatchObject({ status: "assessed", score: 16.7 });
+    expect(completedAssessmentMatchesAggregateEvidence(partial)).toBe(true);
+
+    const legacy = assessDrill({
+      definition: eventDisciplineEurGbpV1,
+      checkpoints: schedule,
+      initialPlan: completePlan,
+      responses: schedule.map((checkpoint) =>
+        responseFor(checkpoint, { linkedEventIds: undefined }),
+      ),
+      violations: [],
+      positionOpened: true,
+      replayCompleted: true,
+    });
+    expect(legacy.status).toBe("incomplete");
+    expect(legacy.eventLinkageEvidenceVersion).toBeUndefined();
+    expect(legacy.linkedEventCount).toBe(0);
+    expect(
+      legacy.components.find((entry) => entry.id === "event_linkage"),
+    ).toMatchObject({ status: "insufficient_evidence" });
+    expect(
+      legacy.components.find((entry) => entry.id === "event_linkage")?.score,
+    ).toBeUndefined();
   });
 
   it("keeps a no-trade replay incomplete when the learner stayed flat", () => {

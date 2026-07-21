@@ -1,5 +1,18 @@
 import type { PracticeLedgerEntry } from "../history/practiceLedger";
-import { validateDrillDefinition } from "./drills";
+import {
+  brokerConfigFingerprint,
+  getBrokerPreset,
+  isBrokerConfigFingerprint,
+} from "../broker/executionModels";
+import {
+  assessmentMatchesCheckpointScheduleFingerprint,
+  assessmentMatchesRubricFingerprint,
+  buildDrillCheckpointSchedule,
+  completedAssessmentMatchesAggregateEvidence,
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+  validateDrillDefinition,
+} from "./drills";
 import type {
   DataFidelity,
   DrillAssessmentComponentId,
@@ -7,12 +20,19 @@ import type {
   ScenarioMode,
   ScenarioPackage,
 } from "../../types";
+import { scenarioDataVersionsEqual } from "../../data/scenarios/dataVersions";
 
 const ASSESSMENT_COMPONENT_IDS = new Set<DrillAssessmentComponentId>([
   "plan_coverage",
   "checkpoint_coverage",
   "event_linkage",
   "rule_adherence",
+]);
+const BROKER_MODES = new Set<PracticeLedgerEntry["brokerMode"]>([
+  "scenario",
+  "ideal",
+  "realistic",
+  "harsh",
 ]);
 
 export type PracticeTrackStatus = "open" | "preview";
@@ -56,7 +76,15 @@ export type PracticeTrackUnit = {
     id: string;
     definitionVersion: number;
     rubricVersion: string;
+    rubricFingerprint: string;
+    checkpointScheduleFingerprint: string;
     mode: ScenarioMode;
+  };
+  broker: {
+    /** Execution model used by the qualifying attempt. */
+    mode: PracticeLedgerEntry["brokerMode"];
+    /** Full canonical identity of every execution-setting field. */
+    fingerprint: string;
   };
   evidenceScope: PracticeTrackEvidenceScope;
   completionCriteria: PracticeTrackCompletionCriteria;
@@ -103,8 +131,8 @@ export type PracticeTrackProgress = {
   units: PracticeTrackUnitProgress[];
 };
 
-function nonEmpty(value: string): boolean {
-  return value.trim().length > 0;
+function nonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function boundedScore(value: number): boolean {
@@ -119,6 +147,60 @@ function versionIsValid(value: number): boolean {
   return Number.isInteger(value) && value >= 1;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function unitBrokerIdentity(unit: PracticeTrackUnit):
+  | {
+      mode: PracticeLedgerEntry["brokerMode"];
+      fingerprint: string;
+    }
+  | undefined {
+  const value: unknown = unit.broker;
+  if (
+    !isRecord(value) ||
+    !BROKER_MODES.has(value.mode as PracticeLedgerEntry["brokerMode"]) ||
+    !isBrokerConfigFingerprint(value.fingerprint)
+  ) {
+    return undefined;
+  }
+  return {
+    mode: value.mode as PracticeLedgerEntry["brokerMode"],
+    fingerprint: value.fingerprint,
+  };
+}
+
+function expectedBrokerFingerprint(
+  scenario: ScenarioPackage,
+  mode: PracticeLedgerEntry["brokerMode"],
+): string {
+  const broker =
+    mode === "scenario"
+      ? scenario.broker
+      : {
+          ...getBrokerPreset(mode),
+          baseCurrency: scenario.meta.baseCurrency,
+        };
+  return brokerConfigFingerprint(broker);
+}
+
+function hasCompletionGradeEvidence(unit: PracticeTrackUnit): boolean {
+  return (
+    unit.status === "validated" &&
+    nonEmpty(unit.scenario.dataVersion) &&
+    (unit.scenario.dataFidelity === "observed" ||
+      unit.scenario.dataFidelity === "mixed") &&
+    unit.scenario.sampleData === false &&
+    unit.evidenceScope.marketEvidence === "source_observed" &&
+    unit.evidenceScope.sourceReviewed === true &&
+    unit.evidenceScope.dataFidelity === unit.scenario.dataFidelity &&
+    unit.evidenceScope.sampleData === false &&
+    nonEmpty(unit.evidenceScope.limitations) &&
+    unitBrokerIdentity(unit) !== undefined
+  );
+}
+
 function unitReference(unit: PracticeTrackUnit): string {
   return [
     unit.scenario.id,
@@ -126,7 +208,11 @@ function unitReference(unit: PracticeTrackUnit): string {
     unit.drill.id,
     unit.drill.definitionVersion,
     unit.drill.rubricVersion,
+    unit.drill.rubricFingerprint,
+    unit.drill.checkpointScheduleFingerprint,
     unit.drill.mode,
+    unit.broker?.mode ?? "<missing-broker-mode>",
+    unit.broker?.fingerprint ?? "<missing-broker-fingerprint>",
   ].join("|");
 }
 
@@ -242,6 +328,13 @@ export function validatePracticeTrackCatalog(
           `${unitPath}.status`,
         );
       }
+      if (unit.status === "validated" && !hasCompletionGradeEvidence(unit)) {
+        add(
+          "unit.completion_evidence_invalid",
+          "Validated units require non-sample, source-observed, source-reviewed completion-grade evidence.",
+          `${unitPath}.evidenceScope`,
+        );
+      }
       if (!versionIsValid(unit.version)) {
         add(
           "unit.version_invalid",
@@ -274,7 +367,7 @@ export function validatePracticeTrackCatalog(
       if (references.has(reference)) {
         add(
           "unit.reference_duplicate",
-          "A track cannot repeat the same versioned scenario and drill reference.",
+          "A track cannot repeat the same versioned scenario, drill, and broker reference.",
           unitPath,
         );
       }
@@ -282,6 +375,14 @@ export function validatePracticeTrackCatalog(
 
       const scenario = scenarioById.get(unit.scenario.id);
       const drill = drillById.get(unit.drill.id);
+      const brokerIdentity = unitBrokerIdentity(unit);
+      if (!brokerIdentity) {
+        add(
+          "unit.broker_identity_invalid",
+          "Every unit requires a supported broker mode and a full canonical broker configuration fingerprint.",
+          `${unitPath}.broker`,
+        );
+      }
       if (!scenario) {
         add(
           "unit.scenario_unknown",
@@ -297,6 +398,29 @@ export function validatePracticeTrackCatalog(
         );
       }
       if (!scenario || !drill) continue;
+
+      if (
+        brokerIdentity &&
+        brokerIdentity.fingerprint !==
+          expectedBrokerFingerprint(scenario, brokerIdentity.mode)
+      ) {
+        add(
+          "unit.broker_reference_mismatch",
+          "Unit broker identity must exactly match the declared scenario or preset execution settings.",
+          `${unitPath}.broker`,
+        );
+      }
+      if (
+        brokerIdentity &&
+        unit.drill.mode !== "explorer" &&
+        brokerIdentity.mode !== "scenario"
+      ) {
+        add(
+          "unit.broker_mode_unsupported",
+          "Professional, blind, and challenge drills require scenario broker settings.",
+          `${unitPath}.broker.mode`,
+        );
+      }
 
       const actualVersion = scenario.meta.dataVersion ?? null;
       if (
@@ -386,6 +510,9 @@ export function validatePracticeTrackCatalog(
         drill.scenarioId !== unit.scenario.id ||
         drill.definitionVersion !== unit.drill.definitionVersion ||
         drill.rubricVersion !== unit.drill.rubricVersion ||
+        !nonEmpty(unit.drill.rubricFingerprint) ||
+        drillRubricFingerprint(drill.rubric) !==
+          unit.drill.rubricFingerprint ||
         drill.mode !== unit.drill.mode
       ) {
         add(
@@ -412,6 +539,21 @@ export function validatePracticeTrackCatalog(
         );
       }
       const officialEvents = eligibleOfficialEvents(scenario, drill);
+      const expectedCheckpointScheduleFingerprint =
+        drillCheckpointScheduleFingerprint(
+          buildDrillCheckpointSchedule(drill, scenario),
+        );
+      if (
+        !nonEmpty(unit.drill.checkpointScheduleFingerprint) ||
+        unit.drill.checkpointScheduleFingerprint !==
+          expectedCheckpointScheduleFingerprint
+      ) {
+        add(
+          "unit.checkpoint_schedule_mismatch",
+          "Unit checkpoint identity must exactly match the current scenario and drill schedule.",
+          `${unitPath}.drill.checkpointScheduleFingerprint`,
+        );
+      }
       if (
         unit.evidenceScope.eventEvidence === "official_sources" &&
         (officialEvents.length === 0 ||
@@ -506,15 +648,22 @@ export function ledgerAttemptCompletesTrackUnit(
   unit: PracticeTrackUnit,
   attempt: PracticeLedgerEntry,
 ): boolean {
-  if (unit.status !== "validated" || unit.scenario.dataVersion === null) {
+  const brokerIdentity = unitBrokerIdentity(unit);
+  if (!hasCompletionGradeEvidence(unit) || !brokerIdentity) {
     return false;
   }
   if (
     attempt.scenarioId !== unit.scenario.id ||
-    attempt.scenarioDataVersion !== unit.scenario.dataVersion ||
+    !scenarioDataVersionsEqual(
+      attempt.scenarioId,
+      attempt.scenarioDataVersion,
+      unit.scenario.dataVersion,
+    ) ||
     attempt.scenarioDataFidelity !== unit.scenario.dataFidelity ||
     attempt.sampleData !== unit.scenario.sampleData ||
-    attempt.mode !== unit.drill.mode
+    attempt.mode !== unit.drill.mode ||
+    attempt.brokerMode !== brokerIdentity.mode ||
+    attempt.brokerFingerprint !== brokerIdentity.fingerprint
   ) {
     return false;
   }
@@ -523,9 +672,18 @@ export function ledgerAttemptCompletesTrackUnit(
   if (
     !assessment ||
     attempt.facts.executionCount <= 0 ||
+    assessment.eventLinkageEvidenceVersion !== 1 ||
     assessment.drillId !== unit.drill.id ||
     assessment.definitionVersion !== unit.drill.definitionVersion ||
     assessment.rubricVersion !== unit.drill.rubricVersion ||
+    !assessmentMatchesRubricFingerprint(
+      assessment,
+      unit.drill.rubricFingerprint,
+    ) ||
+    assessment.checkpointScheduleFingerprint !==
+      unit.drill.checkpointScheduleFingerprint ||
+    !assessmentMatchesCheckpointScheduleFingerprint(assessment) ||
+    !completedAssessmentMatchesAggregateEvidence(assessment) ||
     assessment.status !== criteria.assessmentStatus ||
     assessment.overallScore === undefined ||
     !Number.isFinite(assessment.overallScore) ||

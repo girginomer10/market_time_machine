@@ -7,6 +7,7 @@ import type {
 } from "../../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
 import { assembleScenario } from "../../../domain/scenario/loader";
+import { BTC_2020_2021_DATA_VERSION } from "../dataVersions";
 
 const SYMBOL = "BTCUSD";
 
@@ -30,6 +31,7 @@ const meta: ScenarioMeta = {
   dataSources: [
     "Synthetic deterministic sample data shaped to the publicly known BTC 2020-2021 macro path.",
   ],
+  dataVersion: BTC_2020_2021_DATA_VERSION,
   isSampleData: true,
   description:
     "Sample/demo dataset for the open source Financial History Lab vertical slice. Prices are deterministic samples that follow the public macro shape of BTC during 2020-2021. Not for trading decisions.",
@@ -42,7 +44,7 @@ const meta: ScenarioMeta = {
     "Use journaled invalidation rules before changing a position.",
   ],
   dataFidelity: "synthetic",
-  observedFields: ["Officially sourced event publication dates and summaries"],
+  observedFields: ["Sourced event publication dates and summaries"],
   derivedFields: ["All OHLCV prices and benchmark values are deterministic samples"],
 };
 
@@ -180,8 +182,8 @@ const events: MarketEvent[] = [
   },
   {
     id: "evt-2020-03-15-fed",
-    happenedAt: "2020-03-15T22:00:00.000Z",
-    publishedAt: "2020-03-15T22:00:00.000Z",
+    happenedAt: "2020-03-15T21:00:00.000Z",
+    publishedAt: "2020-03-15T21:00:00.000Z",
     title: "Federal Reserve cuts rates to near zero",
     type: "central_bank",
     summary:

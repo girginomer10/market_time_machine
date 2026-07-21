@@ -68,7 +68,7 @@ Evidence And History
   -> 12 bounded full reports
   -> 250 compact factual/assessment entries
   -> competency-and-rubric evidence claims plus exact-context trends
-  -> exact-version practice-track credit
+  -> exact replay/drill/rubric/mode/broker practice-track credit
   -> V2 archive and V1 history migration
 
 Frontend
@@ -222,19 +222,24 @@ not mutate the separately curated practice-track catalog.
 Responsibilities:
 
 - Keep stable run-instance identity across save/restore
-- Pin practice sessions to scenario data plus competency/definition/rubric
-  identity and reject restore-time drift
+- Pin practice sessions and archived drill replays to scenario data plus exact
+  competency/definition/rubric/checkpoint-schedule identity and reject drift
 - Retain at most 12 recent full reports and 250 compact ledger entries
 - Strip raw journal, plan, checkpoint-response, and reflection text from compact
   evidence
-- Group compatible evidence by stable competency id and rubric while retaining
-  every represented drill id and definition version
+- Admit only assessments matching an authoritative full checkpoint schedule,
+  then group compatible evidence by stable competency id and rubric identity
+  while retaining every represented drill id and definition version
 - Compare trends only across matching scenario/data version, drill/definition,
-  rubric, mode, and broker context
+  rubric and checkpoint-schedule fingerprints, mode, broker mode, and full
+  broker fingerprint
 - Award track credit only to exact curated unit references in one qualifying
-  attempt
+  attempt, including the unit's full broker identity
 - Deep-validate and deterministically merge V2 practice archives, persist both
-  history layers with rollback, and migrate V1 exports as factual unassessed data
+  logical history layers in one verified envelope with rollback, and migrate V1
+  exports as factual unassessed data
+- Serialize archive mutations across tabs with Web Locks where available and a
+  revision/CAS rebase fallback everywhere else
 
 ## Suggested Frontend Structure
 

@@ -45,11 +45,12 @@ export type PracticeDrillCheckpointSnapshot = Readonly<
 export type PracticeDrillAnsweredResponseSnapshot = Readonly<
   Omit<
     DrillCheckpointResponse,
-    "status" | "action" | "eventIds" | "workingOrderIds"
+    "status" | "action" | "eventIds" | "linkedEventIds" | "workingOrderIds"
   > & {
     status: "answered";
     action: DrillCheckpointAction;
     eventIds: readonly string[];
+    linkedEventIds?: readonly string[];
     workingOrderIds?: readonly string[];
   }
 >;

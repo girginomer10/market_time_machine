@@ -1,43 +1,96 @@
 import { describe, expect, it } from "vitest";
 import type { PracticeLedgerEntry } from "../history/practiceLedger";
-import type { DrillAssessment } from "../../types";
+import type { DrillAssessment, ReportPayload } from "../../types";
 import {
   buildEvidenceProfile,
   evidenceConfidenceFor,
+  practiceEvidenceScore,
+  previousComparablePracticeScore,
   type ValidatedSourceScenario,
 } from "./evidenceProfile";
+import {
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+} from "./drills";
+import {
+  EURGBP_BREXIT_2016_DATA_VERSION,
+  LEGACY_EURGBP_BREXIT_2016_DATA_VERSION,
+} from "../../data/scenarios/dataVersions";
+import {
+  brokerConfigFingerprint,
+  IDEAL_BROKER_CONFIG,
+  REALISTIC_BROKER_CONFIG,
+} from "../broker/executionModels";
 
+const DEFAULT_RUBRIC_FINGERPRINT = drillRubricFingerprint({
+  weights: {
+    plan_coverage: 0,
+    checkpoint_coverage: 0,
+    event_linkage: 1,
+    rule_adherence: 0,
+  },
+  violationPenalty: 20,
+});
+const DEFAULT_BROKER_FINGERPRINT = brokerConfigFingerprint(
+  IDEAL_BROKER_CONFIG,
+);
 function assessment(
   score: number | undefined,
   overrides: Partial<DrillAssessment> = {},
 ): DrillAssessment {
   const assessed = score !== undefined;
+  const drillId = overrides.drillId ?? "event-discipline-eurgbp-v1";
+  const definitionVersion = overrides.definitionVersion ?? 1;
+  const eligibleEventCount = 1_000;
+  const linkedEventCount = assessed ? Math.round(score * 10) : 0;
+  const checkpointScheduleFingerprint =
+    overrides.checkpointScheduleFingerprint ??
+    drillCheckpointScheduleFingerprint(
+      [{
+        id: "checkpoint-1",
+        drillId,
+        definitionVersion,
+        replayIndex: 1,
+        replayTime: new Date(Date.UTC(2026, 0, 1)).toISOString(),
+        eventIds: Array.from(
+          { length: eligibleEventCount },
+          (_, index) => `event-${index + 1}`,
+        ),
+      }],
+    );
   return {
-    drillId: "event-discipline-eurgbp-v1",
+    drillId,
     competencyId: "event-discipline",
-    definitionVersion: 1,
+    definitionVersion,
     rubricVersion: "event-process-v1",
+    rubricFingerprint: DEFAULT_RUBRIC_FINGERPRINT,
+    checkpointScheduleFingerprint,
+    eventLinkageEvidenceVersion: 1,
     status: assessed ? "completed" : "incomplete",
     overallScore: score,
     methodology: "Process-only fixture rubric.",
-    components: [
-      "plan_coverage",
-      "checkpoint_coverage",
-      "event_linkage",
-      "rule_adherence",
-    ].map((id) => ({
-      id: id as DrillAssessment["components"][number]["id"],
+    components: (
+      [
+        ["plan_coverage", 0, 100],
+        ["checkpoint_coverage", 0, 100],
+        ["event_linkage", 1, score],
+        ["rule_adherence", 0, 100],
+      ] as const
+    ).map(([id, weight, componentScore]) => ({
+      id,
       label: id,
-      weight: 0.25,
-      status: assessed ? ("assessed" as const) : ("insufficient_evidence" as const),
-      score,
+      weight,
+      status: assessed
+        ? ("assessed" as const)
+        : ("insufficient_evidence" as const),
+      score: assessed ? componentScore : undefined,
       evidence: "Fixture evidence.",
     })),
-    eligibleCheckpointCount: 5,
-    answeredCheckpointCount: assessed ? 5 : 0,
+    eligibleCheckpointCount: 1,
+    answeredCheckpointCount: assessed ? 1 : 0,
     skippedCheckpointCount: 0,
-    eligibleEventCount: 6,
-    linkedEventCount: assessed ? 6 : 0,
+    eligibleEventCount,
+    linkedEventCount,
     violationCount: 0,
     ...overrides,
   };
@@ -61,6 +114,7 @@ function ledgerEntry(
     sampleData: false,
     mode: "explorer",
     brokerMode: "scenario",
+    brokerFingerprint: DEFAULT_BROKER_FINGERPRINT,
     facts: {
       executionCount: 1,
       closedTradeCount: 1,
@@ -85,6 +139,94 @@ function time(day: number): string {
 }
 
 describe("evidence profile", () => {
+  it("isolates identical rubric labels when their scoring content differs", () => {
+    const weights = {
+      plan_coverage: 0,
+      checkpoint_coverage: 0,
+      event_linkage: 1,
+      rule_adherence: 0,
+    } as const;
+    const firstFingerprint = drillRubricFingerprint({
+      weights,
+      violationPenalty: 20,
+    });
+    const secondFingerprint = drillRubricFingerprint({
+      weights,
+      violationPenalty: 5,
+    });
+    const profile = buildEvidenceProfile(
+      [
+        ledgerEntry("run-a", time(1), 70, {
+          assessment: assessment(70, {
+            rubricFingerprint: firstFingerprint,
+          }),
+        }),
+        ledgerEntry("run-b", time(2), 90, {
+          assessment: assessment(90, {
+            rubricFingerprint: secondFingerprint,
+          }),
+        }),
+      ],
+      [],
+    );
+
+    expect(profile.assessedEntryCount).toBe(2);
+    expect(profile.claims).toHaveLength(2);
+    expect(profile.claims.map((claim) => claim.rubricFingerprint).sort()).toEqual(
+      [firstFingerprint, secondFingerprint].sort(),
+    );
+    expect(profile.claims.map((claim) => claim.evidenceCount)).toEqual([1, 1]);
+    expect(profile.claims.every((claim) => claim.trend.status === "insufficient_evidence"))
+      .toBe(true);
+    expect(new Set(profile.claims.map((claim) => claim.id)).size).toBe(2);
+  });
+
+  it("requires an explicit rubric fingerprint consistent with every component weight", () => {
+    const missingFingerprint = ledgerEntry("missing-fingerprint", time(1), 82, {
+      assessment: assessment(82, { rubricFingerprint: undefined }),
+    });
+    const mismatchedFingerprint = ledgerEntry(
+      "mismatched-fingerprint",
+      time(2),
+      91,
+      {
+        assessment: assessment(91, {
+          rubricFingerprint: drillRubricFingerprint({
+            weights: {
+              plan_coverage: 0.4,
+              checkpoint_coverage: 0.2,
+              event_linkage: 0.2,
+              rule_adherence: 0.2,
+            },
+            violationPenalty: 20,
+          }),
+        }),
+      },
+    );
+
+    expect(practiceEvidenceScore(missingFingerprint)).toBeUndefined();
+    expect(practiceEvidenceScore(mismatchedFingerprint)).toBeUndefined();
+
+    const profile = buildEvidenceProfile(
+      [missingFingerprint, mismatchedFingerprint],
+      [],
+    );
+    expect(profile).toMatchObject({
+      ledgerEntryCount: 2,
+      assessedEntryCount: 0,
+    });
+    expect(profile.claims).toHaveLength(2);
+    expect(
+      profile.claims.every(
+        (claim) =>
+          claim.status === "unassessed" &&
+          claim.attemptCount === 1 &&
+          claim.evidenceCount === 0 &&
+          claim.latestScore === undefined,
+      ),
+    ).toBe(true);
+  });
+
   it("groups a competency across exact drill definitions but isolates rubric versions", () => {
     const entries = [
       ledgerEntry("run-a", time(1), 20),
@@ -148,8 +290,8 @@ describe("evidence profile", () => {
         scenarioId: "scenario-b",
         scenarioTitle: "Scenario B",
         scenarioDataVersion: "data-v2",
-        scenarioDataFidelity: "synthetic",
-        sampleData: true,
+        scenarioDataFidelity: "mixed",
+        sampleData: false,
         assessment: assessment(75, {
           drillId: "event-discipline-eurusd-v1",
         }),
@@ -158,16 +300,28 @@ describe("evidence profile", () => {
         scenarioId: "scenario-b",
         scenarioTitle: "Scenario B",
         scenarioDataVersion: "data-v2",
-        scenarioDataFidelity: "synthetic",
-        sampleData: true,
+        scenarioDataFidelity: "mixed",
+        sampleData: false,
         assessment: assessment(80, {
           drillId: "event-discipline-eurusd-v1",
         }),
       }),
     ];
     const validated: ValidatedSourceScenario[] = [
-      { scenarioId: "scenario-a", dataVersion: "data-v1" },
-      { scenarioId: "scenario-b", dataVersion: "data-v2" },
+      {
+        scenarioId: "scenario-a",
+        dataVersion: "data-v1",
+        dataFidelity: "observed",
+        sampleData: false,
+        sourceReviewed: true,
+      },
+      {
+        scenarioId: "scenario-b",
+        dataVersion: "data-v2",
+        dataFidelity: "mixed",
+        sampleData: false,
+        sourceReviewed: true,
+      },
     ];
 
     const ordered = buildEvidenceProfile(entries, validated);
@@ -183,8 +337,8 @@ describe("evidence profile", () => {
       scenarioCoverage: 2,
       validatedSourceScenarioIds: ["scenario-a", "scenario-b"],
       validatedSourceScenarioCoverage: 2,
-      sampleEvidenceCount: 2,
-      dataFidelities: ["observed", "synthetic"],
+      sampleEvidenceCount: 0,
+      dataFidelities: ["mixed", "observed"],
       confidence: "established",
       competencyId: "event-discipline",
       drillDefinitions: [
@@ -195,11 +349,54 @@ describe("evidence profile", () => {
 
     const wrongVersion = buildEvidenceProfile(entries, [
       validated[0],
-      { scenarioId: "scenario-b", dataVersion: "different-data" },
+      {
+        ...validated[1],
+        dataVersion: "different-data",
+      },
     ]);
     expect(wrongVersion.claims[0]).toMatchObject({
       validatedSourceScenarioCoverage: 1,
       confidence: "growing",
+    });
+  });
+
+  it("requires exact fidelity and non-sample source review for validated coverage", () => {
+    const sourceReference: ValidatedSourceScenario = {
+      scenarioId: "scenario-a",
+      dataVersion: "data-v1",
+      dataFidelity: "observed",
+      sampleData: false,
+      sourceReviewed: true,
+    };
+    const observed = ledgerEntry("observed", time(1), 80);
+    const sample = ledgerEntry("sample", time(2), 85, {
+      sampleData: true,
+    });
+
+    expect(
+      buildEvidenceProfile([observed], [sourceReference]).claims[0]
+        .validatedSourceScenarioCoverage,
+    ).toBe(1);
+    expect(
+      buildEvidenceProfile(
+        [observed],
+        [{ ...sourceReference, dataFidelity: "mixed" }],
+      ).claims[0].validatedSourceScenarioCoverage,
+    ).toBe(0);
+    expect(
+      buildEvidenceProfile(
+        [observed],
+        [{ ...sourceReference, sourceReviewed: false }],
+      ).claims[0].validatedSourceScenarioCoverage,
+    ).toBe(0);
+    expect(
+      buildEvidenceProfile(
+        [sample],
+        [{ ...sourceReference, sampleData: true }],
+      ).claims[0],
+    ).toMatchObject({
+      sampleEvidenceCount: 1,
+      validatedSourceScenarioCoverage: 0,
     });
   });
 
@@ -229,6 +426,29 @@ describe("evidence profile", () => {
       [],
     ).claims[0].trend;
     expect(declining).toMatchObject({ status: "declining", delta: -10 });
+  });
+
+  it("does not compare scores across different competency identities", () => {
+    const previous = ledgerEntry("previous", time(1), 40, {
+      assessment: assessment(40, { competencyId: "other-competency" }),
+    });
+    const current = ledgerEntry("current", time(2), 80);
+    const report = {
+      scenarioId: current.scenarioId,
+      provenance: { dataVersion: current.scenarioDataVersion },
+      practiceAssessment: current.assessment,
+    } as ReportPayload;
+
+    expect(
+      previousComparablePracticeScore(
+        current.id,
+        report,
+        current.mode,
+        current.brokerMode,
+        current.brokerFingerprint,
+        [previous, current],
+      ),
+    ).toBeUndefined();
   });
 
   it("requires the latest score to have a prior identical practice context", () => {
@@ -293,6 +513,103 @@ describe("evidence profile", () => {
     expect(differentDefinitionVersion.trend.status).toBe(
       "insufficient_evidence",
     );
+  });
+
+  it("isolates different valid broker settings even when broker mode is unchanged", () => {
+    const realisticFingerprint = brokerConfigFingerprint(
+      REALISTIC_BROKER_CONFIG,
+    );
+    const claim = buildEvidenceProfile(
+      [
+        ledgerEntry("ideal", time(1), 40),
+        ledgerEntry("realistic", time(2), 70, {
+          brokerFingerprint: realisticFingerprint,
+        }),
+      ],
+      [],
+    ).claims[0];
+
+    expect(realisticFingerprint).not.toBe(DEFAULT_BROKER_FINGERPRINT);
+    expect(claim).toMatchObject({
+      evidenceCount: 2,
+      latestRunId: "realistic",
+      latestScore: 70,
+      trend: {
+        status: "insufficient_evidence",
+        currentRunId: "realistic",
+        currentScore: 70,
+      },
+    });
+  });
+
+  it("keeps legacy broker-unidentified scores readable but never trends them", () => {
+    const first = ledgerEntry("legacy-1", time(1), 50, {
+      brokerFingerprint: undefined,
+    });
+    const second = ledgerEntry("legacy-2", time(2), 65, {
+      brokerFingerprint: undefined,
+    });
+    const legacyClaim = buildEvidenceProfile([first, second], []).claims[0];
+
+    expect(practiceEvidenceScore(first)).toBe(50);
+    expect(practiceEvidenceScore(second)).toBe(65);
+    expect(legacyClaim).toMatchObject({
+      status: "assessed",
+      attemptCount: 2,
+      evidenceCount: 2,
+      latestRunId: "legacy-2",
+      latestScore: 65,
+      trend: {
+        status: "insufficient_evidence",
+        currentRunId: "legacy-2",
+        currentScore: 65,
+      },
+    });
+
+    const currentIdentified = ledgerEntry("identified", time(3), 80);
+    expect(
+      buildEvidenceProfile([second, currentIdentified], []).claims[0],
+    ).toMatchObject({
+      evidenceCount: 2,
+      trend: {
+        status: "insufficient_evidence",
+        currentRunId: "identified",
+        currentScore: 80,
+      },
+    });
+  });
+
+  it("keeps reviewed version-identity migrations comparable and source-validated", () => {
+    const entries = [
+      ledgerEntry("legacy-version", time(1), 40, {
+        scenarioId: "eurgbp-brexit-2016",
+        scenarioDataVersion: LEGACY_EURGBP_BREXIT_2016_DATA_VERSION,
+        scenarioDataFidelity: "mixed",
+      }),
+      ledgerEntry("content-version", time(2), 55, {
+        scenarioId: "eurgbp-brexit-2016",
+        scenarioDataVersion: EURGBP_BREXIT_2016_DATA_VERSION,
+        scenarioDataFidelity: "mixed",
+      }),
+    ];
+
+    const claim = buildEvidenceProfile(entries, [
+      {
+        scenarioId: "eurgbp-brexit-2016",
+        dataVersion: EURGBP_BREXIT_2016_DATA_VERSION,
+        dataFidelity: "mixed",
+        sampleData: false,
+        sourceReviewed: true,
+      },
+    ]).claims[0];
+
+    expect(claim.validatedSourceScenarioCoverage).toBe(1);
+    expect(claim.trend).toMatchObject({
+      status: "improving",
+      previousRunId: "legacy-version",
+      currentRunId: "content-version",
+      delta: 15,
+    });
   });
 
   it("falls back to the exact drill id for legacy assessments", () => {
@@ -391,6 +708,55 @@ describe("evidence profile", () => {
       attemptCount: 1,
       evidenceCount: 0,
     });
+    expect(practiceEvidenceScore(noDecision)).toBeUndefined();
+  });
+
+  it("exposes a score only for fully measured completed evidence", () => {
+    const completed = ledgerEntry("completed", time(1), 84);
+    const incomplete = ledgerEntry("incomplete", time(2), 91, {
+      assessment: assessment(91, { status: "incomplete" }),
+    });
+    const partial = ledgerEntry("partial", time(3), 88);
+    partial.assessment = {
+      ...partial.assessment!,
+      components: partial.assessment!.components.map((component, index) =>
+        index === 0
+          ? { ...component, status: "insufficient_evidence", score: undefined }
+          : component,
+      ),
+    };
+
+    expect(practiceEvidenceScore(completed)).toBe(84);
+    expect(practiceEvidenceScore(incomplete)).toBeUndefined();
+    expect(practiceEvidenceScore(partial)).toBeUndefined();
+    expect(
+      practiceEvidenceScore({
+        ...completed,
+        assessment: {
+          ...completed.assessment!,
+          eligibleCheckpointCount: 1,
+          answeredCheckpointCount: 1,
+          eligibleEventCount: 1,
+          linkedEventCount: 1,
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      practiceEvidenceScore({
+        ...completed,
+        assessment: {
+          ...completed.assessment!,
+          eventLinkageEvidenceVersion: undefined,
+        },
+      }),
+    ).toBeUndefined();
+
+    const contradictory = ledgerEntry("contradictory", time(4), 100);
+    contradictory.assessment = {
+      ...contradictory.assessment!,
+      linkedEventCount: 0,
+    };
+    expect(practiceEvidenceScore(contradictory)).toBeUndefined();
   });
 
   it("breaks timestamp ties by run id for stable latest evidence", () => {

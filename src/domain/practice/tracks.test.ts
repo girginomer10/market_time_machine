@@ -10,8 +10,14 @@ import { eurGbpBrexit2016Scenario } from "../../data/scenarios/eurgbp-brexit-201
 import { eurUsdCovidLiquidity2020Scenario } from "../../data/scenarios/eurusd-covid-liquidity-2020";
 import { kreBankingCrisis2023Scenario } from "../../data/scenarios/kre-banking-crisis-2023";
 import { qqqRateHike2022Scenario } from "../../data/scenarios/qqq-rate-hike-2022";
+import { LEGACY_EURGBP_BREXIT_2016_DATA_VERSION } from "../../data/scenarios/dataVersions";
+import {
+  brokerConfigFingerprint,
+  getBrokerPreset,
+} from "../broker/executionModels";
 import type { PracticeLedgerEntry } from "../history/practiceLedger";
 import type { DrillAssessment } from "../../types";
+import { drillCheckpointScheduleFingerprint } from "./drills";
 import {
   ledgerAttemptCompletesTrackUnit,
   practiceTrackProgress,
@@ -33,6 +39,9 @@ function completeAssessment(unit: PracticeTrackUnit): DrillAssessment {
     drillId: unit.drill.id,
     definitionVersion: unit.drill.definitionVersion,
     rubricVersion: unit.drill.rubricVersion,
+    rubricFingerprint: unit.drill.rubricFingerprint,
+    checkpointScheduleFingerprint: unit.drill.checkpointScheduleFingerprint,
+    eventLinkageEvidenceVersion: 1,
     status: "completed",
     overallScore: 100,
     methodology: "Process-only score.",
@@ -98,7 +107,8 @@ function attemptFor(
     scenarioDataFidelity: unit.scenario.dataFidelity,
     sampleData: unit.scenario.sampleData,
     mode: unit.drill.mode,
-    brokerMode: "scenario",
+    brokerMode: unit.broker.mode,
+    brokerFingerprint: unit.broker.fingerprint,
     facts: {
       executionCount: 1,
       closedTradeCount: 1,
@@ -151,15 +161,13 @@ describe("practice track catalog", () => {
     ).toEqual([
       {
         scenarioId: "eurgbp-brexit-2016",
-        dataVersion:
-          "ECB EXR D.GBP.EUR.SP00.A; retrieved 2026-07-13T00:00:00.000Z",
+        dataVersion: eurGbpBrexit2016Scenario.meta.dataVersion,
         marketEvidence: "source_observed",
         dataFidelity: "mixed",
       },
       {
         scenarioId: "eurusd-covid-liquidity-2020",
-        dataVersion:
-          "ECB EXR D.USD.EUR.SP00.A; retrieved 2026-07-14T00:00:00.000Z",
+        dataVersion: eurUsdCovidLiquidity2020Scenario.meta.dataVersion,
         marketEvidence: "source_observed",
         dataFidelity: "mixed",
       },
@@ -169,7 +177,10 @@ describe("practice track catalog", () => {
       units: [
         {
           status: "preview",
-          scenario: { dataVersion: null, sampleData: true },
+          scenario: {
+            dataVersion: "synthetic-qqq-rate-hike-2022-v1",
+            sampleData: true,
+          },
           evidenceScope: {
             marketEvidence: "synthetic",
             eventEvidence: "official_sources",
@@ -177,7 +188,10 @@ describe("practice track catalog", () => {
         },
         {
           status: "preview",
-          scenario: { dataVersion: null, sampleData: true },
+          scenario: {
+            dataVersion: "synthetic-kre-banking-crisis-2023-v1",
+            sampleData: true,
+          },
           evidenceScope: {
             marketEvidence: "synthetic",
             eventEvidence: "official_sources",
@@ -194,6 +208,180 @@ describe("practice track catalog", () => {
         drills,
       }),
     ).toEqual({ valid: true, issues: [] });
+    for (const track of listBuiltInPracticeTracks()) {
+      for (const unit of track.units) {
+        const scenario = scenarios.find(
+          (candidate) => candidate.meta.id === unit.scenario.id,
+        );
+        expect(scenario).toBeDefined();
+        expect(unit.broker).toEqual({
+          mode: "scenario",
+          fingerprint: brokerConfigFingerprint(scenario!.broker),
+        });
+      }
+    }
+  });
+
+  it("rejects missing, malformed, or drifted broker identities", () => {
+    const source = decisionFoundationsTrack.units[0];
+    const missingBroker = {
+      ...source,
+      id: "missing-broker-unit-v1",
+      broker: undefined,
+    } as unknown as PracticeTrackUnit;
+    const malformedBroker = {
+      ...source,
+      id: "malformed-broker-unit-v1",
+      broker: { mode: "scenario", fingerprint: "short-hash" },
+    } as PracticeTrackUnit;
+    const driftedBroker = {
+      ...source,
+      id: "drifted-broker-unit-v1",
+      broker: {
+        mode: "scenario",
+        fingerprint: brokerConfigFingerprint({
+          ...eurGbpBrexit2016Scenario.broker,
+          spreadBps: eurGbpBrexit2016Scenario.broker.spreadBps + 1,
+        }),
+      },
+    } as PracticeTrackUnit;
+
+    const result = validatePracticeTrackCatalog(
+      [
+        {
+          ...decisionFoundationsTrack,
+          id: "invalid-broker-identities-v1",
+          units: [missingBroker, malformedBroker, driftedBroker],
+        },
+      ],
+      { scenarios, drills },
+    );
+
+    expect(result.valid).toBe(false);
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "unit.broker_identity_invalid",
+          path: "tracks[0].units[0].broker",
+        }),
+        expect.objectContaining({
+          code: "unit.broker_identity_invalid",
+          path: "tracks[0].units[1].broker",
+        }),
+        expect.objectContaining({
+          code: "unit.broker_reference_mismatch",
+          path: "tracks[0].units[2].broker",
+        }),
+      ]),
+    );
+
+    const scenarioDrift = validatePracticeTrackCatalog(
+      listBuiltInPracticeTracks(),
+      {
+        scenarios: scenarios.map((scenario) =>
+          scenario.meta.id === eurGbpBrexit2016Scenario.meta.id
+            ? {
+                ...scenario,
+                broker: {
+                  ...scenario.broker,
+                  spreadBps: scenario.broker.spreadBps + 1,
+                },
+              }
+            : scenario,
+        ),
+        drills,
+      },
+    );
+    expect(scenarioDrift.issues).toContainEqual(
+      expect.objectContaining({
+        code: "unit.broker_reference_mismatch",
+        path: "tracks[0].units[0].broker",
+      }),
+    );
+  });
+
+  it("treats broker execution identity as part of a unit reference", () => {
+    const source = decisionFoundationsTrack.units[0];
+    const idealBroker = {
+      mode: "ideal",
+      fingerprint: brokerConfigFingerprint({
+        ...getBrokerPreset("ideal"),
+        baseCurrency: eurGbpBrexit2016Scenario.meta.baseCurrency,
+      }),
+    } as const;
+    const result = validatePracticeTrackCatalog(
+      [
+        {
+          ...decisionFoundationsTrack,
+          id: "execution-variant-track-v1",
+          units: [
+            source,
+            {
+              ...source,
+              id: "decision-foundations-eurgbp-ideal-v1",
+              order: 2,
+              broker: idealBroker,
+            },
+          ],
+        },
+      ],
+      { scenarios, drills },
+    );
+
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "unit.reference_duplicate" }),
+    );
+    expect(result).toEqual({ valid: true, issues: [] });
+  });
+
+  it("cannot promote a synthetic sample preview unit into completion credit", () => {
+    const promotedUnit = {
+      ...volatilityDisciplineTrack.units[0],
+      status: "validated",
+    } as PracticeTrackUnit;
+    const promotedTrack = {
+      ...volatilityDisciplineTrack,
+      id: "forged-validated-synthetic-track-v1",
+      status: "open",
+      units: [promotedUnit],
+    } as PracticeTrack;
+
+    const validation = validatePracticeTrackCatalog([promotedTrack], {
+      scenarios,
+      drills,
+    });
+
+    expect(validation.valid).toBe(false);
+    expect(validation.issues).toContainEqual(
+      expect.objectContaining({
+        code: "unit.completion_evidence_invalid",
+        path: "tracks[0].units[0].evidenceScope",
+      }),
+    );
+    const syntheticAttempt = attemptFor(promotedUnit);
+    expect(
+      ledgerAttemptCompletesTrackUnit(promotedUnit, syntheticAttempt),
+    ).toBe(false);
+    expect(practiceTrackProgress(promotedTrack, [syntheticAttempt])).toMatchObject({
+      status: "not_started",
+      completedUnitCount: 0,
+      creditableUnitCount: 1,
+      units: [{ status: "incomplete" }],
+    });
+  });
+
+  it("preserves credit across the reviewed EUR/GBP version-identity migration", () => {
+    const unit = decisionFoundationsTrack.units[0];
+    expect(
+      ledgerAttemptCompletesTrackUnit(
+        unit,
+        attemptFor(unit, {
+          entry: {
+            scenarioDataVersion: LEGACY_EURGBP_BREXIT_2016_DATA_VERSION,
+          },
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("rejects mismatched versions, drill refs, modes, and provenance", () => {
@@ -277,6 +465,15 @@ describe("practice track progress", () => {
         facts: { ...attempt.facts, executionCount: 0 },
       }),
     ).toBe(false);
+    expect(
+      ledgerAttemptCompletesTrackUnit(foundationUnit, {
+        ...attempt,
+        assessment: {
+          ...attempt.assessment!,
+          eventLinkageEvidenceVersion: undefined,
+        },
+      }),
+    ).toBe(false);
     expect(practiceTrackProgress(decisionFoundationsTrack, [attempt])).toEqual({
       trackId: decisionFoundationsTrack.id,
       trackVersion: 1,
@@ -292,6 +489,58 @@ describe("practice track progress", () => {
         },
       ],
     });
+  });
+
+  it("rejects a completed-looking attempt scored against a partial schedule", () => {
+    const partialFingerprint = drillCheckpointScheduleFingerprint([
+      {
+        id: "forged-one",
+        drillId: foundationUnit.drill.id,
+        definitionVersion: foundationUnit.drill.definitionVersion,
+        replayIndex: 1,
+        replayTime: "2016-01-05T00:00:00.000Z",
+        eventIds: ["forged-event"],
+      },
+    ]);
+    const forged = attemptFor(foundationUnit, {
+      assessment: {
+        checkpointScheduleFingerprint: partialFingerprint,
+        eligibleCheckpointCount: 1,
+        answeredCheckpointCount: 1,
+        eligibleEventCount: 1,
+        linkedEventCount: 1,
+      },
+    });
+
+    expect(ledgerAttemptCompletesTrackUnit(foundationUnit, forged)).toBe(false);
+  });
+
+  it("rejects reduced totals even when the canonical unit schedule fingerprint is copied", () => {
+    const forged = attemptFor(foundationUnit, {
+      assessment: {
+        checkpointScheduleFingerprint:
+          foundationUnit.drill.checkpointScheduleFingerprint,
+        eligibleCheckpointCount: 1,
+        answeredCheckpointCount: 1,
+        eligibleEventCount: 1,
+        linkedEventCount: 1,
+      },
+    });
+
+    expect(ledgerAttemptCompletesTrackUnit(foundationUnit, forged)).toBe(false);
+  });
+
+  it("rejects direct in-memory component scores that contradict aggregate evidence", () => {
+    const forged = attemptFor(foundationUnit, {
+      assessment: {
+        linkedEventCount: 0,
+      },
+    });
+
+    expect(forged.assessment?.components).toContainEqual(
+      expect.objectContaining({ id: "event_linkage", score: 100 }),
+    );
+    expect(ledgerAttemptCompletesTrackUnit(foundationUnit, forged)).toBe(false);
   });
 
   it("does not merge passing criteria across separate attempts", () => {
@@ -319,6 +568,41 @@ describe("practice track progress", () => {
       completedUnitCount: 0,
       units: [{ status: "incomplete" }],
     });
+  });
+
+  it("requires the exact broker mode and complete configuration identity", () => {
+    const scenarioAttempt = attemptFor(foundationUnit);
+    const idealFingerprint = brokerConfigFingerprint({
+      ...getBrokerPreset("ideal"),
+      baseCurrency: eurGbpBrexit2016Scenario.meta.baseCurrency,
+    });
+    const changedScenarioFingerprint = brokerConfigFingerprint({
+      ...eurGbpBrexit2016Scenario.broker,
+      spreadBps: eurGbpBrexit2016Scenario.broker.spreadBps + 1,
+    });
+
+    expect(ledgerAttemptCompletesTrackUnit(foundationUnit, scenarioAttempt)).toBe(
+      true,
+    );
+    expect(
+      ledgerAttemptCompletesTrackUnit(foundationUnit, {
+        ...scenarioAttempt,
+        brokerMode: "ideal",
+        brokerFingerprint: idealFingerprint,
+      }),
+    ).toBe(false);
+    expect(
+      ledgerAttemptCompletesTrackUnit(foundationUnit, {
+        ...scenarioAttempt,
+        brokerFingerprint: changedScenarioFingerprint,
+      }),
+    ).toBe(false);
+    expect(
+      ledgerAttemptCompletesTrackUnit(foundationUnit, {
+        ...scenarioAttempt,
+        brokerFingerprint: undefined,
+      }),
+    ).toBe(false);
   });
 
   it("denies imported-scenario lookalikes without the curated exact version", () => {
@@ -349,6 +633,60 @@ describe("practice track progress", () => {
         spoofedSampleFlag,
       ]).status,
     ).toBe("not_started");
+  });
+
+  it("requires the curated rubric fingerprint and rejects legacy weight-only evidence", () => {
+    const current = attemptFor(foundationUnit);
+    const changedPenaltyIdentity = attemptFor(foundationUnit, {
+      id: "changed-rubric-content",
+      assessment: {
+        rubricFingerprint: `${foundationUnit.drill.rubricFingerprint}:changed`,
+      },
+    });
+    const forgedCurrentIdentity = attemptFor(foundationUnit, {
+      id: "forged-current-rubric-content",
+      assessment: {
+        rubricFingerprint: foundationUnit.drill.rubricFingerprint,
+        components: completeAssessment(foundationUnit).components.map(
+          (component) =>
+            component.id === "plan_coverage"
+              ? { ...component, weight: component.weight + 0.1 }
+              : component.id === "checkpoint_coverage"
+                ? { ...component, weight: component.weight - 0.1 }
+                : component,
+        ),
+      },
+    });
+    const legacy = attemptFor(foundationUnit, {
+      id: "legacy-without-fingerprint",
+      assessment: { rubricFingerprint: undefined },
+    });
+    const legacyWrongWeights = attemptFor(foundationUnit, {
+      id: "legacy-wrong-weights",
+      assessment: {
+        rubricFingerprint: undefined,
+        components: completeAssessment(foundationUnit).components.map(
+          (component) =>
+            component.id === "plan_coverage"
+              ? { ...component, weight: 0.4 }
+              : component.id === "checkpoint_coverage"
+                ? { ...component, weight: 0.2 }
+                : component,
+        ),
+      },
+    });
+
+    expect(ledgerAttemptCompletesTrackUnit(foundationUnit, current)).toBe(true);
+    expect(
+      ledgerAttemptCompletesTrackUnit(foundationUnit, changedPenaltyIdentity),
+    ).toBe(false);
+    expect(
+      ledgerAttemptCompletesTrackUnit(foundationUnit, forgedCurrentIdentity),
+    ).toBe(false);
+    expect(ledgerAttemptCompletesTrackUnit(foundationUnit, legacy)).toBe(false);
+    expect(
+      ledgerAttemptCompletesTrackUnit(foundationUnit, legacyWrongWeights),
+    ).toBe(false);
   });
 
   it("never grants completion credit to synthetic preview units", () => {

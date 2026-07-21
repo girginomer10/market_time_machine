@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -28,19 +29,11 @@ import {
   removeUserScenario,
 } from "../data/scenarios";
 import {
-  clearRunHistory,
-  loadRunHistory,
-  recordCompletedRun,
-  removeCompletedRun,
+  buildCompletedRun,
   type CompletedRun,
 } from "../domain/history/runHistory";
 import {
-  clearPracticeLedger,
-  loadPracticeLedger,
-  persistPracticeLedger,
-  reconcilePracticeLedger,
-  recordPracticeLedgerEntry,
-  removePracticeLedgerEntry,
+  derivePracticeLedgerEntry,
   type PracticeLedgerEntry,
 } from "../domain/history/practiceLedger";
 import {
@@ -48,25 +41,58 @@ import {
   mergePracticeArchive,
   parsePracticeArchive,
 } from "../domain/history/practiceArchive";
-import { persistPracticeArchiveAtomically } from "../domain/history/practiceArchiveStorage";
-import { buildPracticeCoachPlan } from "../domain/coaching/practiceCoach";
+import {
+  clearPracticeArchiveAtomically,
+  discardDamagedPracticeArchiveAtomically,
+  inspectStoredPracticeArchiveDamage,
+  loadStoredPracticeArchiveData,
+  persistPracticeArchiveAtomically,
+  recordCompletedPracticeRunAtomically,
+  removePracticeArchiveRunAtomically,
+  withPracticeArchiveMutationLock,
+} from "../domain/history/practiceArchiveStorage";
+import {
+  LEGACY_PRACTICE_LEDGER_STORAGE_KEY,
+  LEGACY_RUN_HISTORY_STORAGE_KEY,
+  PRACTICE_ARCHIVE_STORAGE_KEY,
+} from "../domain/history/practiceArchiveEnvelope";
+import {
+  buildPracticeCoachPlan,
+} from "../domain/coaching/practiceCoach";
 import {
   getDrillForScenario,
   listAvailableDrills,
 } from "../data/practice/drills";
 import { listBuiltInPracticeTracks } from "../data/practice/tracks";
+import { scenarioDataVersionsEqual } from "../data/scenarios/dataVersions";
 import {
   buildEvidenceProfile,
+  previousComparablePracticeScore,
+  type ValidatedPracticeSchedule,
   type ValidatedSourceScenario,
 } from "../domain/practice/evidenceProfile";
 import { practiceTrackProgress } from "../domain/practice/tracks";
+import {
+  buildDrillCheckpointSchedule,
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+} from "../domain/practice/drills";
+import { brokerConfigFingerprint } from "../domain/broker/executionModels";
 import { eventCoverageSummary } from "../domain/scenario/eventCoverage";
-import { selectSnapshot, useSessionStore } from "../store/sessionStore";
+import {
+  archivedPracticeContextMatchesCurrentDrill,
+  selectSnapshot,
+  useSessionStore,
+  type ActiveDrillSessionIdentity,
+  type PracticeStartContext,
+  type SessionState,
+} from "../store/sessionStore";
 import type {
   Candle,
+  DrillDefinition,
   ReplayStatus,
-  ReportPayload,
   ScenarioMode,
+  ScenarioPackage,
 } from "../types";
 import { formatCurrency, formatNumber, formatPct } from "../utils/format";
 import { scenarioModeLabel } from "../utils/scenarioMode";
@@ -77,13 +103,18 @@ const MAX_LOCAL_IMPORT_BYTES = 25 * 1024 * 1024;
 type PendingConfirmation =
   | { kind: "reset" }
   | { kind: "clear-history" }
+  | { kind: "discard-damaged-archive" }
+  | { kind: "remove-run"; run: CompletedRun }
   | { kind: "remove-scenario"; scenarioId: string; title: string }
+  | { kind: "restore-session"; serialized: string; fileName: string }
   | {
       kind: "start";
       scenarioId: string;
       title: string;
       mode: ScenarioMode;
       drillId?: string;
+      replayContext?: PracticeStartContext;
+      startNotice?: string;
     };
 
 function confirmationCopy(pending: PendingConfirmation): {
@@ -106,12 +137,32 @@ function confirmationCopy(pending: PendingConfirmation): {
           "Saved reports, compact practice evidence, and progress comparisons will be removed from this browser. Export first if you want a copy.",
         confirmLabel: "Clear history",
       };
+    case "discard-damaged-archive":
+      return {
+        title: "Remove damaged local history?",
+        description:
+          "The unreadable practice archive and any superseded legacy copies will be removed from this browser. Download the damaged bytes first if you may need forensic recovery.",
+        confirmLabel: "Remove damaged history",
+      };
+    case "remove-run":
+      return {
+        title: `Remove ${pending.run.scenarioTitle}?`,
+        description:
+          "This completed report and its compact practice evidence will both be permanently removed from this browser.",
+        confirmLabel: "Remove completed replay",
+      };
     case "remove-scenario":
       return {
         title: `Remove ${pending.title}?`,
         description:
           "This imported lab will be removed from this browser. Existing report history stays available, but replaying it will require importing the scenario again.",
         confirmLabel: "Remove imported lab",
+      };
+    case "restore-session":
+      return {
+        title: "Restore this session backup?",
+        description: `Restoring ${pending.fileName} will replace the active replay, including its orders, fills, journal, and unsaved progress.`,
+        confirmLabel: "Restore session",
       };
     case "start":
       return {
@@ -151,6 +202,33 @@ function currentCandle(candles: Candle[]): Candle | undefined {
   return candles[candles.length - 1];
 }
 
+function sessionHasMeaningfulProgress(
+  state: Pick<
+    SessionState,
+    | "currentIndex"
+    | "fills"
+    | "orders"
+    | "journal"
+    | "auditEvents"
+    | "status"
+    | "initialDrillPlan"
+    | "drillCheckpointResponses"
+    | "drillRuleViolations"
+  >,
+): boolean {
+  return (
+    state.currentIndex > 0 ||
+    state.fills.length > 0 ||
+    state.orders.length > 0 ||
+    state.journal.length > 0 ||
+    state.auditEvents.length > 0 ||
+    state.initialDrillPlan !== undefined ||
+    state.drillCheckpointResponses.length > 0 ||
+    state.drillRuleViolations.length > 0 ||
+    state.status === "finished"
+  );
+}
+
 function pricePrecisionForScenario(scenarioId: string): number {
   const candidate = getScenario(scenarioId);
   const primary = candidate?.meta.symbols[0];
@@ -160,40 +238,60 @@ function pricePrecisionForScenario(scenarioId: string): number {
   return decimalPlacesForTickSize(instrument?.tickSize);
 }
 
-function previousComparablePracticeScore(
-  currentRunId: string,
-  report: ReportPayload,
-  mode: ScenarioMode,
-  brokerMode: CompletedRun["brokerMode"],
-  ledger: readonly PracticeLedgerEntry[],
-): number | undefined {
-  const assessment = report.practiceAssessment;
-  if (!assessment) return undefined;
-  return [...ledger]
-    .filter(
-      (entry) =>
-        entry.id !== currentRunId &&
-        entry.runId !== currentRunId &&
-        entry.runInstanceId !== currentRunId &&
-        entry.scenarioId === report.scenarioId &&
-        (entry.scenarioDataVersion ?? null) ===
-          (report.provenance?.dataVersion ?? null) &&
-        entry.mode === mode &&
-        entry.brokerMode === brokerMode &&
-        entry.assessment?.drillId === assessment.drillId &&
-        entry.assessment.definitionVersion === assessment.definitionVersion &&
-        entry.assessment.rubricVersion === assessment.rubricVersion &&
-        entry.assessment.overallScore !== undefined,
-    )
-    .sort(
-      (left, right) =>
-        Date.parse(right.completedAt) - Date.parse(left.completedAt) ||
-        right.id.localeCompare(left.id),
-    )[0]?.assessment?.overallScore;
+function archivedDrillIdentity(
+  definition: Readonly<DrillDefinition>,
+  scenarioDataVersion: string | null,
+): ActiveDrillSessionIdentity {
+  return {
+    scenarioDataVersion,
+    drillId: definition.id,
+    competencyId: definition.competencyId,
+    definitionVersion: definition.definitionVersion,
+    rubricVersion: definition.rubricVersion,
+    definitionSnapshot: {
+      ...definition,
+      initialPlanRule: {
+        ...definition.initialPlanRule,
+        requiredFields: [...definition.initialPlanRule.requiredFields],
+      },
+      checkpointRule: {
+        ...definition.checkpointRule,
+        actions: [...definition.checkpointRule.actions],
+      },
+      rubric: {
+        weights: { ...definition.rubric.weights },
+        violationPenalty: definition.rubric.violationPenalty,
+      },
+    },
+  };
+}
+
+function readInitialPracticeArchive() {
+  try {
+    return {
+      damage: inspectStoredPracticeArchiveDamage(),
+      archive: loadStoredPracticeArchiveData(undefined, {
+        // Render validated legacy evidence immediately, but defer the
+        // canonical migration write until the cross-tab lock is held.
+        migrateLegacy: false,
+      }),
+      readError: undefined,
+    };
+  } catch (error) {
+    return {
+      damage: { damaged: false } as const,
+      archive: { runs: [], ledger: [] },
+      readError:
+        error instanceof Error
+          ? error.message
+          : "Browser practice history could not be read safely.",
+    };
+  }
 }
 
 export default function App() {
   const scenario = useSessionStore((s) => s.scenario);
+  const primarySymbol = useSessionStore((s) => s.primarySymbol);
   const runInstanceId = useSessionStore((s) => s.runInstanceId);
   const status = useSessionStore((s) => s.status);
   const fills = useSessionStore((s) => s.fills);
@@ -201,12 +299,15 @@ export default function App() {
   const journal = useSessionStore((s) => s.journal);
   const report = useSessionStore((s) => s.report);
   const mode = useSessionStore((s) => s.mode);
+  const broker = useSessionStore((s) => s.broker);
   const brokerMode = useSessionStore((s) => s.brokerMode);
   const activeDrillId = useSessionStore((s) => s.activeDrillId);
   const initialDrillPlan = useSessionStore((s) => s.initialDrillPlan);
   const drillCheckpointResponses = useSessionStore(
     (s) => s.drillCheckpointResponses,
   );
+  const drillRuleViolations = useSessionStore((s) => s.drillRuleViolations);
+  const persistenceHealth = useSessionStore((s) => s.persistenceHealth);
   const pendingDrillCheckpoint = useSessionStore(
     (s) => s.pendingDrillCheckpoint,
   );
@@ -214,11 +315,11 @@ export default function App() {
   const pause = useSessionStore((s) => s.pause);
   const reset = useSessionStore((s) => s.resetScenario);
   const selectScenario = useSessionStore((s) => s.selectScenario);
+  const startReplay = useSessionStore((s) => s.startReplay);
   const startPractice = useSessionStore((s) => s.startPractice);
   const submitDrillCheckpoint = useSessionStore(
     (s) => s.submitDrillCheckpoint,
   );
-  const setScenarioMode = useSessionStore((s) => s.setScenarioMode);
   const cancelOrder = useSessionStore((s) => s.cancelOrder);
   const updatePendingOrder = useSessionStore((s) => s.updatePendingOrder);
   const addJournalNote = useSessionStore((s) => s.addJournalNote);
@@ -234,28 +335,39 @@ export default function App() {
   );
   const [libraryCanClose, setLibraryCanClose] = useState(false);
   const [scenarios, setScenarios] = useState(() => listScenarios());
-  const [runHistory, setRunHistory] = useState<CompletedRun[]>(() =>
-    loadRunHistory(),
+  const [initialPracticeArchive] = useState(readInitialPracticeArchive);
+  const [runHistory, setRunHistory] = useState<CompletedRun[]>(
+    initialPracticeArchive.archive.runs,
   );
   const [practiceLedger, setPracticeLedger] = useState<PracticeLedgerEntry[]>(
-    () =>
-      persistPracticeLedger(
-        reconcilePracticeLedger(loadPracticeLedger(), loadRunHistory()),
-      ),
+    initialPracticeArchive.archive.ledger,
   );
   const [historicalRun, setHistoricalRun] = useState<CompletedRun>();
   const [hoveredEventId, setHoveredEventId] = useState<string | undefined>();
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const [pendingConfirmation, setPendingConfirmation] =
     useState<PendingConfirmation>();
+  const [pendingConfirmationBusy, setPendingConfirmationBusy] = useState(false);
   const [sessionMessage, setSessionMessage] = useState<string>();
+  const [labNotice, setLabNotice] = useState<string>();
   const [scenarioMessage, setScenarioMessage] = useState<{
     kind: "status" | "error";
     text: string;
   }>();
-  const [archiveMessage, setArchiveMessage] = useState<string>();
+  const [archiveMessage, setArchiveMessage] = useState<string | undefined>(
+    initialPracticeArchive.readError,
+  );
+  const [reportArchiveWarning, setReportArchiveWarning] = useState<string>();
+  const [reportArchiveSaving, setReportArchiveSaving] = useState(false);
+  const [damagedArchiveBytes, setDamagedArchiveBytes] = useState<
+    string | undefined
+  >(
+    initialPracticeArchive.damage.damaged
+      ? initialPracticeArchive.damage.serialized
+      : undefined,
+  );
   const brandButtonRef = useRef<HTMLButtonElement | null>(null);
-  const primarySymbol = scenario.meta.symbols[0];
+  const reportSaveAttemptRef = useRef(0);
   const primaryInstrument = scenario.instruments.find(
     (instrument) => instrument.symbol === primarySymbol,
   );
@@ -288,15 +400,52 @@ export default function App() {
         const source = {
           scenarioId: unit.scenario.id,
           dataVersion: unit.scenario.dataVersion,
+          dataFidelity: unit.scenario.dataFidelity,
+          sampleData: false,
+          sourceReviewed: true,
         } satisfies ValidatedSourceScenario;
         byVersion.set(`${source.scenarioId}:${source.dataVersion}`, source);
       }
     }
     return [...byVersion.values()];
   }, [practiceTrackCatalog]);
+  const validatedPracticeSchedules = useMemo(
+    () =>
+      drillCatalog.flatMap((definition): ValidatedPracticeSchedule[] => {
+        const matchingScenario = scenarios.find(
+          (candidate) => candidate.meta.id === definition.scenarioId,
+        );
+        if (!matchingScenario) return [];
+        return [
+          {
+            scenarioId: matchingScenario.meta.id,
+            dataVersion: matchingScenario.meta.dataVersion ?? null,
+            drillId: definition.id,
+            definitionVersion: definition.definitionVersion,
+            rubricVersion: definition.rubricVersion,
+            rubricFingerprint: drillRubricFingerprint(definition.rubric),
+            checkpointScheduleFingerprint:
+              drillCheckpointScheduleFingerprint(
+                buildDrillCheckpointSchedule(definition, matchingScenario),
+              ),
+            mode: definition.mode,
+          },
+        ];
+      }),
+    [drillCatalog, scenarios],
+  );
   const evidenceProfile = useMemo(
-    () => buildEvidenceProfile(practiceLedger, validatedSourceScenarios),
-    [practiceLedger, validatedSourceScenarios],
+    () =>
+      buildEvidenceProfile(
+        practiceLedger,
+        validatedSourceScenarios,
+        validatedPracticeSchedules,
+      ),
+    [
+      practiceLedger,
+      validatedPracticeSchedules,
+      validatedSourceScenarios,
+    ],
   );
   const practiceTrackProgressEntries = useMemo(
     () =>
@@ -318,20 +467,108 @@ export default function App() {
   }, [libraryOpen, report]);
 
   useEffect(() => {
-    if (!report) return;
-    const recorded = recordCompletedRun({
-      report,
-      runInstanceId,
-      mode,
-      brokerMode,
-      currency: scenario.meta.baseCurrency,
-      pricePrecision: primaryPricePrecision,
-    });
-    setRunHistory(recorded.history);
-    setPracticeLedger(
-      recordPracticeLedgerEntry(recorded.run, report.practiceAssessment),
-    );
+    let cancelled = false;
+    void withPracticeArchiveMutationLock(() =>
+      loadStoredPracticeArchiveData(),
+    )
+      .then((stored) => {
+        if (cancelled) return;
+        setRunHistory(stored.runs);
+        setPracticeLedger(stored.ledger);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setArchiveMessage(
+          error instanceof Error
+            ? error.message
+            : "Legacy practice history could not be migrated safely.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshPracticeArchive = useCallback(async (): Promise<void> => {
+    try {
+      const refreshed = await withPracticeArchiveMutationLock(() => ({
+        damage: inspectStoredPracticeArchiveDamage(),
+        archive: loadStoredPracticeArchiveData(undefined, {
+          migrateLegacy: false,
+        }),
+      }));
+      setRunHistory(refreshed.archive.runs);
+      setPracticeLedger(refreshed.archive.ledger);
+      setDamagedArchiveBytes(
+        refreshed.damage.damaged ? refreshed.damage.serialized : undefined,
+      );
+      setArchiveMessage(undefined);
+    } catch (error) {
+      setArchiveMessage(
+        error instanceof Error
+          ? error.message
+          : "Browser practice history could not be refreshed safely.",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (
+        event.key !== null &&
+        event.key !== PRACTICE_ARCHIVE_STORAGE_KEY &&
+        event.key !== LEGACY_RUN_HISTORY_STORAGE_KEY &&
+        event.key !== LEGACY_PRACTICE_LEDGER_STORAGE_KEY
+      ) {
+        return;
+      }
+      void refreshPracticeArchive();
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [refreshPracticeArchive]);
+
+  const saveCurrentReport = useCallback(async (): Promise<boolean> => {
+    if (!report) return false;
+    const attempt = reportSaveAttemptRef.current + 1;
+    reportSaveAttemptRef.current = attempt;
+    setReportArchiveSaving(true);
+    try {
+      const recorded = await withPracticeArchiveMutationLock(() =>
+        recordCompletedPracticeRunAtomically({
+          report,
+          runInstanceId,
+          mode,
+          brokerMode,
+          brokerFingerprint: brokerConfigFingerprint(broker),
+          currency: scenario.meta.baseCurrency,
+          pricePrecision: primaryPricePrecision,
+        }),
+      );
+      setRunHistory(recorded.runs);
+      setPracticeLedger(recorded.ledger);
+      if (reportSaveAttemptRef.current === attempt) {
+        setArchiveMessage(undefined);
+        setReportArchiveWarning(undefined);
+      }
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Completed replay could not be saved.";
+      if (reportSaveAttemptRef.current === attempt) {
+        setArchiveMessage(message);
+        setReportArchiveWarning(message);
+      }
+      return false;
+    } finally {
+      if (reportSaveAttemptRef.current === attempt) {
+        setReportArchiveSaving(false);
+      }
+    }
   }, [
+    broker,
     brokerMode,
     mode,
     primaryPricePrecision,
@@ -340,7 +577,13 @@ export default function App() {
     scenario.meta.baseCurrency,
   ]);
 
-  const tradablePrice = snapshot.tradablePrices[0];
+  useEffect(() => {
+    if (report) void saveCurrentReport();
+  }, [report, saveCurrentReport]);
+
+  const tradablePrice = snapshot.tradablePrices.find(
+    (price) => price.symbol === primarySymbol,
+  );
   const currency = scenario.meta.baseCurrency;
   const auditEvents = useMemo(
     () => snapshot.auditEvents ?? [],
@@ -369,15 +612,28 @@ export default function App() {
     (order) =>
       order.status === "pending" || order.status === "partially_filled",
   ).length;
-  const sessionHasProgress =
-    snapshot.currentIndex > 0 ||
-    fills.length > 0 ||
-    orders.length > 0 ||
-    journal.length > 0 ||
-    auditEvents.length > 0 ||
-    status === "finished";
+  const sessionHasProgress = sessionHasMeaningfulProgress({
+    currentIndex: snapshot.currentIndex,
+    fills,
+    orders,
+    journal,
+    auditEvents,
+    status,
+    initialDrillPlan,
+    drillCheckpointResponses,
+    drillRuleViolations,
+  });
   const restrictedReplay =
     status !== "finished" && isRestrictedScenarioMode(mode);
+  const restrictedAssetTokens = useMemo(
+    () => assetMaskTokens(scenario),
+    [scenario],
+  );
+  const restrictedSymbolLabel = useCallback(
+    (symbol: string): string =>
+      hiddenAssetLabel(symbol, primarySymbol, scenario.meta.symbols),
+    [primarySymbol, scenario.meta.symbols],
+  );
   const displayActiveDrill = useMemo(
     () =>
       activeDrill && restrictedReplay
@@ -411,89 +667,75 @@ export default function App() {
       restrictedReplay
         ? visibleEventsChronological.map((event) => ({
             ...event,
-            title: maskAssetText(
-              event.title,
-              primarySymbol,
-              primaryInstrument?.name,
-            ),
-            summary: maskAssetText(
-              event.summary,
-              primarySymbol,
-              primaryInstrument?.name,
-            ),
-            affectedSymbols: event.affectedSymbols.map((symbol) =>
-              symbol === primarySymbol ? "Primary asset" : symbol,
-            ),
+            title: maskAssetText(event.title, restrictedAssetTokens),
+            summary: maskAssetText(event.summary, restrictedAssetTokens),
+            affectedSymbols: event.affectedSymbols.map(restrictedSymbolLabel),
             source: event.source
-              ? maskAssetText(
-                  event.source,
-                  primarySymbol,
-                  primaryInstrument?.name,
-                )
+              ? maskAssetText(event.source, restrictedAssetTokens)
               : undefined,
             sourceUrl: undefined,
           }))
         : visibleEventsChronological,
     [
-      primaryInstrument?.name,
-      primarySymbol,
+      restrictedAssetTokens,
       restrictedReplay,
+      restrictedSymbolLabel,
       visibleEventsChronological,
     ],
   );
   const displayFills = useMemo(
     () =>
       restrictedReplay
-        ? fills.map((fill) => ({ ...fill, symbol: "Primary asset" }))
+        ? fills.map((fill) => ({
+            ...fill,
+            symbol: restrictedSymbolLabel(fill.symbol),
+          }))
         : fills,
-    [fills, restrictedReplay],
+    [fills, restrictedReplay, restrictedSymbolLabel],
   );
   const displayOrders = useMemo(
     () =>
       restrictedReplay
         ? orders.map((order) => ({
             ...order,
-            symbol: "Primary asset",
+            symbol: restrictedSymbolLabel(order.symbol),
             note: order.note
-              ? maskAssetText(
-                  order.note,
-                  primarySymbol,
-                  primaryInstrument?.name,
-                )
+              ? maskAssetText(order.note, restrictedAssetTokens)
               : undefined,
           }))
         : orders,
-    [orders, primaryInstrument?.name, primarySymbol, restrictedReplay],
+    [orders, restrictedAssetTokens, restrictedReplay, restrictedSymbolLabel],
   );
   const displayJournal = useMemo(
     () =>
       restrictedReplay
         ? journal.map((entry) => ({
             ...entry,
-            symbol: entry.symbol ? "Primary asset" : undefined,
-            note: maskAssetText(
-              entry.note,
-              primarySymbol,
-              primaryInstrument?.name,
-            ),
+            symbol: entry.symbol
+              ? restrictedSymbolLabel(entry.symbol)
+              : undefined,
+            note: maskAssetText(entry.note, restrictedAssetTokens),
           }))
         : journal,
-    [journal, primaryInstrument?.name, primarySymbol, restrictedReplay],
+    [journal, restrictedAssetTokens, restrictedReplay, restrictedSymbolLabel],
   );
   const displayAuditEvents = useMemo(
     () =>
       restrictedReplay
         ? auditEvents.map((event) => ({
             ...event,
-            symbol: event.symbol ? "Primary asset" : undefined,
-            message: maskAssetText(
-              event.message,
-              primarySymbol,
-              primaryInstrument?.name,
-            ),
+            symbol: event.symbol
+              ? restrictedSymbolLabel(event.symbol)
+              : undefined,
+            message: maskAssetText(event.message, restrictedAssetTokens),
           }))
         : auditEvents,
-    [auditEvents, primaryInstrument?.name, primarySymbol, restrictedReplay],
+    [
+      auditEvents,
+      restrictedAssetTokens,
+      restrictedReplay,
+      restrictedSymbolLabel,
+    ],
   );
   const scenarioEventCoverage = useMemo(
     () =>
@@ -516,11 +758,19 @@ export default function App() {
   };
 
   const resetSession = () => {
+    if (reportArchiveSaving) {
+      setArchiveMessage(
+        "Wait for the completed replay to finish saving before replacing it.",
+      );
+      return;
+    }
     setReportOpen(false);
     setLibraryOpen(false);
     setLibraryCanClose(false);
     setPendingConfirmation(undefined);
     setSessionMessage(undefined);
+    setLabNotice(undefined);
+    setReportArchiveWarning(undefined);
     reset();
     setSessionEpoch((epoch) => epoch + 1);
   };
@@ -529,26 +779,39 @@ export default function App() {
     scenarioId: string,
     nextMode: ScenarioMode,
     drillId?: string,
+    replayContext?: PracticeStartContext,
+    startNotice?: string,
   ) => {
+    if (reportArchiveSaving) {
+      setScenarioMessage({
+        kind: "error",
+        text: "Wait for the completed replay to finish saving before starting another replay.",
+      });
+      setLibraryOpen(true);
+      return;
+    }
     setReportOpen(false);
     setLibraryOpen(false);
     setLibraryCanClose(false);
     setPendingConfirmation(undefined);
     setSessionMessage(undefined);
-    if (drillId) {
-      const result = startPractice(scenarioId, drillId);
-      if (!result.ok) {
-        setScenarioMessage({
-          kind: "error",
-          text: result.message ?? "Unable to start this practice drill.",
-        });
-        setLibraryOpen(true);
-        return;
-      }
-    } else {
-      selectScenario(scenarioId);
-      setScenarioMode(nextMode);
+    setReportArchiveWarning(undefined);
+    const result = drillId
+      ? startPractice(scenarioId, drillId, replayContext)
+      : startReplay(scenarioId, nextMode, replayContext);
+    if (!result.ok) {
+      setScenarioMessage({
+        kind: "error",
+        text:
+          result.message ??
+          (drillId
+            ? "Unable to start this practice drill."
+            : "Unable to start this replay."),
+      });
+      setLibraryOpen(true);
+      return;
     }
+    setLabNotice(startNotice);
     setSessionEpoch((epoch) => epoch + 1);
   };
 
@@ -562,6 +825,9 @@ export default function App() {
     scenarioId: string,
     nextMode: ScenarioMode,
     drillId?: string,
+    replayContext?: PracticeStartContext,
+    concealConfirmationIdentity = false,
+    startNotice?: string,
   ) => {
     const candidate = scenarios.find(
       (candidate) => candidate.meta.id === scenarioId,
@@ -573,10 +839,22 @@ export default function App() {
       });
       return;
     }
-    const title = candidate.meta.title;
+    if (
+      replayContext &&
+      !candidate.meta.supportedModes.includes(nextMode)
+    ) {
+      setScenarioMessage({
+        kind: "error",
+        text: "That archived replay mode is no longer available for the current scenario package.",
+      });
+      return;
+    }
     const resolvedMode = candidate.meta.supportedModes.includes(nextMode)
       ? nextMode
       : (candidate.meta.supportedModes[0] ?? "explorer");
+    const title = concealConfirmationIdentity
+      ? `surprise ${scenarioModeLabel(resolvedMode)}`
+      : candidate.meta.title;
     const definition = drillId
       ? getDrillForScenario(drillId, candidate)
       : undefined;
@@ -590,6 +868,20 @@ export default function App() {
       });
       return;
     }
+    if (
+      replayContext &&
+      !scenarioDataVersionsEqual(
+        candidate.meta.id,
+        candidate.meta.dataVersion,
+        replayContext.scenarioDataVersion,
+      )
+    ) {
+      setScenarioMessage({
+        kind: "error",
+        text: "That prepared replay context no longer matches the current scenario data. Review the saved run or coach assignment again before starting.",
+      });
+      return;
+    }
     if (status === "playing") pause();
     if (sessionHasProgress) {
       setPendingConfirmation({
@@ -598,59 +890,161 @@ export default function App() {
         title,
         mode: resolvedMode,
         drillId,
+        replayContext,
+        startNotice,
       });
     } else {
-      startScenario(scenarioId, definition?.mode ?? resolvedMode, drillId);
+      startScenario(
+        scenarioId,
+        definition?.mode ?? resolvedMode,
+        drillId,
+        replayContext,
+        startNotice,
+      );
     }
   };
 
-  const confirmPendingAction = () => {
-    if (!pendingConfirmation) return;
-    switch (pendingConfirmation.kind) {
+  const requestSurpriseStart = (nextMode: "blind" | "challenge") => {
+    const candidates = scenarios.filter(
+      (candidate) =>
+        !isUserScenario(candidate.meta.id) &&
+        candidate.meta.supportedModes.includes(nextMode),
+    );
+    if (candidates.length === 0) {
+      setScenarioMessage({
+        kind: "error",
+        text: `No bundled lab supports ${scenarioModeLabel(nextMode)}. Imported packages are not eligible for identity-masked surprise selection.`,
+      });
+      return;
+    }
+    const randomIndex = Math.min(
+      candidates.length - 1,
+      Math.floor(Math.random() * candidates.length),
+    );
+    requestStart(
+      candidates[randomIndex].meta.id,
+      nextMode,
+      undefined,
+      undefined,
+      true,
+    );
+  };
+
+  const applyRestoredSession = (serialized: string): void => {
+    const result = importSession(serialized);
+    if (result.ok) {
+      setReportOpen(false);
+      setLibraryCanClose(false);
+      setSessionEpoch((epoch) => epoch + 1);
+      setSessionMessage("Saved session restored.");
+    } else {
+      setSessionMessage(result.message ?? "Unable to restore this session.");
+    }
+  };
+
+  const confirmPendingAction = async (): Promise<void> => {
+    const pending = pendingConfirmation;
+    if (!pending || pendingConfirmationBusy) return;
+    switch (pending.kind) {
       case "reset":
         resetSession();
         break;
       case "start":
         startScenario(
-          pendingConfirmation.scenarioId,
-          pendingConfirmation.mode,
-          pendingConfirmation.drillId,
+          pending.scenarioId,
+          pending.mode,
+          pending.drillId,
+          pending.replayContext,
+          pending.startNotice,
         );
         break;
       case "clear-history":
-        clearRunHistory();
-        clearPracticeLedger();
-        setRunHistory([]);
-        setPracticeLedger([]);
-        setHistoricalRun(undefined);
+        setPendingConfirmationBusy(true);
+        try {
+          const cleared = await withPracticeArchiveMutationLock(() =>
+            clearPracticeArchiveAtomically(),
+          );
+          setRunHistory(cleared.runs);
+          setPracticeLedger(cleared.ledger);
+          setHistoricalRun(undefined);
+          setArchiveMessage("Practice history was cleared from this browser.");
+        } catch (error) {
+          setArchiveMessage(
+            error instanceof Error
+              ? error.message
+              : "Practice history could not be cleared.",
+          );
+        }
+        setPendingConfirmationBusy(false);
+        setPendingConfirmation(undefined);
+        break;
+      case "discard-damaged-archive":
+        setPendingConfirmationBusy(true);
+        try {
+          const cleared = await withPracticeArchiveMutationLock(() =>
+            discardDamagedPracticeArchiveAtomically(),
+          );
+          setRunHistory(cleared.runs);
+          setPracticeLedger(cleared.ledger);
+          setHistoricalRun(undefined);
+          setDamagedArchiveBytes(undefined);
+          setArchiveMessage(
+            "Damaged local history was removed. New replays and archive imports can now be saved.",
+          );
+        } catch (error) {
+          setArchiveMessage(
+            error instanceof Error
+              ? error.message
+              : "Damaged local history could not be removed.",
+          );
+        }
+        setPendingConfirmationBusy(false);
+        setPendingConfirmation(undefined);
+        break;
+      case "remove-run":
+        setPendingConfirmationBusy(true);
+        await removeArchivedRun(pending.run);
+        setPendingConfirmationBusy(false);
         setPendingConfirmation(undefined);
         break;
       case "remove-scenario": {
-        const removed = removeUserScenario(pendingConfirmation.scenarioId);
-        if (!removed) {
+        const removal = removeUserScenario(pending.scenarioId);
+        if (!removal.ok) {
           setScenarioMessage({
             kind: "error",
-            text: "That imported scenario is no longer available in this browser.",
+            text: removal.message,
           });
         } else {
-          if (scenario.meta.id === pendingConfirmation.scenarioId) {
+          if (scenario.meta.id === pending.scenarioId) {
             selectScenario(defaultScenarioId);
             setSessionEpoch((epoch) => epoch + 1);
           }
           setScenarios(listScenarios());
           setScenarioMessage({
             kind: "status",
-            text: `${pendingConfirmation.title} was removed from this browser.`,
+            text: removal.persisted
+              ? `${pending.title} was removed from this browser.`
+              : `${pending.title} was removed for this visit, but browser storage could not be updated; it may return after reload.`,
           });
         }
         setPendingConfirmation(undefined);
         break;
       }
+      case "restore-session":
+        applyRestoredSession(pending.serialized);
+        setPendingConfirmation(undefined);
+        break;
     }
   };
 
   const openLibrary = () => {
     if (restrictedReplay) return;
+    if (reportArchiveSaving || reportArchiveWarning) {
+      setArchiveMessage(
+        "Save the completed replay or download its recovery archive before leaving the report.",
+      );
+      return;
+    }
     if (status === "playing") pause();
     setReportOpen(false);
     setLibraryCanClose(true);
@@ -664,6 +1058,12 @@ export default function App() {
   };
 
   const chooseNextPractice = () => {
+    if (reportArchiveSaving || reportArchiveWarning) {
+      setArchiveMessage(
+        "Save the completed replay or download its recovery archive before choosing another practice.",
+      );
+      return;
+    }
     setReportOpen(false);
     setHistoricalRun(undefined);
     setLibraryCanClose(false);
@@ -682,19 +1082,89 @@ export default function App() {
     setSessionMessage("Session file exported.");
   };
 
-  const downloadRunHistory = () => {
-    const serialized = exportPracticeArchive(runHistory, practiceLedger);
-    const blob = new Blob([serialized], { type: "application/json" });
+  const downloadRunHistory = async () => {
+    if (reportArchiveSaving) {
+      setArchiveMessage(
+        "Wait for the completed replay to finish saving before exporting practice history.",
+      );
+      return;
+    }
+    try {
+      const current = await withPracticeArchiveMutationLock(() =>
+        loadStoredPracticeArchiveData(undefined, { migrateLegacy: false }),
+      );
+      setRunHistory(current.runs);
+      setPracticeLedger(current.ledger);
+      const serialized = exportPracticeArchive(current.runs, current.ledger);
+      const blob = new Blob([serialized], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "market-time-machine-practice-archive-v2.json";
+      link.click();
+      URL.revokeObjectURL(url);
+      setScenarioMessage({
+        kind: "status",
+        text: "Practice archive exported with recent reports and compact evidence.",
+      });
+    } catch (error) {
+      setArchiveMessage(
+        error instanceof Error
+          ? error.message
+          : "Practice archive could not be exported safely.",
+      );
+    }
+  };
+
+  const downloadCurrentRecoveryArchive = () => {
+    if (!report) return;
+    try {
+      const run = buildCompletedRun({
+        report,
+        runInstanceId,
+        mode,
+        brokerMode,
+        brokerFingerprint: brokerConfigFingerprint(broker),
+        currency,
+        pricePrecision: primaryPricePrecision,
+      });
+      const ledgerEntry = derivePracticeLedgerEntry(
+        run,
+        run.report.practiceAssessment,
+      );
+      const serialized = exportPracticeArchive([run], [ledgerEntry]);
+      const blob = new Blob([serialized], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "market-time-machine-practice-recovery-v2.json";
+      link.click();
+      URL.revokeObjectURL(url);
+      setReportArchiveWarning(undefined);
+      setArchiveMessage(
+        "Importable recovery archive downloaded. You can now leave this report without losing the completed replay.",
+      );
+    } catch (error) {
+      setArchiveMessage(
+        error instanceof Error
+          ? error.message
+          : "Recovery archive could not be created.",
+      );
+    }
+  };
+
+  const downloadDamagedArchive = () => {
+    if (damagedArchiveBytes === undefined) return;
+    const blob = new Blob([damagedArchiveBytes], {
+      type: "application/octet-stream",
+    });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "market-time-machine-practice-archive-v2.json";
+    link.download = "market-time-machine-damaged-practice-archive.txt";
     link.click();
     URL.revokeObjectURL(url);
-    setScenarioMessage({
-      kind: "status",
-      text: "Practice archive exported with recent reports and compact evidence.",
-    });
+    setArchiveMessage("Damaged archive bytes downloaded without modification.");
   };
 
   const importPracticeArchive = async (
@@ -709,12 +1179,15 @@ export default function App() {
     }
     try {
       const imported = parsePracticeArchive(await file.text());
-      const merged = mergePracticeArchive(
-        { runs: runHistory, ledger: practiceLedger },
-        imported,
-      );
-      const { runs: savedRuns, ledger: savedLedger } =
-        persistPracticeArchiveAtomically(merged);
+      const { saved, merged } = await withPracticeArchiveMutationLock(() => {
+        const current = loadStoredPracticeArchiveData();
+        const mergedArchive = mergePracticeArchive(current, imported);
+        return {
+          saved: persistPracticeArchiveAtomically(mergedArchive),
+          merged: mergedArchive,
+        };
+      });
+      const { runs: savedRuns, ledger: savedLedger } = saved;
       setRunHistory(savedRuns);
       setPracticeLedger(savedLedger);
       const conflictNote =
@@ -731,6 +1204,82 @@ export default function App() {
           : "Unable to import this practice archive.",
       );
     }
+  };
+
+  const removeArchivedRun = async (run: CompletedRun): Promise<void> => {
+    try {
+      const result = await withPracticeArchiveMutationLock(() =>
+        removePracticeArchiveRunAtomically(run.id),
+      );
+      setRunHistory(result.runs);
+      setPracticeLedger(result.ledger);
+      if (historicalRun?.id === run.id) setHistoricalRun(undefined);
+      setArchiveMessage(
+        result.removedRunCount > 0 || result.removedLedgerCount > 0
+          ? `${run.scenarioTitle} was removed from practice history.`
+          : "That completed replay was already absent from browser storage.",
+      );
+    } catch (error) {
+      setArchiveMessage(
+        error instanceof Error
+          ? error.message
+          : "Completed replay could not be removed.",
+      );
+    }
+  };
+
+  const replayArchivedRun = (run: CompletedRun) => {
+    const scenarioDataVersion = run.report.provenance?.dataVersion ?? null;
+    const replayContext: PracticeStartContext | undefined =
+      run.brokerFingerprint && scenarioDataVersion !== null
+        ? {
+            scenarioDataVersion,
+            brokerMode: run.brokerMode,
+            brokerFingerprint: run.brokerFingerprint,
+          }
+        : undefined;
+    const archivedDefinition = run.report.practiceDrill?.definition;
+    const archivedAssessment = run.report.practiceAssessment;
+    const retainedExactPracticeContext =
+      replayContext &&
+      archivedDefinition &&
+      archivedAssessment?.checkpointScheduleFingerprint &&
+      archivedAssessment.drillId === archivedDefinition.id
+        ? {
+            ...replayContext,
+            drillIdentity: archivedDrillIdentity(
+              archivedDefinition,
+              scenarioDataVersion,
+            ),
+            checkpointScheduleFingerprint:
+              archivedAssessment.checkpointScheduleFingerprint,
+          }
+        : undefined;
+    const exactPracticeContext =
+      retainedExactPracticeContext &&
+      archivedDefinition &&
+      archivedPracticeContextMatchesCurrentDrill(
+        run.scenarioId,
+        archivedDefinition.id,
+        retainedExactPracticeContext,
+      )
+        ? retainedExactPracticeContext
+        : undefined;
+    const startNotice = retainedExactPracticeContext && !exactPracticeContext
+      ? "The archived drill definition or checkpoint schedule has changed. A fresh unassessed replay started with the archived scenario and broker identity; it will not count as an exact drill repeat."
+      : archivedAssessment && !retainedExactPracticeContext
+        ? "This archived practice does not retain a complete exact drill identity. A fresh unassessed replay started instead of silently substituting a newer drill."
+        : !replayContext
+          ? "This legacy run does not retain an exact data-and-broker identity. The replay uses the current scenario package and scenario broker settings, so it is a fresh unassessed context rather than an exact repeat."
+          : undefined;
+    requestStart(
+      run.scenarioId,
+      run.mode,
+      exactPracticeContext ? archivedDefinition?.id : undefined,
+      exactPracticeContext ?? replayContext,
+      false,
+      startNotice,
+    );
   };
 
   const requestRemoveScenario = (scenarioId: string, title: string) => {
@@ -753,14 +1302,15 @@ export default function App() {
       return;
     }
     try {
-      const result = importSession(await file.text());
-      if (result.ok) {
-        setReportOpen(false);
-        setLibraryCanClose(false);
-        setSessionEpoch((epoch) => epoch + 1);
-        setSessionMessage("Saved session restored.");
+      const serialized = await file.text();
+      if (sessionHasMeaningfulProgress(useSessionStore.getState())) {
+        setPendingConfirmation({
+          kind: "restore-session",
+          serialized,
+          fileName: file.name || "this backup",
+        });
       } else {
-        setSessionMessage(result.message ?? "Unable to restore this session.");
+        applyRestoredSession(serialized);
       }
     } catch {
       setSessionMessage("Unable to read this session file.");
@@ -809,11 +1359,21 @@ export default function App() {
   const pendingDialogCopy = pendingConfirmation
     ? confirmationCopy(pendingConfirmation)
     : undefined;
+  const librarySessionMessage = [persistenceHealth?.message, sessionMessage]
+    .filter((message, index, messages): message is string =>
+      Boolean(message) && messages.indexOf(message) === index,
+    )
+    .join(" ") || undefined;
   const pendingDialog = pendingDialogCopy ? (
     <ConfirmationDialog
       {...pendingDialogCopy}
-      onConfirm={confirmPendingAction}
-      onCancel={() => setPendingConfirmation(undefined)}
+      busy={pendingConfirmationBusy}
+      onConfirm={() => {
+        void confirmPendingAction();
+      }}
+      onCancel={() => {
+        if (!pendingConfirmationBusy) setPendingConfirmation(undefined);
+      }}
     />
   ) : null;
 
@@ -832,27 +1392,28 @@ export default function App() {
           history={
             <RunHistory
                 runs={runHistory}
+                archiveBusy={reportArchiveSaving}
                 hasArchiveData={
                   runHistory.length > 0 || practiceLedger.length > 0
                 }
+                archiveDamaged={damagedArchiveBytes !== undefined}
                 onViewReport={setHistoricalRun}
                 onReplay={(run) => {
                   setHistoricalRun(undefined);
-                  requestStart(
-                    run.scenarioId,
-                    run.mode,
-                    run.report.practiceAssessment?.drillId,
-                  );
+                  replayArchivedRun(run);
                 }}
-                onRemove={(run) => {
-                  setRunHistory(removeCompletedRun(run.id));
-                  setPracticeLedger(removePracticeLedgerEntry(run.id));
-                }}
+                onRemove={(run) =>
+                  setPendingConfirmation({ kind: "remove-run", run })
+                }
                 onExport={downloadRunHistory}
+                onExportDamaged={downloadDamagedArchive}
                 onImport={importPracticeArchive}
                 importMessage={archiveMessage}
                 onClear={() =>
                   setPendingConfirmation({ kind: "clear-history" })
+                }
+                onDiscardDamaged={() =>
+                  setPendingConfirmation({ kind: "discard-damaged-archive" })
                 }
               />
           }
@@ -861,7 +1422,7 @@ export default function App() {
           evidenceProfile={evidenceProfile}
           practiceTracks={practiceTrackCatalog}
           practiceTrackProgress={practiceTrackProgressEntries}
-          sessionMessage={sessionMessage}
+          sessionMessage={librarySessionMessage}
           scenarioMessage={scenarioMessage?.text}
           scenarioMessageKind={scenarioMessage?.kind}
           userScenarioIds={scenarios
@@ -869,6 +1430,7 @@ export default function App() {
             .map((candidate) => candidate.meta.id)}
           onContinue={continueSession}
           onStart={requestStart}
+          onStartSurprise={requestSurpriseStart}
           onClose={
             libraryCanClose
               ? () => {
@@ -887,8 +1449,12 @@ export default function App() {
             if (source) setHistoricalRun(source);
           }}
           onClearSavedSession={() => {
-            clearSavedSession();
-            setSessionMessage("Browser save cleared for this session.");
+            const result = clearSavedSession();
+            setSessionMessage(
+              result.ok
+                ? "Browser save cleared for this session. The active in-memory replay remains open until you replace or close it."
+                : (result.message ?? "Browser save could not be cleared."),
+            );
           }}
         />
         {historicalRun ? (
@@ -899,6 +1465,7 @@ export default function App() {
               historicalRun.report,
               historicalRun.mode,
               historicalRun.brokerMode,
+              historicalRun.brokerFingerprint,
               practiceLedger,
             )}
             currency={
@@ -914,11 +1481,7 @@ export default function App() {
             onReset={() => {
               const run = historicalRun;
               setHistoricalRun(undefined);
-              requestStart(
-                run.scenarioId,
-                run.mode,
-                run.report.practiceAssessment?.drillId,
-              );
+              replayArchivedRun(run);
             }}
           />
         ) : null}
@@ -977,7 +1540,7 @@ export default function App() {
             </div>
             <div className="scenario-subtitle">
               {restrictedReplay
-                ? "Scenario title, asset label, and ending stay hidden until completion. Local anti-cheat mode."
+                ? "Scenario title, asset label, and ending stay hidden until completion. Local self-test; bundled future data is not technically protected."
                 : scenario.meta.subtitle}
             </div>
           </div>
@@ -1038,6 +1601,20 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {persistenceHealth ? (
+        <div
+          className={`global-session-notice ${persistenceHealth.kind}`}
+          role={persistenceHealth.kind === "error" ? "alert" : "status"}
+        >
+          {persistenceHealth.message}
+        </div>
+      ) : null}
+      {labNotice ? (
+        <div className="global-session-notice" role="status">
+          {labNotice}
+        </div>
+      ) : null}
 
       {displayActiveDrill ? (
         <div className="active-drill-slot">
@@ -1118,6 +1695,7 @@ export default function App() {
         <section className="right-rail">
           <TradePanel
             key={`${scenario.meta.id}:${sessionEpoch}`}
+            draftKey={`${runInstanceId}:${sessionEpoch}`}
             tradablePrice={tradablePrice}
             tickSize={primaryInstrument?.tickSize}
             pricePrecision={primaryPricePrecision}
@@ -1197,6 +1775,7 @@ export default function App() {
             <div className="panel-body scrollable">
               <DecisionJournal
                 key={`${scenario.meta.id}:${sessionEpoch}`}
+                draftKey={`${runInstanceId}:${sessionEpoch}`}
                 entries={displayJournal}
                 status={status}
                 onAdd={addJournalNote}
@@ -1211,8 +1790,8 @@ export default function App() {
           definition={displayActiveDrill}
           checkpoint={pendingDrillCheckpoint}
           visibleEvents={displayEventsChronological}
-          onSubmit={(action, reflection) => {
-            submitDrillCheckpoint(action, reflection);
+          onSubmit={(action, reflection, linkedEventIds) => {
+            submitDrillCheckpoint(action, reflection, linkedEventIds);
           }}
         />
       ) : null}
@@ -1220,11 +1799,18 @@ export default function App() {
       {report && reportOpen ? (
         <PostGameReport
           report={report}
+          archiveWarning={reportArchiveWarning}
+          archiveSaving={reportArchiveSaving}
+          onRetryArchive={() => {
+            void saveCurrentReport();
+          }}
+          onDownloadRecoveryArchive={downloadCurrentRecoveryArchive}
           previousComparablePracticeScore={previousComparablePracticeScore(
             runInstanceId,
             report,
             mode,
             brokerMode,
+            brokerConfigFingerprint(broker),
             practiceLedger,
           )}
           currency={currency}
@@ -1297,16 +1883,44 @@ function decimalPlacesForTickSize(tickSize?: number): number {
 
 function maskAssetText(
   value: string,
-  primarySymbol: string,
-  instrumentName?: string,
+  tokens: readonly string[],
 ): string {
-  return [primarySymbol, instrumentName]
-    .filter((token): token is string => Boolean(token))
-    .reduce(
+  return tokens.reduce(
       (masked, token) =>
         masked.replace(new RegExp(escapeRegExp(token), "gi"), "primary asset"),
       value,
     );
+}
+
+function assetMaskTokens(scenario: ScenarioPackage): string[] {
+  const tokens = new Set<string>();
+  const add = (value: string | undefined) => {
+    const normalized = value?.trim();
+    if (normalized && normalized.length >= 3) tokens.add(normalized);
+  };
+  for (const symbol of scenario.meta.symbols) add(symbol);
+  for (const instrument of scenario.instruments) {
+    add(instrument.symbol);
+    add(instrument.name);
+    add(instrument.exchange);
+    add(instrument.currency);
+    for (const fragment of instrument.name.split(/[^\p{L}\p{N}]+/u)) {
+      add(fragment);
+    }
+  }
+  return [...tokens].sort(
+    (left, right) => right.length - left.length || left.localeCompare(right),
+  );
+}
+
+function hiddenAssetLabel(
+  symbol: string,
+  primarySymbol: string,
+  scenarioSymbols: readonly string[],
+): string {
+  if (symbol === primarySymbol) return "Primary asset";
+  const index = scenarioSymbols.indexOf(symbol);
+  return index >= 0 ? `Hidden asset ${index + 1}` : "Hidden asset";
 }
 
 function escapeRegExp(value: string): string {

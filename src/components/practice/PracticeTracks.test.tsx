@@ -52,6 +52,13 @@ describe("PracticeTracks", () => {
     expect(screen.getByText("0/1")).toBeInTheDocument();
     expect(screen.getByText("Incomplete")).toBeInTheDocument();
     expect(screen.getByText(unit.scenario.dataVersion!)).toBeInTheDocument();
+    expect(
+      screen.getByText("Scenario rules · exact pinned settings"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Config v1 · display checksum [0-9a-f]{16}/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(unit.broker.fingerprint)).not.toBeInTheDocument();
     expect(screen.getByText("Source-observed market evidence")).toBeInTheDocument();
     expect(screen.getByText("Official-source publications")).toBeInTheDocument();
     expect(screen.getByText("Source reviewed")).toBeInTheDocument();

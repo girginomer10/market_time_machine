@@ -22,7 +22,8 @@ npm run check
 ```
 
 `npm run check` runs lint, tests, the production build, the restricted-data
-bundle check, and PWA asset validation. Preview the root-path build with:
+bundle check across every UTF-8 text asset regardless of extension, and PWA
+asset validation. Preview the root-path build with:
 
 ```sh
 npm run preview
@@ -50,7 +51,7 @@ offline. Browser persistence and offline files are separate stores:
 - static PWA files are in Cache Storage.
 
 See [Privacy And Local Data](privacy-and-local-data.md) for deletion and export
-details. V2 uses the `personal-decision-gym-v2` service-worker cache version so
+details. V2 uses the `personal-decision-gym-v2-2` service-worker cache version so
 older Local Lab app-shell/runtime caches are removed on activation. When cache
 behavior or a release-critical static surface changes again, bump
 `CACHE_VERSION` in `public/sw.js`.
@@ -87,29 +88,35 @@ Pages deployment as secure challenge-mode anti-cheat.
 
 ## Personal Decision Gym v2 Release Checklist
 
-- [x] `npm ci` and `npm run check` pass on a supported Node.js release.
+- [ ] `npm ci` and `npm run check` pass on a supported Node.js release.
 - [x] Every production scenario is in the explicit shipped allowlist and its
       redistribution rights have been reviewed.
 - [x] No `local-*`, generated FRED, credential, or private user-data file is in
       the production bundle.
-- [x] First load, refresh, and offline reopen are smoke-tested in a desktop
+- [ ] First load, refresh, and offline reopen are smoke-tested in a desktop
       Chromium browser on `localhost`; the responsive product flow is also
-      verified at a 390 px mobile viewport.
+      verified at a 390 px mobile viewport. Automated App/PWA coverage is
+      green, but this final live-browser pass was not rerun because no browser
+      runtime was attached to the current Codex session.
 - [x] Session export/restore pins exact scenario/drill identity, imported-lab
       removal and browser-data deletion have regression coverage, and imported
       scenario packages remain an explicit separate prerequisite.
 - [x] Event Discipline plan enforcement, checkpoint scheduling, process-only
-      assessment, and save/restore behavior have regression coverage.
+      assessment, explicit user-selected event linkage, legacy automatic-link
+      non-credit, and save/restore behavior have regression coverage.
 - [x] Compact-ledger sanitization, competency/rubric evidence grouping,
-      exact-context trends, exact-version track credit, and synthetic preview
+      rubric-content fingerprint isolation, exact-context trends, full
+      replay/drill/rubric/mode/broker track identity, and synthetic preview
       non-credit are covered by tests.
 - [x] V2 practice archive export/import is deep-validated, atomically persisted
-      with rollback, bounded to 12 full reports and 250 compact entries,
-      conflict-safe, and compatible with V1 history exports.
+      as one verified canonical envelope with rollback, bounded to 12 full
+      reports and 250 compact entries, conflict-safe, and compatible with V1
+      history exports.
 - [x] Financial-safety and data-quality language remains accurate.
 - [x] `CHANGELOG.md` reflects the release candidate.
 - [x] The ECB-based EUR/GBP and EUR/USD scenarios' sources, reuse conditions,
-      derived fields, and attribution have been reviewed for this release.
+      derived fields, attribution, content hashes, and reproducible importer
+      snapshots have been reviewed for this release.
 - [x] Synthetic QQQ/KRE practice units are visibly preview-only and cannot award
       unit or track credit.
 - [x] V2 is described as a local deliberate-practice product boundary, not as a

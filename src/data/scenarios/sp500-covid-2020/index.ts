@@ -8,6 +8,7 @@ import type {
 } from "../../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
 import { assembleScenario } from "../../../domain/scenario/loader";
+import { SP500_COVID_2020_DATA_VERSION } from "../dataVersions";
 
 const SYMBOL = "SPY";
 
@@ -33,6 +34,7 @@ const meta: ScenarioMeta = {
     "Synthetic deterministic sample prices shaped to the publicly documented U.S. equity 2020 path; raw licensed S&P DJI or ETF market data is not redistributed.",
     "Official event sources: CDC, WHO, Federal Reserve, NYSE, White House archive, U.S. Treasury, BEA, BLS, NBER, Pfizer/BioNTech.",
   ],
+  dataVersion: SP500_COVID_2020_DATA_VERSION,
   isSampleData: true,
   description:
     "Sample/demo U.S. equity scenario for practicing decisions during the COVID shock, circuit-breaker halts, emergency monetary policy, fiscal support, macro data releases, and vaccine news. Prices are synthetic and should not be used for trading decisions.",

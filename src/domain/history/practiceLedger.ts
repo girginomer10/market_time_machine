@@ -1,4 +1,8 @@
-import type { CompletedRun } from "./runHistory";
+import {
+  MAX_SAVED_RUNS,
+  isCompletedRun,
+  type CompletedRun,
+} from "./runHistory";
 import type {
   DataFidelity,
   DrillAssessment,
@@ -6,9 +10,24 @@ import type {
   DrillAssessmentComponentId,
   ScenarioMode,
 } from "../../types";
+import {
+  commitPracticeArchiveEnvelope,
+  inspectPracticeArchiveEnvelope,
+  LEGACY_PRACTICE_LEDGER_STORAGE_KEY,
+  LEGACY_RUN_HISTORY_STORAGE_KEY,
+  removeLegacyPracticeArchiveKeysBestEffort,
+} from "./practiceArchiveEnvelope";
+import {
+  assessmentMatchesCheckpointScheduleFingerprint,
+  assessmentHasConsistentRubricFingerprint,
+  completedAssessmentMatchesAggregateEvidence,
+  parseDrillCheckpointScheduleFingerprint,
+} from "../practice/drills";
+import { assertPracticeArchiveIdentityConsistency } from "./practiceArchive";
+import { isBrokerConfigFingerprint } from "../broker/executionModels";
 
 export const PRACTICE_LEDGER_STORAGE_KEY =
-  "market-time-machine.practice-ledger.v1";
+  LEGACY_PRACTICE_LEDGER_STORAGE_KEY;
 export const PRACTICE_LEDGER_FORMAT = "market-time-machine-practice-ledger";
 export const PRACTICE_LEDGER_VERSION = 1;
 export const MAX_PRACTICE_LEDGER_ENTRIES = 250;
@@ -66,18 +85,14 @@ export type PracticeLedgerEntry = {
   sampleData: boolean;
   mode: ScenarioMode;
   brokerMode: CompletedRun["brokerMode"];
+  /** Exact execution settings; absent only on legacy evidence. */
+  brokerFingerprint?: string;
   facts: PracticeRunFacts;
   /** Absent for legacy and ordinary replay runs; absence is never scored as zero. */
   assessment?: DrillAssessment;
 };
 
 type LedgerStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-
-type PracticeLedgerDocument = {
-  format: typeof PRACTICE_LEDGER_FORMAT;
-  version: typeof PRACTICE_LEDGER_VERSION;
-  entries: PracticeLedgerEntry[];
-};
 
 function browserStorage(): LedgerStorage | undefined {
   if (typeof window === "undefined") return undefined;
@@ -167,6 +182,11 @@ export function parseDrillAssessment(value: unknown): DrillAssessment | undefine
   const competencyId = optionalString(value.competencyId);
   const definitionVersion = nonNegativeInteger(value.definitionVersion);
   const rubricVersion = nonEmptyString(value.rubricVersion);
+  const rubricFingerprint = optionalString(value.rubricFingerprint);
+  const checkpointScheduleFingerprint = optionalString(
+    value.checkpointScheduleFingerprint,
+  );
+  const eventLinkageEvidenceVersion = value.eventLinkageEvidenceVersion;
   const methodology = typeof value.methodology === "string" ? value.methodology : undefined;
   const overallScore =
     value.overallScore === undefined
@@ -187,6 +207,14 @@ export function parseDrillAssessment(value: unknown): DrillAssessment | undefine
     definitionVersion === undefined ||
     definitionVersion < 1 ||
     !rubricVersion ||
+    rubricFingerprint === null ||
+    checkpointScheduleFingerprint === null ||
+    (checkpointScheduleFingerprint !== undefined &&
+      !parseDrillCheckpointScheduleFingerprint(
+        checkpointScheduleFingerprint,
+      )) ||
+    (eventLinkageEvidenceVersion !== undefined &&
+      eventLinkageEvidenceVersion !== 1) ||
     methodology === undefined ||
     (value.status !== "completed" && value.status !== "incomplete") ||
     (value.overallScore !== undefined && overallScore === undefined) ||
@@ -242,7 +270,6 @@ export function parseDrillAssessment(value: unknown): DrillAssessment | undefine
         eligibleEventCount <= 0 ||
         answeredCheckpointCount !== eligibleCheckpointCount ||
         skippedCheckpointCount !== 0 ||
-        linkedEventCount !== eligibleEventCount ||
         (components as DrillAssessmentComponent[]).some(
           (component) =>
             component.status !== "assessed" || component.score === undefined,
@@ -253,11 +280,18 @@ export function parseDrillAssessment(value: unknown): DrillAssessment | undefine
   ) {
     return undefined;
   }
-  return {
+  const assessment: DrillAssessment = {
     drillId,
     ...(competencyId ? { competencyId } : {}),
     definitionVersion,
     rubricVersion,
+    ...(rubricFingerprint ? { rubricFingerprint } : {}),
+    ...(checkpointScheduleFingerprint
+      ? { checkpointScheduleFingerprint }
+      : {}),
+    ...(eventLinkageEvidenceVersion === 1
+      ? { eventLinkageEvidenceVersion: 1 as const }
+      : {}),
     status: value.status,
     overallScore,
     methodology,
@@ -269,6 +303,14 @@ export function parseDrillAssessment(value: unknown): DrillAssessment | undefine
     linkedEventCount,
     violationCount,
   };
+  return assessmentHasConsistentRubricFingerprint(assessment) &&
+    (assessment.status !== "completed" ||
+      assessment.rubricFingerprint === undefined ||
+      completedAssessmentMatchesAggregateEvidence(assessment)) &&
+    (!assessment.checkpointScheduleFingerprint ||
+      assessmentMatchesCheckpointScheduleFingerprint(assessment))
+    ? assessment
+    : undefined;
 }
 
 function parseFacts(value: unknown): PracticeRunFacts | undefined {
@@ -340,6 +382,12 @@ export function parsePracticeLedgerEntry(
   const scenarioId = nonEmptyString(value.scenarioId);
   const scenarioTitle = nonEmptyString(value.scenarioTitle);
   const scenarioDataVersion = optionalString(value.scenarioDataVersion);
+  const brokerFingerprint =
+    value.brokerFingerprint === undefined
+      ? undefined
+      : isBrokerConfigFingerprint(value.brokerFingerprint)
+        ? value.brokerFingerprint
+        : null;
   const facts = parseFacts(value.facts);
   const parsedAssessment =
     value.assessment === undefined
@@ -362,6 +410,7 @@ export function parsePracticeLedgerEntry(
     !scenarioId ||
     !scenarioTitle ||
     scenarioDataVersion === null ||
+    brokerFingerprint === null ||
     typeof value.sampleData !== "boolean" ||
     !SCENARIO_MODES.has(value.mode as ScenarioMode) ||
     !BROKER_MODES.has(value.brokerMode as CompletedRun["brokerMode"]) ||
@@ -388,6 +437,7 @@ export function parsePracticeLedgerEntry(
     sampleData: value.sampleData,
     mode: value.mode as ScenarioMode,
     brokerMode: value.brokerMode as CompletedRun["brokerMode"],
+    brokerFingerprint,
     facts,
     // A malformed or foreign assessment is discarded without losing factual
     // legacy evidence. Unknown fields, including raw text, are never copied.
@@ -427,17 +477,18 @@ export function normalizePracticeLedgerEntries(
             : existing;
     byId.set(entry.id, preferred);
   }
-  return [...byId.values()]
-    .sort(compareNewestFirst)
-    .slice(0, MAX_PRACTICE_LEDGER_ENTRIES);
-}
-
-function documentFor(entries: PracticeLedgerEntry[]): PracticeLedgerDocument {
-  return {
-    format: PRACTICE_LEDGER_FORMAT,
-    version: PRACTICE_LEDGER_VERSION,
-    entries,
-  };
+  const retained: PracticeLedgerEntry[] = [];
+  const identities = new Set<string>();
+  for (const entry of [...byId.values()].sort(compareNewestFirst)) {
+    const aliases = [entry.id, entry.runId, entry.runInstanceId].filter(
+      (identity): identity is string => Boolean(identity),
+    );
+    if (aliases.some((identity) => identities.has(identity))) continue;
+    retained.push(entry);
+    aliases.forEach((identity) => identities.add(identity));
+    if (retained.length === MAX_PRACTICE_LEDGER_ENTRIES) break;
+  }
+  return retained;
 }
 
 export function derivePracticeLedgerEntry(
@@ -466,6 +517,7 @@ export function derivePracticeLedgerEntry(
     sampleData: run.sampleData,
     mode: run.mode,
     brokerMode: run.brokerMode,
+    brokerFingerprint: run.brokerFingerprint,
     facts: {
       executionCount,
       closedTradeCount: Math.max(0, run.closedTradeCount),
@@ -492,6 +544,37 @@ export function loadPracticeLedger(
 ): PracticeLedgerEntry[] {
   if (!storage) return [];
   try {
+    const canonicalState = inspectPracticeArchiveEnvelope(storage);
+    if (canonicalState.status === "malformed") return [];
+    if (canonicalState.status === "valid") {
+      const canonical = canonicalState.envelope;
+      if (
+        canonical.ledger.length > MAX_PRACTICE_LEDGER_ENTRIES ||
+        canonical.runs.length > MAX_SAVED_RUNS ||
+        !canonical.runs.every(isCompletedRun) ||
+        new Set(canonical.runs.map((run) => (run as CompletedRun).id)).size !==
+          canonical.runs.length
+      ) {
+        return [];
+      }
+      const parsedEntries = canonical.ledger.map((entry) =>
+        parsePracticeLedgerEntry(entry, { rejectMalformedAssessment: true }),
+      );
+      if (
+        parsedEntries.some((entry) => entry === undefined) ||
+        new Set(parsedEntries.map((entry) => entry?.id)).size !==
+          parsedEntries.length
+      ) {
+        return [];
+      }
+      const entries = parsedEntries as PracticeLedgerEntry[];
+      assertPracticeArchiveIdentityConsistency(
+        canonical.runs as CompletedRun[],
+        entries,
+        "Canonical practice archive",
+      );
+      return normalizePracticeLedgerEntries(entries);
+    }
     const serialized = storage.getItem(PRACTICE_LEDGER_STORAGE_KEY);
     if (!serialized) return [];
     const parsed: unknown = JSON.parse(serialized);
@@ -514,34 +597,115 @@ export function loadPracticeLedger(
   }
 }
 
+function storedRunCandidates(storage: LedgerStorage): unknown[] {
+  const canonicalState = inspectPracticeArchiveEnvelope(storage);
+  if (canonicalState.status === "malformed") {
+    throw new Error("Canonical practice archive is malformed.");
+  }
+  if (canonicalState.status === "valid") {
+    const canonical = canonicalState.envelope;
+    const parsedLedger = canonical.ledger.map((entry) =>
+      parsePracticeLedgerEntry(entry, { rejectMalformedAssessment: true }),
+    );
+    if (
+      canonical.runs.length > MAX_SAVED_RUNS ||
+      !canonical.runs.every(isCompletedRun) ||
+      new Set(canonical.runs.map((run) => (run as CompletedRun).id)).size !==
+        canonical.runs.length ||
+      canonical.ledger.length > MAX_PRACTICE_LEDGER_ENTRIES ||
+      parsedLedger.some((entry) => entry === undefined) ||
+      new Set(parsedLedger.map((entry) => entry?.id)).size !==
+        parsedLedger.length
+    ) {
+      throw new Error("Canonical practice archive is malformed.");
+    }
+    assertPracticeArchiveIdentityConsistency(
+      canonical.runs as CompletedRun[],
+      parsedLedger as PracticeLedgerEntry[],
+      "Canonical practice archive",
+    );
+    return canonical.runs;
+  }
+  const serialized = storage.getItem(LEGACY_RUN_HISTORY_STORAGE_KEY);
+  if (!serialized) return [];
+  try {
+    const parsed: unknown = JSON.parse(serialized);
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    return parsed
+      .filter(isCompletedRun)
+      .filter((run) => {
+        if (seen.has(run.id)) return false;
+        seen.add(run.id);
+        return true;
+      })
+      .slice(0, MAX_SAVED_RUNS);
+  } catch {
+    return [];
+  }
+}
+
 export function persistPracticeLedger(
   entries: readonly PracticeLedgerEntry[],
   storage: LedgerStorage | undefined = browserStorage(),
 ): PracticeLedgerEntry[] {
-  const retained = normalizePracticeLedgerEntries(entries);
-  if (!storage) return retained;
-  if (retained.length === 0) {
-    try {
-      storage.removeItem(PRACTICE_LEDGER_STORAGE_KEY);
-    } catch {
-      // Clearing is best effort when browser storage is unavailable.
-    }
-    return [];
-  }
+  if (!storage) return normalizePracticeLedgerEntries(entries);
   const fallback = loadPracticeLedger(storage);
+  const parsedEntries = entries.map((entry) =>
+    parsePracticeLedgerEntry(entry, { rejectMalformedAssessment: true }),
+  );
+  if (parsedEntries.some((entry) => entry === undefined)) return fallback;
+  const strictEntries = parsedEntries as PracticeLedgerEntry[];
+  try {
+    assertPracticeArchiveIdentityConsistency(
+      [],
+      strictEntries,
+      "Practice ledger write",
+    );
+  } catch {
+    return fallback;
+  }
+  const retained = normalizePracticeLedgerEntries(strictEntries);
+  let runs: unknown[];
+  try {
+    runs = storedRunCandidates(storage);
+  } catch {
+    return fallback;
+  }
   let candidate = retained;
+  const clearing = candidate.length === 0;
+  try {
+    assertPracticeArchiveIdentityConsistency(
+      runs as CompletedRun[],
+      candidate,
+      "Practice archive write",
+    );
+  } catch {
+    return fallback;
+  }
   while (candidate.length > 0) {
     try {
-      storage.setItem(
+      commitPracticeArchiveEnvelope(storage, { runs, ledger: candidate });
+      removeLegacyPracticeArchiveKeysBestEffort(storage, [
+        LEGACY_RUN_HISTORY_STORAGE_KEY,
         PRACTICE_LEDGER_STORAGE_KEY,
-        JSON.stringify(documentFor(candidate)),
-      );
+      ]);
       return candidate;
     } catch {
       candidate = candidate.slice(0, -1);
     }
   }
-  return fallback;
+  if (!clearing) return fallback;
+  try {
+    commitPracticeArchiveEnvelope(storage, { runs, ledger: [] });
+    removeLegacyPracticeArchiveKeysBestEffort(storage, [
+      LEGACY_RUN_HISTORY_STORAGE_KEY,
+      PRACTICE_LEDGER_STORAGE_KEY,
+    ]);
+    return [];
+  } catch {
+    return fallback;
+  }
 }
 
 export function reconcilePracticeLedger(
@@ -619,9 +783,5 @@ export function removePracticeLedgerEntry(
 export function clearPracticeLedger(
   storage: LedgerStorage | undefined = browserStorage(),
 ): void {
-  try {
-    storage?.removeItem(PRACTICE_LEDGER_STORAGE_KEY);
-  } catch {
-    // Clearing is best effort in privacy-restricted browsers.
-  }
+  if (storage) persistPracticeLedger([], storage);
 }

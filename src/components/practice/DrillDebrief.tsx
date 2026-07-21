@@ -43,7 +43,16 @@ function scoreLabel(score: number): string {
   return `${Math.round(score * 10) / 10}/100`;
 }
 
-function componentResult(component: DrillAssessmentComponent): string {
+function componentResult(
+  component: DrillAssessmentComponent,
+  explicitEventLinkageRecorded: boolean,
+): string {
+  if (
+    component.id === "event_linkage" &&
+    !explicitEventLinkageRecorded
+  ) {
+    return "Not assessed";
+  }
   if (component.status === "not_applicable") return "Not applicable";
   if (component.status === "insufficient_evidence" || component.score === undefined) {
     return "Not assessed";
@@ -121,8 +130,12 @@ export default function DrillDebrief({
   const checkpointTitleId = useId();
   const violationTitleId = useId();
   const componentsTitleId = useId();
+  const explicitEventLinkageRecorded =
+    assessment.eventLinkageEvidenceVersion === 1;
   const comparison = comparisonFor(
-    assessment.overallScore,
+    assessment.status === "completed" && explicitEventLinkageRecorded
+      ? assessment.overallScore
+      : undefined,
     previousComparableProcessScore,
   );
   const checkpoints = practiceDrill
@@ -147,18 +160,30 @@ export default function DrillDebrief({
           </p>
         </div>
         <span
-          className={`drill-completion-status ${assessment.status}`}
+          className={`drill-completion-status ${
+            explicitEventLinkageRecorded ? assessment.status : "incomplete"
+          }`}
           role="status"
         >
-          {assessment.status === "completed" ? "Completed" : "Incomplete"}
+          {!explicitEventLinkageRecorded
+            ? "Legacy · unassessed"
+            : assessment.status === "completed"
+              ? "Completed"
+              : "Incomplete"}
         </span>
       </header>
 
       <div className="drill-debrief-summary">
         <div className="drill-process-score">
-          <span>Overall process score</span>
+          <span>
+            {!explicitEventLinkageRecorded
+              ? "Process score"
+              : assessment.status === "completed"
+                ? "Overall process score"
+                : "Provisional process score"}
+          </span>
           <strong>
-            {assessment.overallScore === undefined
+            {!explicitEventLinkageRecorded || assessment.overallScore === undefined
               ? "Not assessed"
               : scoreLabel(assessment.overallScore)}
           </strong>
@@ -184,7 +209,9 @@ export default function DrillDebrief({
           <div>
             <dt>Linked visible events</dt>
             <dd>
-              {assessment.linkedEventCount}/{assessment.eligibleEventCount}
+              {explicitEventLinkageRecorded
+                ? `${assessment.linkedEventCount}/${assessment.eligibleEventCount}`
+                : "Not recorded"}
             </dd>
           </div>
           <div>
@@ -193,6 +220,14 @@ export default function DrillDebrief({
           </div>
         </dl>
       </div>
+
+      {!explicitEventLinkageRecorded ? (
+        <p className="drill-legacy-evidence" role="note">
+          This older attempt retained checkpoint membership but did not record
+          which events you explicitly linked to each decision. Its score is not
+          used for evidence, trends, coaching claims, or track credit.
+        </p>
+      ) : null}
 
       {practiceDrill ? (
         <>
@@ -231,6 +266,10 @@ export default function DrillDebrief({
               <ol className="drill-checkpoint-list">
                 {checkpoints.map((evidence, index) => {
                   const events = orderedCheckpointEvents(evidence);
+                  const explicitlyLinkedEventIds =
+                    evidence.response?.linkedEventIds === undefined
+                      ? undefined
+                      : new Set(evidence.response.linkedEventIds);
                   const reflection = evidence.response?.reflection?.slice(
                     0,
                     PRACTICE_DRILL_REFLECTION_MAX_LENGTH,
@@ -243,7 +282,7 @@ export default function DrillDebrief({
                             <span>Checkpoint {index + 1}</span>
                             <h4>{formatTime(evidence.checkpoint.replayTime)}</h4>
                           </div>
-                          <span>Replay step {evidence.checkpoint.replayIndex}</span>
+                          <span>Replay step {evidence.checkpoint.replayIndex + 1}</span>
                         </header>
 
                         <div className="drill-checkpoint-events">
@@ -260,6 +299,21 @@ export default function DrillDebrief({
                                     Published {formatTime(event.publishedAt)}
                                     {event.source ? ` · ${event.source}` : ""}
                                   </small>
+                                  <span
+                                    className={`drill-event-link-state ${
+                                      explicitlyLinkedEventIds === undefined
+                                        ? "legacy"
+                                        : explicitlyLinkedEventIds.has(event.id)
+                                          ? "linked"
+                                          : "reviewed"
+                                    }`}
+                                  >
+                                    {explicitlyLinkedEventIds === undefined
+                                      ? "Linkage not recorded"
+                                      : explicitlyLinkedEventIds.has(event.id)
+                                        ? "Linked to decision"
+                                        : "Reviewed, not linked"}
+                                  </span>
                                 </li>
                               ))}
                             </ul>
@@ -345,26 +399,32 @@ export default function DrillDebrief({
           <span>{assessment.components.length} components</span>
         </div>
         <ul>
-          {assessment.components.map((component) => (
-            <li key={component.id}>
+          {assessment.components.map((component) => {
+            const isAssessed =
+              component.status === "assessed" &&
+              component.score !== undefined &&
+              (component.id !== "event_linkage" ||
+                explicitEventLinkageRecorded);
+            return <li key={component.id}>
               <div className="drill-component-title">
                 <div>
                   <h4>{component.label}</h4>
                   <span>Weight {Math.round(component.weight * 100)}%</span>
                 </div>
                 <strong
-                  className={
-                    component.status === "assessed" && component.score !== undefined
-                      ? "assessed"
-                      : "unassessed"
-                  }
+                  className={isAssessed ? "assessed" : "unassessed"}
                 >
-                  {componentResult(component)}
+                  {componentResult(component, explicitEventLinkageRecorded)}
                 </strong>
               </div>
-              <p>{component.evidence}</p>
+              <p>
+                {component.id === "event_linkage" &&
+                !explicitEventLinkageRecorded
+                  ? "Explicit event-link selections were not recorded for this legacy attempt."
+                  : component.evidence}
+              </p>
             </li>
-          ))}
+          })}
         </ul>
       </section>
 

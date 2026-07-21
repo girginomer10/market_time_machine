@@ -9,12 +9,10 @@ export type OverlayMarker = {
 };
 
 function eventIndex(candles: Candle[], event: MarketEvent): number {
-  let result = -1;
   for (let i = 0; i < candles.length; i++) {
-    if (candles[i].closeTime <= event.publishedAt) result = i;
-    else break;
+    if (candles[i].closeTime >= event.publishedAt) return i;
   }
-  return result < 0 ? 0 : result;
+  return candles.length - 1;
 }
 
 export function buildOverlayMarkers(

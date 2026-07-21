@@ -5,6 +5,7 @@ import type {
   ScenarioPackage,
 } from "../../../types";
 import sourceData from "./ecb-eurgbp.json";
+import { EURGBP_BREXIT_2016_DATA_VERSION } from "../dataVersions";
 
 const SYMBOL = "EURGBP";
 
@@ -161,7 +162,7 @@ export const eurGbpBrexit2016Scenario: ScenarioPackage = {
       "Official UK Government referendum publications",
       "Official Bank of England policy publications",
     ],
-    dataVersion: `ECB EXR ${sourceData.seriesKey}; retrieved ${sourceData.retrievedAt}`,
+    dataVersion: EURGBP_BREXIT_2016_DATA_VERSION,
     sourceManifest: [
       "src/data/scenarios/eurgbp-brexit-2016/ecb-eurgbp.json",
       "scripts/import-ecb-eurgbp.mjs",
@@ -184,6 +185,8 @@ export const eurGbpBrexit2016Scenario: ScenarioPackage = {
     derivedFields: [
       "Open, high, and low repeat the single daily reference observation",
       "Volume is unavailable and set to zero",
+      "Candle open/close times use a deterministic 00:00Z-15:00Z replay window because the ECB source observation is date-only",
+      "Benchmark timestamps use the same derived 15:00Z replay close",
     ],
   },
   instruments: [

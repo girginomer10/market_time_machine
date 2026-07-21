@@ -4,6 +4,7 @@
   "apiUrl": "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?startPeriod=2020-02-03&endPeriod=2020-06-30&format=csvdata",
   "licenseUrl": "https://www.ecb.europa.eu/stats/ecb_statistics/governance_and_quality_framework/html/usage_policy.en.html",
   "retrievedAt": "2026-07-14T00:00:00.000Z",
+  "contentSha256": "3ce0c0483a1204994bdfbc44be48b5c4351e1e84fec9adefd2e6bf94b14587d9",
   "observationCount": 104,
   "observations": [
     {

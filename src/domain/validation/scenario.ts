@@ -75,6 +75,41 @@ const GRANULARITY_MS: Record<Granularity, number> = {
   "1d": 24 * 60 * 60_000,
 };
 
+const ASSET_CLASSES = new Set([
+  "crypto",
+  "equity",
+  "index",
+  "fx",
+  "commodity",
+  "rates",
+  "etf",
+]);
+const DIFFICULTIES = new Set([
+  "beginner",
+  "intermediate",
+  "advanced",
+  "expert",
+]);
+const SCENARIO_MODES = new Set([
+  "explorer",
+  "professional",
+  "blind",
+  "challenge",
+]);
+const EVENT_TYPES = new Set([
+  "news",
+  "earnings",
+  "macro",
+  "central_bank",
+  "regulation",
+  "geopolitical",
+  "analyst_rating",
+  "price_event",
+  "social_sentiment",
+  "onchain",
+  "corporate_action",
+]);
+
 export function validateScenarioMeta(meta: ScenarioMeta): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (!meta.id) {
@@ -91,6 +126,44 @@ export function validateScenarioMeta(meta: ScenarioMeta): ValidationIssue[] {
       code: "meta.title_missing",
       message: "Scenario title is required",
       path: "meta.title",
+    });
+  }
+  if (!ASSET_CLASSES.has(meta.assetClass)) {
+    issues.push({
+      level: "error",
+      code: "meta.asset_class_invalid",
+      message: "Scenario assetClass is not supported",
+      path: "meta.assetClass",
+    });
+  }
+  if (!DIFFICULTIES.has(meta.difficulty)) {
+    issues.push({
+      level: "error",
+      code: "meta.difficulty_invalid",
+      message: "Scenario difficulty is not supported",
+      path: "meta.difficulty",
+    });
+  }
+  if (!(meta.defaultGranularity in GRANULARITY_MS)) {
+    issues.push({
+      level: "error",
+      code: "meta.default_granularity_invalid",
+      message: "Scenario defaultGranularity is not supported",
+      path: "meta.defaultGranularity",
+    });
+  }
+  if (
+    !Array.isArray(meta.supportedModes) ||
+    meta.supportedModes.length === 0 ||
+    meta.supportedModes.some((mode) => !SCENARIO_MODES.has(mode)) ||
+    new Set(meta.supportedModes).size !== meta.supportedModes.length
+  ) {
+    issues.push({
+      level: "error",
+      code: "meta.supported_modes_invalid",
+      message:
+        "Scenario supportedModes must contain unique supported replay modes",
+      path: "meta.supportedModes",
     });
   }
   if (!isIsoTimestamp(meta.startTime)) {
@@ -460,6 +533,22 @@ export function validateEvents(
     } else {
       seenIds.add(ev.id);
     }
+    if (!EVENT_TYPES.has(ev.type)) {
+      issues.push({
+        level: "error",
+        code: "events.type_invalid",
+        message: `Event ${ev.id} has an unsupported type`,
+        path: `${path}.type`,
+      });
+    }
+    if (!Number.isInteger(ev.importance) || ev.importance < 1 || ev.importance > 5) {
+      issues.push({
+        level: "error",
+        code: "events.importance_invalid",
+        message: `Event ${ev.id} importance must be an integer from 1 to 5`,
+        path: `${path}.importance`,
+      });
+    }
     if (!isIsoTimestamp(ev.happenedAt)) {
       issues.push({
         level: "error",
@@ -495,7 +584,7 @@ export function validateEvents(
         path,
       });
     }
-    if (!ev.affectedSymbols || ev.affectedSymbols.length === 0) {
+    if (!Array.isArray(ev.affectedSymbols) || ev.affectedSymbols.length === 0) {
       issues.push({
         level: "warning",
         code: "events.affected_symbols_empty",

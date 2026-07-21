@@ -14,6 +14,23 @@ import {
   listAvailableDrills,
   listBuiltInDrills,
 } from "../../data/practice/drills";
+import {
+  assessmentMatchesCheckpointScheduleFingerprint,
+  assessmentMatchesRubricFingerprint,
+  buildDrillCheckpointSchedule,
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+} from "../practice/drills";
+import { completedPracticeAssessmentScore } from "../practice/evidenceProfile";
+import {
+  canonicalScenarioDataVersion,
+  scenarioDataVersionsEqual,
+} from "../../data/scenarios/dataVersions";
+import {
+  brokerConfigFingerprint,
+  getBrokerPreset,
+  isBrokerConfigFingerprint,
+} from "../broker/executionModels";
 
 export const PRACTICE_COACH_RUBRIC_VERSION = "practice-coach-v1";
 export const FOUNDATION_SCENARIO_ID = "eurgbp-brexit-2016";
@@ -52,6 +69,9 @@ export type PracticeCoachPlan = {
   drillId: string;
   drillTitle: string;
   mode: ScenarioMode;
+  scenarioDataVersion: string | null;
+  brokerMode: CompletedRun["brokerMode"];
+  brokerFingerprint: string;
   focusLabel: string;
   steps: readonly ["Brief", "Plan", "Execute", "Review"];
   milestones: PracticeMilestone[];
@@ -62,6 +82,11 @@ export type PracticeCoachPlan = {
   availabilityNote?: string;
   ctaLabel: string;
 };
+
+export type PracticeCoachStartContext = Pick<
+  PracticeCoachPlan,
+  "scenarioDataVersion" | "brokerMode" | "brokerFingerprint"
+>;
 
 function byNewest(left: CompletedRun, right: CompletedRun): number {
   return Date.parse(right.completedAt) - Date.parse(left.completedAt);
@@ -83,10 +108,11 @@ export function foundationMilestones(
   ledger: readonly PracticeLedgerEntry[] = [],
 ): PracticeMilestone[] {
   const useLedger = ledger.length > 0;
+  const observableAttempts = useLedger
+    ? ledger.filter((entry) => entry.facts.executionCount > 0)
+    : runs.filter((run) => run.executionCount > 0);
   const scenarioCount = new Set(
-    useLedger
-      ? ledger.map((entry) => entry.scenarioId)
-      : runs.map((run) => run.scenarioId),
+    observableAttempts.map((attempt) => attempt.scenarioId),
   ).size;
   return [
     {
@@ -130,6 +156,11 @@ type PracticeAttempt = {
   completedAt: string;
   scenarioId: string;
   scenarioTitle: string;
+  scenarioDataVersion: string | null;
+  mode: ScenarioMode;
+  brokerMode: CompletedRun["brokerMode"];
+  brokerFingerprint?: string;
+  executionCount: number;
   assessment: DrillAssessment;
 };
 
@@ -183,6 +214,14 @@ function practiceAttempts(
               completedAt: entry.completedAt,
               scenarioId: entry.scenarioId,
               scenarioTitle: entry.scenarioTitle,
+              scenarioDataVersion: canonicalScenarioDataVersion(
+                entry.scenarioId,
+                entry.scenarioDataVersion,
+              ),
+              mode: entry.mode,
+              brokerMode: entry.brokerMode,
+              brokerFingerprint: entry.brokerFingerprint,
+              executionCount: entry.facts.executionCount,
               assessment: entry.assessment,
             },
           ]
@@ -197,6 +236,14 @@ function practiceAttempts(
             completedAt: run.completedAt,
             scenarioId: run.scenarioId,
             scenarioTitle: run.scenarioTitle,
+            scenarioDataVersion: canonicalScenarioDataVersion(
+              run.scenarioId,
+              run.report.provenance?.dataVersion,
+            ),
+            mode: run.mode,
+            brokerMode: run.brokerMode,
+            brokerFingerprint: run.brokerFingerprint,
+            executionCount: run.executionCount,
             assessment: run.report.practiceAssessment,
           },
         ]
@@ -216,10 +263,49 @@ function availableDefinitionFor(
   attempt: PracticeAttempt,
   scenarios: readonly ScenarioPackage[],
 ): DrillDefinition | undefined {
+  const scenario = scenarios.find(
+    (candidate) => candidate.meta.id === attempt.scenarioId,
+  );
+  if (
+    !scenario ||
+    !scenarioDataVersionsEqual(
+      attempt.scenarioId,
+      attempt.scenarioDataVersion,
+      scenario.meta.dataVersion,
+    )
+  ) {
+    return undefined;
+  }
   return listAvailableDrills(scenarios).find(
     (definition) =>
       definition.scenarioId === attempt.scenarioId &&
+      definition.mode === attempt.mode &&
       definition.id === attempt.assessment.drillId &&
+      definition.competencyId === attempt.assessment.competencyId &&
+      definition.definitionVersion === attempt.assessment.definitionVersion &&
+      definition.rubricVersion === attempt.assessment.rubricVersion &&
+      assessmentMatchesRubricFingerprint(
+        attempt.assessment,
+        drillRubricFingerprint(definition.rubric),
+      ) &&
+      assessmentMatchesCheckpointScheduleFingerprint(attempt.assessment) &&
+      attempt.assessment.checkpointScheduleFingerprint ===
+        drillCheckpointScheduleFingerprint(
+          buildDrillCheckpointSchedule(definition, scenario),
+        ),
+  );
+}
+
+function currentDefinitionForAttempt(
+  attempt: PracticeAttempt,
+  scenarios: readonly ScenarioPackage[],
+): DrillDefinition | undefined {
+  return listAvailableDrills(scenarios).find(
+    (definition) =>
+      definition.scenarioId === attempt.scenarioId &&
+      definition.mode === attempt.mode &&
+      definition.id === attempt.assessment.drillId &&
+      definition.competencyId === attempt.assessment.competencyId &&
       definition.definitionVersion === attempt.assessment.definitionVersion &&
       definition.rubricVersion === attempt.assessment.rubricVersion,
   );
@@ -244,19 +330,114 @@ function weakestComponent(
     );
 }
 
+function definitionsHaveExactIdentity(
+  left: DrillDefinition,
+  right: DrillDefinition,
+): boolean {
+  return (
+    left.scenarioId === right.scenarioId &&
+    left.id === right.id &&
+    left.competencyId === right.competencyId &&
+    left.definitionVersion === right.definitionVersion &&
+    left.rubricVersion === right.rubricVersion &&
+    drillRubricFingerprint(left.rubric) ===
+      drillRubricFingerprint(right.rubric) &&
+    left.mode === right.mode
+  );
+}
+
+function builtInDefinitionFor(
+  definition: DrillDefinition,
+): DrillDefinition | undefined {
+  return listBuiltInDrills().find((candidate) =>
+    definitionsHaveExactIdentity(candidate, definition),
+  );
+}
+
+function definitionsShareTransferContract(
+  source: DrillDefinition,
+  candidate: DrillDefinition,
+): boolean {
+  return (
+    source.competencyId === candidate.competencyId &&
+    source.rubricVersion === candidate.rubricVersion &&
+    drillRubricFingerprint(source.rubric) ===
+      drillRubricFingerprint(candidate.rubric) &&
+    source.mode === candidate.mode
+  );
+}
+
+function practiceDefinitionContextKey(
+  definition: DrillDefinition,
+  dataVersion: string | null | undefined,
+  brokerMode: CompletedRun["brokerMode"],
+  brokerFingerprint: string,
+): string {
+  return JSON.stringify([
+    definition.scenarioId,
+    canonicalScenarioDataVersion(definition.scenarioId, dataVersion),
+    definition.competencyId,
+    definition.id,
+    definition.definitionVersion,
+    definition.rubricVersion,
+    drillRubricFingerprint(definition.rubric),
+    definition.mode,
+    brokerMode,
+    brokerFingerprint,
+  ]);
+}
+
+function brokerForContext(
+  scenario: ScenarioPackage,
+  brokerMode: CompletedRun["brokerMode"],
+) {
+  return brokerMode === "scenario"
+    ? scenario.broker
+    : {
+        ...getBrokerPreset(brokerMode),
+        baseCurrency: scenario.meta.baseCurrency,
+      };
+}
+
+function attemptHasCurrentBrokerIdentity(
+  attempt: PracticeAttempt,
+  scenario: ScenarioPackage,
+): boolean {
+  return Boolean(
+    isBrokerConfigFingerprint(attempt.brokerFingerprint) &&
+      attempt.brokerFingerprint ===
+        brokerConfigFingerprint(brokerForContext(scenario, attempt.brokerMode)),
+  );
+}
+
 function nextBuiltInDefinition(
   scenarios: readonly ScenarioPackage[],
-  completedScenarioIds: ReadonlySet<string>,
+  completedDefinitionContexts: ReadonlySet<string>,
+  sourceDefinition: DrillDefinition,
 ): DrillDefinition | undefined {
-  const scenarioIds = new Set(scenarios.map((scenario) => scenario.meta.id));
-  const available = listBuiltInDrills().filter((definition) =>
-    scenarioIds.has(definition.scenarioId),
+  const scenarioById = new Map(
+    scenarios.map((scenario) => [scenario.meta.id, scenario]),
   );
-  return (
-    available.find(
-      (definition) => !completedScenarioIds.has(definition.scenarioId),
-    ) ?? available[0]
-  );
+  const availableDefinitions = listAvailableDrills(scenarios);
+  return listBuiltInDrills().find((definition) => {
+    const scenario = scenarioById.get(definition.scenarioId);
+    return Boolean(
+      scenario &&
+        definition.scenarioId !== sourceDefinition.scenarioId &&
+        definitionsShareTransferContract(sourceDefinition, definition) &&
+        availableDefinitions.some((available) =>
+          definitionsHaveExactIdentity(available, definition),
+        ) &&
+        !completedDefinitionContexts.has(
+          practiceDefinitionContextKey(
+            definition,
+            scenario.meta.dataVersion,
+            "scenario",
+            brokerConfigFingerprint(scenario.broker),
+          ),
+        ),
+    );
+  });
 }
 
 function definitionDestination(
@@ -273,6 +454,26 @@ function definitionDestination(
   const compatible =
     resolved.scenarioId === scenario.meta.id ? resolved : fallback;
   return compatible ? { definition: compatible, scenario } : undefined;
+}
+
+function destinationContext(
+  destination: { definition: DrillDefinition; scenario: ScenarioPackage },
+  exactAttempt?: PracticeAttempt,
+): PracticeCoachStartContext {
+  const brokerMode =
+    exactAttempt && destination.definition.mode === "explorer"
+      ? exactAttempt.brokerMode
+      : "scenario";
+  return {
+    scenarioDataVersion: canonicalScenarioDataVersion(
+      destination.scenario.meta.id,
+      destination.scenario.meta.dataVersion,
+    ),
+    brokerMode,
+    brokerFingerprint: brokerConfigFingerprint(
+      brokerForContext(destination.scenario, brokerMode),
+    ),
+  };
 }
 
 export function buildPracticeCoachPlan(
@@ -323,6 +524,7 @@ export function buildPracticeCoachPlan(
       drillId: first.definition.id,
       drillTitle: first.definition.title,
       mode: first.definition.mode,
+      ...destinationContext(first),
       focusLabel: "Versioned process baseline",
       target: {
         label: "Completed Event Discipline attempts",
@@ -363,6 +565,7 @@ export function buildPracticeCoachPlan(
       drillId: first.definition.id,
       drillTitle: first.definition.title,
       mode: first.definition.mode,
+      ...destinationContext(first),
       focusLabel: "Comparable process evidence",
       target: {
         label: "Versioned drill status",
@@ -384,7 +587,7 @@ export function buildPracticeCoachPlan(
 
   const exactDefinition = availableDefinitionFor(latestAttempt, scenarios);
   const currentDestination = definitionDestination(
-    exactDefinition,
+    exactDefinition ?? currentDefinitionForAttempt(latestAttempt, scenarios),
     scenarios,
     foundation,
   );
@@ -395,26 +598,41 @@ export function buildPracticeCoachPlan(
       : undefined
     : `The exact source drill is no longer available, so the next attempt uses ${currentDestination.definition.title} without merging the old evidence.`;
 
-  if (latestAttempt.assessment.status !== "completed") {
+  if (
+    latestAttempt.assessment.status !== "completed" ||
+    latestAttempt.assessment.eventLinkageEvidenceVersion !== 1
+  ) {
     const { assessment } = latestAttempt;
+    const legacyLinkage = assessment.eventLinkageEvidenceVersion !== 1;
     return {
       ...shared,
       kind: "next_run",
-      title: "Finish every drill requirement",
-      objective:
-        "Execute at least one fully planned position, answer every checkpoint in replay order, and finish without a skipped decision.",
+      title: legacyLinkage
+        ? "Repeat with explicit event links"
+        : "Finish every drill requirement",
+      objective: legacyLinkage
+        ? "Repeat the drill and explicitly select only the visible events that influenced each checkpoint decision."
+        : "Execute at least one fully planned position, answer every checkpoint in replay order, and finish without a skipped decision.",
       rationale:
-        "An incomplete attempt can diagnose missing evidence, but it cannot create an assessed competency claim or earn track credit.",
-      evidence: `${assessment.answeredCheckpointCount}/${assessment.eligibleCheckpointCount} checkpoints answered · ${assessment.linkedEventCount}/${assessment.eligibleEventCount} events linked · ${assessment.violationCount} violations.`,
+        legacyLinkage
+          ? "This older attempt preserved checkpoint membership but did not record the user's explicit event selections, so it cannot create evidence or earn track credit."
+          : "An incomplete attempt can diagnose missing evidence, but it cannot create an assessed competency claim or earn track credit.",
+      evidence: legacyLinkage
+        ? "Event linkage provenance was not recorded for this attempt."
+        : `${assessment.answeredCheckpointCount}/${assessment.eligibleCheckpointCount} checkpoints answered · ${assessment.linkedEventCount}/${assessment.eligibleEventCount} events linked · ${assessment.violationCount} violations.`,
       scenarioId: currentDestination.scenario.meta.id,
       scenarioTitle: currentDestination.scenario.meta.title,
       drillId: currentDestination.definition.id,
       drillTitle: currentDestination.definition.title,
       mode: currentDestination.definition.mode,
-      focusLabel: "Complete evidence",
+      ...destinationContext(
+        currentDestination,
+        exactDefinition ? latestAttempt : undefined,
+      ),
+      focusLabel: legacyLinkage ? "Explicit event evidence" : "Complete evidence",
       target: {
         label: "Drill status",
-        current: "Incomplete",
+        current: legacyLinkage ? "Legacy linkage unassessed" : "Incomplete",
         target: "Completed with a full plan and every checkpoint answered",
       },
       sourceRunId: sourceRun?.id,
@@ -425,7 +643,15 @@ export function buildPracticeCoachPlan(
     };
   }
 
-  const weak = weakestComponent(latestAttempt.assessment);
+  const authoritativeLatestScore = exactDefinition
+    ? completedPracticeAssessmentScore(
+        latestAttempt.assessment,
+        latestAttempt.executionCount,
+      )
+    : undefined;
+  const weak = authoritativeLatestScore !== undefined
+    ? weakestComponent(latestAttempt.assessment)
+    : undefined;
   if (weak) {
     const practice = COMPONENT_PRACTICE[weak.id];
     const target = COMPONENT_TARGETS[weak.id];
@@ -442,6 +668,10 @@ export function buildPracticeCoachPlan(
       drillId: currentDestination.definition.id,
       drillTitle: currentDestination.definition.title,
       mode: currentDestination.definition.mode,
+      ...destinationContext(
+        currentDestination,
+        exactDefinition ? latestAttempt : undefined,
+      ),
       focusLabel: practice.focus,
       target: {
         label: weak.label,
@@ -456,53 +686,163 @@ export function buildPracticeCoachPlan(
     };
   }
 
-  const completedScenarioIds = new Set(
-    attempts
-      .filter((attempt) => attempt.assessment.status === "completed")
-      .map((attempt) => attempt.scenarioId),
+  if (
+    exactDefinition &&
+    authoritativeLatestScore !== undefined &&
+    !attemptHasCurrentBrokerIdentity(
+      latestAttempt,
+      currentDestination.scenario,
+    )
+  ) {
+    return {
+      ...shared,
+      kind: "next_run",
+      title: "Re-establish the exact broker context",
+      objective:
+        "Repeat this current-data drill under the current full execution settings so the next result has a broker identity that can support an honest comparison.",
+      rationale:
+        "The prior attempt retained a broker label but not the complete commission, spread, slippage, leverage, liquidity, hours, and margin configuration. It can remain process evidence, but it cannot support transfer or trend claims.",
+      evidence: `Latest completed process score: ${Math.round(authoritativeLatestScore)}% on ${latestAttempt.scenarioTitle}; exact broker settings unavailable.`,
+      scenarioId: currentDestination.scenario.meta.id,
+      scenarioTitle: currentDestination.scenario.meta.title,
+      drillId: currentDestination.definition.id,
+      drillTitle: currentDestination.definition.title,
+      mode: currentDestination.definition.mode,
+      ...destinationContext(currentDestination, latestAttempt),
+      focusLabel: "Versioned execution context",
+      target: {
+        label: "Comparable broker context",
+        current: "Legacy broker label only",
+        target: "1 completed attempt with full broker identity",
+      },
+      sourceRunId: sourceRun?.id,
+      sourceRunTitle: latestAttempt.scenarioTitle,
+      evidenceRunCount,
+      availabilityNote: unavailableNote,
+      ctaLabel: "Review broker-context repeat",
+    };
+  }
+
+  const completedDefinitionContexts = new Set(
+    attempts.flatMap((attempt) => {
+      if (
+        attempt.assessment.status !== "completed" ||
+        attempt.assessment.eventLinkageEvidenceVersion !== 1 ||
+        completedPracticeAssessmentScore(
+          attempt.assessment,
+          attempt.executionCount,
+        ) === undefined
+      ) {
+        return [];
+      }
+      const definition = availableDefinitionFor(attempt, scenarios);
+      const scenario = scenarios.find(
+        (candidate) => candidate.meta.id === attempt.scenarioId,
+      );
+      return definition
+        && scenario
+        && attemptHasCurrentBrokerIdentity(attempt, scenario)
+        ? [
+            practiceDefinitionContextKey(
+              definition,
+              attempt.scenarioDataVersion,
+              attempt.brokerMode,
+              attempt.brokerFingerprint!,
+            ),
+          ]
+        : [];
+    }),
   );
-  const nextDefinition = nextBuiltInDefinition(
-    scenarios,
-    completedScenarioIds,
-  );
-  const nextDestination = definitionDestination(
-    nextDefinition ?? exactDefinition,
-    scenarios,
-    foundation,
-  );
+  const transferSourceDefinition =
+    authoritativeLatestScore !== undefined && exactDefinition
+      ? builtInDefinitionFor(exactDefinition)
+      : undefined;
+  const nextDefinition = transferSourceDefinition
+    ? nextBuiltInDefinition(
+        scenarios,
+        completedDefinitionContexts,
+        transferSourceDefinition,
+      )
+    : undefined;
+  const nextDestination = exactDefinition
+    ? definitionDestination(
+        nextDefinition ?? exactDefinition,
+        scenarios,
+        foundation,
+      )
+    : currentDestination;
   if (!nextDestination) return undefined;
-  const isTransfer =
-    nextDestination.scenario.meta.id !== latestAttempt.scenarioId;
+  const assignmentKind =
+    authoritativeLatestScore === undefined || !exactDefinition
+      ? "refresh"
+      : nextDefinition
+        ? "transfer"
+        : "repeat";
   return {
     ...shared,
     kind: "next_run",
-    title: isTransfer
-      ? "Transfer clean Event Discipline to a new regime"
-      : "Repeat the same context for a comparable trend",
-    objective: isTransfer
-      ? "Apply the same complete-plan and event-response process in the next available regime, without combining criteria across attempts."
-      : "Repeat the exact scenario, drill, mode, and broker context so the evidence profile can make an honest trend comparison.",
-    rationale: isTransfer
-      ? "Every measured component met the shipped threshold; the next useful test is whether the same process transfers to another regime."
-      : "All available built-in regimes already have a completed attempt, so another exact-context observation is more useful than a vague new score.",
-    evidence: `Latest completed process score: ${Math.round(latestAttempt.assessment.overallScore ?? 0)}% on ${latestAttempt.scenarioTitle}.`,
+    title:
+      assignmentKind === "transfer"
+        ? "Transfer clean Event Discipline to a new regime"
+        : assignmentKind === "repeat"
+          ? "Repeat the same context for a comparable trend"
+          : "Re-establish Event Discipline on current data",
+    objective:
+      assignmentKind === "transfer"
+        ? "Apply the same complete-plan and event-response process in the next available current-data regime, without combining criteria across attempts."
+        : assignmentKind === "repeat"
+          ? "Repeat the exact scenario data, drill, mode, and broker context so the evidence profile can make an honest trend comparison."
+          : "Complete a fresh current-data baseline without treating the prior scenario version or unavailable drill context as comparable evidence.",
+    rationale:
+      assignmentKind === "transfer"
+        ? "Every measured component met the shipped threshold; the next useful test is whether the same process transfers to another regime."
+        : assignmentKind === "repeat"
+          ? transferSourceDefinition
+            ? "Every compatible available regime already has a completed current-data attempt in its exact drill, mode, and broker context, so another exact-context observation is more useful than a vague new score."
+            : "No compatible cross-regime definition shares this exact authored competency and rubric contract, so another exact-context observation is the only honest comparison."
+          : "The source context no longer matches an available current-data drill, so a fresh baseline is required before making a trend claim.",
+    evidence:
+      assignmentKind === "refresh"
+        ? `The prior assessment from ${latestAttempt.scenarioTitle} does not match an available authoritative schedule and is not shown as a current measured score.`
+        : `Latest completed process score: ${Math.round(authoritativeLatestScore!)}% on ${latestAttempt.scenarioTitle}.`,
     scenarioId: nextDestination.scenario.meta.id,
     scenarioTitle: nextDestination.scenario.meta.title,
     drillId: nextDestination.definition.id,
     drillTitle: nextDestination.definition.title,
     mode: nextDestination.definition.mode,
-    focusLabel: isTransfer
-      ? "Cross-regime process transfer"
-      : "Comparable process trend",
+    ...destinationContext(
+      nextDestination,
+      assignmentKind === "repeat" ? latestAttempt : undefined,
+    ),
+    focusLabel:
+      assignmentKind === "transfer"
+        ? "Cross-regime process transfer"
+        : assignmentKind === "repeat"
+          ? "Comparable process trend"
+          : "Current-data process baseline",
     target: {
-      label: "Event Discipline process",
-      current: `${Math.round(latestAttempt.assessment.overallScore ?? 0)}%`,
+      label:
+        transferSourceDefinition || assignmentKind === "transfer"
+          ? "Event Discipline process"
+          : `${nextDestination.definition.title} process`,
+      current:
+        assignmentKind === "refresh"
+          ? "No current comparable score"
+          : `${Math.round(authoritativeLatestScore!)}%`,
       target: "Completed attempt with every component at its shipped threshold",
     },
     sourceRunId: sourceRun?.id,
     sourceRunTitle: latestAttempt.scenarioTitle,
     evidenceRunCount,
-    availabilityNote: unavailableNote,
-    ctaLabel: isTransfer ? "Review transfer practice" : "Review repeat practice",
+    availabilityNote:
+      assignmentKind === "refresh"
+        ? "The prior scenario data or exact drill context is unavailable, so this assignment starts a new comparison baseline."
+        : unavailableNote,
+    ctaLabel:
+      assignmentKind === "transfer"
+        ? "Review transfer practice"
+        : assignmentKind === "repeat"
+          ? "Review repeat practice"
+          : "Review refreshed baseline",
   };
 }

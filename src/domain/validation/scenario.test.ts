@@ -95,6 +95,38 @@ describe("validateScenarioPackage", () => {
     expect(result.errors).toEqual([]);
   });
 
+  it("rejects unsupported scenario metadata enums and duplicate modes", () => {
+    const scenario = clone(makeScenario());
+    const meta = scenario.meta as unknown as Record<string, unknown>;
+    meta.assetClass = "collectible";
+    meta.difficulty = "impossible";
+    meta.defaultGranularity = "2h";
+    meta.supportedModes = ["explorer", "explorer"];
+
+    const codes = validateScenarioPackage(scenario as ScenarioPackage).errors.map(
+      (issue) => issue.code,
+    );
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        "meta.asset_class_invalid",
+        "meta.difficulty_invalid",
+        "meta.default_granularity_invalid",
+        "meta.supported_modes_invalid",
+      ]),
+    );
+  });
+
+  it("rejects unsupported event types and out-of-range importance", () => {
+    const scenario = clone(makeScenario());
+    Object.assign(scenario.events[0], { type: "rumor", importance: 9 });
+    const codes = validateScenarioPackage(scenario).errors.map(
+      (issue) => issue.code,
+    );
+    expect(codes).toEqual(
+      expect.arrayContaining(["events.type_invalid", "events.importance_invalid"]),
+    );
+  });
+
   it("flags an empty candle array", () => {
     const pkg = makeScenario();
     const broken: ScenarioPackage = { ...pkg, candles: [] };

@@ -8,6 +8,7 @@ import type {
 } from "../../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
 import { assembleScenario } from "../../../domain/scenario/loader";
+import { KRE_BANKING_CRISIS_2023_DATA_VERSION } from "../dataVersions";
 
 const SYMBOL = "KRE";
 
@@ -33,6 +34,7 @@ const meta: ScenarioMeta = {
     "Synthetic deterministic sample prices shaped to the publicly documented 2023 U.S. regional-bank stress path; raw licensed ETF market data is not redistributed.",
     "Official event sources: FDIC, Federal Reserve, Treasury/Fed/FDIC joint statement, OCC, and California DFPI.",
   ],
+  dataVersion: KRE_BANKING_CRISIS_2023_DATA_VERSION,
   isSampleData: true,
   description:
     "Sample/demo regional-bank scenario for practicing panic, liquidity, deposit-confidence, and policy-response decisions. Prices are synthetic and should not be used for trading decisions.",

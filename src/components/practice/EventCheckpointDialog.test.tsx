@@ -51,6 +51,26 @@ describe("EventCheckpointDialog", () => {
     expect(screen.getByText("Bank of England publishes a response")).toBeInTheDocument();
     expect(screen.queryByText("A future event must stay hidden")).not.toBeInTheDocument();
     expect(screen.getByText("2 events")).toBeInTheDocument();
+    expect(
+      screen.getByText(/leaving every event unselected records that no event was linked/i),
+    ).toBeInTheDocument();
+
+    const eventLinks = screen.getAllByRole("checkbox");
+    const linkHelp = screen.getByText(
+      /leaving every event unselected records that no event was linked/i,
+    );
+    expect(eventLinks).toHaveLength(2);
+    expect(eventLinks[0]).toHaveAttribute("aria-describedby", linkHelp.id);
+    expect(eventLinks[1]).toHaveAttribute("aria-describedby", linkHelp.id);
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Link Bank of England publishes a response to my decision",
+      }),
+    ).toBe(eventLinks[1]);
+    expect(eventLinks[0]).not.toBeChecked();
+    expect(eventLinks[1]).not.toBeChecked();
+    fireEvent.click(eventLinks[1]);
+    expect(eventLinks[1]).toBeChecked();
 
     const submit = screen.getByRole("button", {
       name: "Record decision and continue",
@@ -84,6 +104,7 @@ describe("EventCheckpointDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       "reduce",
       "Dollar funding stress invalidates my original risk limit.",
+      ["visible-b"],
     );
   });
 
@@ -121,7 +142,7 @@ describe("EventCheckpointDialog", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Hold" }));
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
-    expect(onSubmit).toHaveBeenCalledWith("hold", "");
+    expect(onSubmit).toHaveBeenCalledWith("hold", "", []);
   });
 
   it("caps reflection authoring at the UI-safe limit before submission", () => {
@@ -155,6 +176,7 @@ describe("EventCheckpointDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith(
       "wait",
       "x".repeat(CHECKPOINT_REFLECTION_MAX_LENGTH),
+      [],
     );
   });
 

@@ -22,11 +22,18 @@ import type {
   ScenarioMode,
   ScenarioPackage,
 } from "../types";
+import { SESSION_TEXT_MAX_LENGTH } from "../types";
 import {
+  brokerConfigFingerprint,
   getBrokerPreset,
+  isBrokerConfigFingerprint,
   type BrokerPresetName,
 } from "../domain/broker/executionModels";
 import { defaultScenarioId, getScenario } from "../data/scenarios";
+import {
+  canonicalScenarioDataVersion,
+  scenarioDataVersionsEqual,
+} from "../data/scenarios/dataVersions";
 import {
   candlesForSymbol,
   lastVisibleCandleIndex,
@@ -77,6 +84,7 @@ import { getDrillForScenario } from "../data/practice/drills";
 import {
   assessDrill,
   buildDrillCheckpointSchedule,
+  drillCheckpointScheduleFingerprint,
   nextDrillCheckpoint,
   validateDrillCheckpointResponse,
   validateDrillDefinition,
@@ -86,8 +94,19 @@ import { parseScenarioDrillDefinitions } from "../domain/practice/drillAuthoring
 const DEFAULT_SPEED = REPLAY_SPEEDS[1];
 export const SESSION_STORAGE_KEY = "market-time-machine.session.v2";
 export const LEGACY_SESSION_STORAGE_KEY = "market-time-machine.session.v1";
-const SESSION_STORAGE_VERSION = 3;
+const SESSION_STORAGE_VERSION = 4;
 export type BrokerMode = "scenario" | BrokerPresetName;
+export type ReplayStartContext = {
+  scenarioDataVersion: string | null;
+  brokerMode: BrokerMode;
+  brokerFingerprint: string;
+};
+export type PracticeStartContext = ReplayStartContext & {
+  /** Exact immutable drill definition retained by a completed report. */
+  drillIdentity?: ActiveDrillSessionIdentity;
+  /** Exact checkpoint schedule retained by the matching assessment. */
+  checkpointScheduleFingerprint?: string;
+};
 
 export type MajorEventPauseNotice = {
   eventId: string;
@@ -102,6 +121,12 @@ export type ActiveDrillSessionIdentity = {
   definitionVersion: number;
   rubricVersion: string;
   definitionSnapshot: DrillDefinition;
+};
+
+export type SessionPersistenceHealth = {
+  kind: "error" | "recovered";
+  operation: "read" | "restore" | "write" | "delete" | "conflict";
+  message: string;
 };
 
 export type BracketOrderRequest = {
@@ -150,13 +175,21 @@ export type SessionState = {
   drillCheckpointResponses: DrillCheckpointResponse[];
   pendingDrillCheckpoint?: DrillCheckpoint;
   drillRuleViolations: DrillRuleViolation[];
+  /** Browser-save health is runtime-only and is never serialized into backups. */
+  persistenceHealth?: SessionPersistenceHealth;
 };
 
 type SessionActions = {
   selectScenario: (id: string) => void;
+  startReplay: (
+    scenarioId: string,
+    mode: ScenarioMode,
+    context?: ReplayStartContext,
+  ) => { ok: boolean; message?: string };
   startPractice: (
     scenarioId: string,
     drillId: string,
+    context?: PracticeStartContext,
   ) => { ok: boolean; message?: string };
   resetScenario: () => void;
   play: () => void;
@@ -170,6 +203,7 @@ type SessionActions = {
   submitDrillCheckpoint: (
     action: DrillCheckpointAction,
     reflection: string,
+    linkedEventIds: string[],
   ) => { ok: boolean; message?: string };
   submitMarketOrder: (req: OrderRequest) => { ok: boolean; message?: string };
   submitLimitOrder: (req: LimitOrderRequest) => { ok: boolean; message?: string };
@@ -187,7 +221,7 @@ type SessionActions = {
   addJournalNote: (note: string) => void;
   exportSession: () => string;
   importSession: (serialized: string) => { ok: boolean; message?: string };
-  clearSavedSession: () => void;
+  clearSavedSession: () => { ok: boolean; message?: string };
   getSnapshot: () => ReplaySnapshot;
   clearRejection: () => void;
 };
@@ -199,12 +233,12 @@ function buildInitialState(scenarioId: string, drillId?: string): SessionState {
   if (!scenario) {
     throw new Error(`Scenario not found: ${scenarioId}`);
   }
-  const primarySymbol = scenario.meta.symbols[0];
   const timeline = replayTimeline(scenario);
   const drill = drillId ? getDrillForScenario(drillId, scenario) : undefined;
   if (drillId && (!drill || !validateDrillDefinition(drill, scenario).valid)) {
     throw new Error(`Practice drill is not available for scenario: ${drillId}`);
   }
+  const primarySymbol = drill?.primarySymbol ?? scenario.meta.symbols[0];
   const mode = drill?.mode ?? scenario.meta.supportedModes[0] ?? "explorer";
   return {
     runInstanceId: generateRunInstanceId(),
@@ -242,6 +276,7 @@ function buildInitialState(scenarioId: string, drillId?: string): SessionState {
     drillCheckpointResponses: [],
     pendingDrillCheckpoint: undefined,
     drillRuleViolations: [],
+    persistenceHealth: undefined,
   };
 }
 
@@ -253,6 +288,7 @@ type PersistedSession = {
   mode: ScenarioMode;
   broker: BrokerConfig;
   brokerMode: BrokerMode;
+  brokerFingerprint: string;
   status: ReplayStatus;
   currentIndex: number;
   speed: ReplaySpeed;
@@ -288,6 +324,7 @@ function persistedSessionFor(state: SessionState): PersistedSession {
     mode: state.mode,
     broker: state.broker,
     brokerMode: state.brokerMode,
+    brokerFingerprint: brokerConfigFingerprint(state.broker),
     status: state.status === "playing" ? "paused" : state.status,
     currentIndex: state.currentIndex,
     speed: state.speed,
@@ -389,7 +426,21 @@ function copyActiveDrillIdentity(
 }
 
 function canonicalDrillDefinition(definition: DrillDefinition): string {
-  return JSON.stringify(copyDrillDefinition(definition));
+  return JSON.stringify(canonicalJsonValue(copyDrillDefinition(definition)));
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalJsonValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalJsonValue(entry)]),
+    );
+  }
+  return value;
 }
 
 function activeDrillIdentityMatches(
@@ -398,13 +449,57 @@ function activeDrillIdentityMatches(
   scenarioDataVersion: string | null,
 ): boolean {
   return (
-    identity.scenarioDataVersion === scenarioDataVersion &&
+    scenarioDataVersionsEqual(
+      definition.scenarioId,
+      identity.scenarioDataVersion,
+      scenarioDataVersion,
+    ) &&
     identity.drillId === definition.id &&
     identity.competencyId === definition.competencyId &&
     identity.definitionVersion === definition.definitionVersion &&
     identity.rubricVersion === definition.rubricVersion &&
     canonicalDrillDefinition(identity.definitionSnapshot) ===
       canonicalDrillDefinition(definition)
+  );
+}
+
+/**
+ * Returns whether an archived practice can still be started as an exact drill
+ * repeat. Callers may use a false result to deliberately fall back to an
+ * unassessed replay while retaining the scenario and broker identity.
+ */
+export function archivedPracticeContextMatchesCurrentDrill(
+  scenarioId: string,
+  drillId: string,
+  context: PracticeStartContext,
+): boolean {
+  const scenario = getScenario(scenarioId);
+  const definition = scenario
+    ? getDrillForScenario(drillId, scenario)
+    : undefined;
+  if (
+    !scenario ||
+    !definition ||
+    !context.drillIdentity ||
+    !context.checkpointScheduleFingerprint ||
+    !scenarioDataVersionsEqual(
+      scenarioId,
+      context.scenarioDataVersion,
+      scenario.meta.dataVersion,
+    ) ||
+    !activeDrillIdentityMatches(
+      context.drillIdentity,
+      definition,
+      scenario.meta.dataVersion ?? null,
+    )
+  ) {
+    return false;
+  }
+  return (
+    context.checkpointScheduleFingerprint ===
+    drillCheckpointScheduleFingerprint(
+      buildDrillCheckpointSchedule(definition, scenario),
+    )
   );
 }
 
@@ -454,7 +549,10 @@ function parseActiveDrillIdentity(
     return undefined;
   }
   return {
-    scenarioDataVersion: value.scenarioDataVersion,
+    scenarioDataVersion: canonicalScenarioDataVersion(
+      scenario.meta.id,
+      value.scenarioDataVersion,
+    ),
     drillId: value.drillId,
     competencyId: value.competencyId,
     definitionVersion: Number(value.definitionVersion),
@@ -475,14 +573,21 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
 
+function isOptionalBoundedString(value: unknown): value is string | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "string" && value.length <= SESSION_TEXT_MAX_LENGTH)
+  );
+}
+
 function isValidDecisionPlan(value: unknown): value is DecisionPlan | undefined {
   if (value === undefined) return true;
   if (!isRecord(value)) return false;
   if (
-    !isOptionalString(value.thesis) ||
-    !isOptionalString(value.invalidation) ||
-    !isOptionalString(value.exitPlan) ||
-    !isOptionalString(value.acceptedRisk)
+    !isOptionalBoundedString(value.thesis) ||
+    !isOptionalBoundedString(value.invalidation) ||
+    !isOptionalBoundedString(value.exitPlan) ||
+    !isOptionalBoundedString(value.acceptedRisk)
   ) {
     return false;
   }
@@ -637,7 +742,7 @@ function isValidOrder(value: unknown, symbols: Set<string>): value is Order {
     !isOptionalString(value.ocoGroupId) ||
     !isOptionalString(value.rejectionCode) ||
     !isOptionalString(value.rejectionReason) ||
-    !isOptionalString(value.note) ||
+    !isOptionalBoundedString(value.note) ||
     !isValidDecisionPlan(value.decisionPlan)
   ) {
     return false;
@@ -691,7 +796,7 @@ function isValidFill(value: unknown, symbols: Set<string>): value is Fill {
         value.liquidityParticipation < 0)) ||
     (value.forcedLiquidation !== undefined &&
       typeof value.forcedLiquidation !== "boolean") ||
-    !isOptionalString(value.note) ||
+      !isOptionalBoundedString(value.note) ||
     !isValidDecisionPlan(value.decisionPlan)
   ) {
     return false;
@@ -708,6 +813,7 @@ function isValidJournalEntry(
     isNonEmptyString(value.id) &&
     isTimestamp(value.time) &&
     typeof value.note === "string" &&
+    value.note.length <= SESSION_TEXT_MAX_LENGTH &&
     isOptionalString(value.fillId) &&
     isValidDecisionPlan(value.decisionPlan) &&
     (value.symbol === undefined ||
@@ -729,6 +835,10 @@ function isValidDrillCheckpointResponseShape(
     Array.isArray(value.eventIds) &&
     value.eventIds.every(isNonEmptyString) &&
     new Set(value.eventIds).size === value.eventIds.length &&
+    (value.linkedEventIds === undefined ||
+      (Array.isArray(value.linkedEventIds) &&
+        value.linkedEventIds.every(isNonEmptyString) &&
+        new Set(value.linkedEventIds).size === value.linkedEventIds.length)) &&
     (value.status === "answered" || value.status === "skipped") &&
     (value.action === undefined ||
       ["hold", "reduce", "exit", "wait"].includes(String(value.action))) &&
@@ -874,22 +984,35 @@ function parsePersistedSession(serialized: string): SessionState {
     !isRecord(parsed) ||
     (parsed.version !== 1 &&
       parsed.version !== 2 &&
+      parsed.version !== 3 &&
       parsed.version !== SESSION_STORAGE_VERSION)
   ) {
     throw new Error("Unsupported session file version.");
   }
-  const sessionVersion = parsed.version as 1 | 2 | 3;
+  const sessionVersion = parsed.version as 1 | 2 | 3 | 4;
   if (typeof parsed.scenarioId !== "string") {
     throw new Error("Session file is missing a scenario ID.");
   }
   const base = buildInitialState(parsed.scenarioId);
   const scenarioDataVersion = base.scenario.meta.dataVersion ?? null;
   if (
-    sessionVersion === SESSION_STORAGE_VERSION &&
-    parsed.scenarioDataVersion !== scenarioDataVersion
+    sessionVersion < SESSION_STORAGE_VERSION &&
+    isNonEmptyString(parsed.activeDrillId)
   ) {
     throw new Error(
-      "Session file references a different scenario data version.",
+      "Legacy practice sessions cannot be safely restored because their immutable drill or broker execution identity is missing. Start a new practice session.",
+    );
+  }
+  const persistedScenarioDataVersion = parsed.scenarioDataVersion;
+  const canonicalPersistedScenarioDataVersion = canonicalScenarioDataVersion(
+    base.scenario.meta.id,
+    persistedScenarioDataVersion as string | null | undefined,
+  );
+  const scenarioDataVersionMismatch =
+    canonicalPersistedScenarioDataVersion !== scenarioDataVersion;
+  if (scenarioDataVersionMismatch) {
+    throw new Error(
+      "Session file references a missing or different scenario data version.",
     );
   }
   const symbols = new Set(base.scenario.meta.symbols);
@@ -934,6 +1057,13 @@ function parsePersistedSession(serialized: string): SessionState {
   if (!brokerMode) {
     throw new Error("Session file contains an unsupported broker mode.");
   }
+  const brokerIsLockedToScenario =
+    mode === "professional" || mode === "blind" || mode === "challenge";
+  if (brokerIsLockedToScenario && brokerMode !== "scenario") {
+    throw new Error(
+      "Session file references missing or changed broker execution settings.",
+    );
+  }
   const status: ReplayStatus | undefined =
     parsed.status === "idle" ||
     parsed.status === "paused" ||
@@ -942,6 +1072,14 @@ function parsePersistedSession(serialized: string): SessionState {
       : undefined;
   if (!status) {
     throw new Error("Session file contains an invalid replay status.");
+  }
+  if (
+    status === "finished" &&
+    currentIndex !== Math.max(0, base.primaryCandlesLength - 1)
+  ) {
+    throw new Error(
+      "A finished session must be positioned at the final replay candle.",
+    );
   }
   const speed = REPLAY_SPEEDS.find(
     (candidate) =>
@@ -1171,15 +1309,26 @@ function parsePersistedSession(serialized: string): SessionState {
   if (status === "finished" && orders.some(isWorkingOrder)) {
     throw new Error("A finished session cannot contain working orders.");
   }
-  const broker =
-    mode === "professional" || mode === "blind" || mode === "challenge"
-      ? { ...base.scenario.broker }
-      : brokerMode === "scenario"
-        ? { ...base.scenario.broker }
-        : {
-            ...getBrokerPreset(brokerMode),
-            baseCurrency: base.scenario.meta.baseCurrency,
-          };
+  const broker = brokerIsLockedToScenario || brokerMode === "scenario"
+    ? { ...base.scenario.broker }
+    : {
+        ...getBrokerPreset(brokerMode),
+        baseCurrency: base.scenario.meta.baseCurrency,
+      };
+  const serializedBrokerFingerprint = brokerConfigFingerprint(
+    parsed.broker as BrokerConfig,
+  );
+  const expectedBrokerFingerprint = brokerConfigFingerprint(broker);
+  if (
+    serializedBrokerFingerprint !== expectedBrokerFingerprint ||
+    (sessionVersion >= SESSION_STORAGE_VERSION &&
+      (!isBrokerConfigFingerprint(parsed.brokerFingerprint) ||
+        parsed.brokerFingerprint !== serializedBrokerFingerprint))
+  ) {
+    throw new Error(
+      "Session file references missing or changed broker execution settings.",
+    );
+  }
   const rebuilt = rebuildPortfolioFromHistory(
     base.scenario,
     fills,
@@ -1216,6 +1365,7 @@ function parsePersistedSession(serialized: string): SessionState {
     journal,
     auditEvents,
     report: undefined,
+    primarySymbol: activeDrill?.primarySymbol ?? base.primarySymbol,
     appliedCorporateActions: rebuilt.appliedCorporateActions,
     marginCallActive: false,
     liquidityConsumed,
@@ -1249,24 +1399,46 @@ function parsePersistedSession(serialized: string): SessionState {
   return next;
 }
 
-function savedSession(): string | undefined {
-  if (typeof window === "undefined") return undefined;
+type SessionStorageReader = Pick<Storage, "getItem">;
+
+type SavedSessionRead = {
+  serialized?: string;
+  health?: SessionPersistenceHealth;
+};
+
+function savedSession(storage?: SessionStorageReader): SavedSessionRead {
+  if (!storage) return {};
   try {
-    return (
-      window.localStorage.getItem(SESSION_STORAGE_KEY) ??
-      window.localStorage.getItem(LEGACY_SESSION_STORAGE_KEY) ??
-      undefined
-    );
-  } catch {
-    return undefined;
+    return {
+      serialized:
+        storage.getItem(SESSION_STORAGE_KEY) ??
+        storage.getItem(LEGACY_SESSION_STORAGE_KEY) ??
+        undefined,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown error";
+    return {
+      health: {
+        kind: "error",
+        operation: "read",
+        message: `Browser save health: the saved replay could not be read (${reason}). A fresh in-memory session is open. Export the active session or restore a backup before relying on reload.`,
+      },
+    };
   }
 }
 
-function initialState(): SessionState {
-  const saved = savedSession();
-  if (!saved) return buildInitialState(defaultScenarioId);
+export function loadInitialSessionState(
+  storage?: SessionStorageReader,
+): SessionState {
+  const saved = savedSession(storage);
+  if (!saved.serialized) {
+    return {
+      ...buildInitialState(defaultScenarioId),
+      persistenceHealth: saved.health,
+    };
+  }
   try {
-    return parsePersistedSession(saved);
+    return parsePersistedSession(saved.serialized);
   } catch (error) {
     const fallback = buildInitialState(defaultScenarioId);
     const reason =
@@ -1274,17 +1446,72 @@ function initialState(): SessionState {
     return {
       ...fallback,
       rejectionMessage: `Saved session was not restored: ${reason}`,
+      persistenceHealth: {
+        kind: "error",
+        operation: "restore",
+        message: `Browser save recovery needed: the saved replay could not be restored (${reason}). A fresh in-memory session is open. Restore a known-good backup or clear the damaged browser save before relying on reload.`,
+      },
     };
   }
 }
 
-function saveSession(state: SessionState): void {
-  if (typeof window === "undefined") return;
+let lastKnownSessionStorageValue: string | null | undefined;
+let lastKnownSessionRunInstanceId: string | undefined;
+
+function initialState(): SessionState {
+  if (typeof window === "undefined") return loadInitialSessionState();
   try {
-    window.localStorage.setItem(SESSION_STORAGE_KEY, serializeSession(state));
+    const state = loadInitialSessionState(window.localStorage);
+    lastKnownSessionStorageValue = window.localStorage.getItem(
+      SESSION_STORAGE_KEY,
+    );
+    lastKnownSessionRunInstanceId = state.runInstanceId;
+    return state;
+  } catch (error) {
+    lastKnownSessionStorageValue = undefined;
+    lastKnownSessionRunInstanceId = undefined;
+    return loadInitialSessionState({
+      getItem: () => {
+        throw error;
+      },
+    });
+  }
+}
+
+type SessionSaveResult =
+  | { ok: true }
+  | { ok: false; kind: "write" | "conflict"; message: string };
+
+function saveSession(state: SessionState): SessionSaveResult {
+  if (typeof window === "undefined") return { ok: true };
+  try {
+    const serialized = serializeSession(state);
+    const currentStored = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    const sameRun = lastKnownSessionRunInstanceId === state.runInstanceId;
+    if (
+      sameRun &&
+      lastKnownSessionStorageValue !== undefined &&
+      currentStored !== lastKnownSessionStorageValue &&
+      currentStored !== serialized
+    ) {
+      return {
+        ok: false,
+        kind: "conflict",
+        message:
+          "another tab changed this replay after the current tab last saved",
+      };
+    }
+    window.localStorage.setItem(SESSION_STORAGE_KEY, serialized);
     window.localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
-  } catch {
-    // Persistence is best-effort; quota/privacy errors must not break replay.
+    lastKnownSessionStorageValue = serialized;
+    lastKnownSessionRunInstanceId = state.runInstanceId;
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: "write",
+      message: error instanceof Error ? error.message : "unknown error",
+    };
   }
 }
 
@@ -1310,6 +1537,151 @@ function activeDrillFor(state: SessionState) {
     )
     ? definition
     : undefined;
+}
+
+function initialPracticeState(
+  scenarioId: string,
+  drillId: string,
+  context?: PracticeStartContext,
+): SessionState {
+  const next = buildInitialState(scenarioId, drillId);
+  if (
+    context &&
+    !scenarioDataVersionsEqual(
+      scenarioId,
+      context.scenarioDataVersion,
+      next.scenario.meta.dataVersion,
+    )
+  ) {
+    throw new Error(
+      "Practice assignment references a missing or different scenario data version.",
+    );
+  }
+  const brokerMode = context?.brokerMode ?? "scenario";
+  if (
+    brokerMode !== "scenario" &&
+    (next.mode === "professional" ||
+      next.mode === "blind" ||
+      next.mode === "challenge")
+  ) {
+    throw new Error(
+      "Practice assignment broker settings are incompatible with this mode.",
+    );
+  }
+  const prepared =
+    brokerMode === "scenario"
+      ? next
+      : {
+          ...next,
+          brokerMode,
+          broker: {
+            ...getBrokerPreset(brokerMode),
+            baseCurrency: next.scenario.meta.baseCurrency,
+          },
+        };
+  if (
+    context &&
+    (!isBrokerConfigFingerprint(context.brokerFingerprint) ||
+      context.brokerFingerprint !== brokerConfigFingerprint(prepared.broker))
+  ) {
+    throw new Error(
+      "Practice assignment references missing or changed broker execution settings.",
+    );
+  }
+  const definition = activeDrillFor(prepared);
+  const hasArchivedDrillIdentity =
+    context?.drillIdentity !== undefined ||
+    context?.checkpointScheduleFingerprint !== undefined;
+  if (
+    hasArchivedDrillIdentity &&
+    (!context?.drillIdentity || !context.checkpointScheduleFingerprint)
+  ) {
+    throw new Error(
+      "Archived practice is missing part of its exact drill or checkpoint-schedule identity.",
+    );
+  }
+  if (
+    context?.drillIdentity &&
+    (!definition ||
+      !activeDrillIdentityMatches(
+        context.drillIdentity,
+        definition,
+        prepared.scenario.meta.dataVersion ?? null,
+      ))
+  ) {
+    throw new Error(
+      "Archived practice references a missing or changed drill definition.",
+    );
+  }
+  if (
+    definition &&
+    context?.checkpointScheduleFingerprint &&
+    context.checkpointScheduleFingerprint !==
+      drillCheckpointScheduleFingerprint(
+        buildDrillCheckpointSchedule(definition, prepared.scenario),
+      )
+  ) {
+    throw new Error(
+      "Archived practice references a missing or changed checkpoint schedule.",
+    );
+  }
+  const firstCheckpoint = definition
+    ? buildDrillCheckpointSchedule(definition, prepared.scenario).find(
+        (checkpoint) => checkpoint.replayIndex === 0,
+      )
+    : undefined;
+  return {
+    ...prepared,
+    pendingDrillCheckpoint: firstCheckpoint,
+    status: firstCheckpoint ? "paused" : prepared.status,
+  };
+}
+
+function initialReplayState(
+  scenarioId: string,
+  mode: ScenarioMode,
+  context?: ReplayStartContext,
+): SessionState {
+  const next = buildInitialState(scenarioId);
+  if (!next.scenario.meta.supportedModes.includes(mode)) {
+    throw new Error("Replay mode is not available for this scenario.");
+  }
+  if (
+    context &&
+    !scenarioDataVersionsEqual(
+      scenarioId,
+      context.scenarioDataVersion,
+      next.scenario.meta.dataVersion,
+    )
+  ) {
+    throw new Error(
+      "Replay context references a missing or different scenario data version.",
+    );
+  }
+  const brokerMode = context?.brokerMode ?? "scenario";
+  if (
+    brokerMode !== "scenario" &&
+    (mode === "professional" || mode === "blind" || mode === "challenge")
+  ) {
+    throw new Error("Replay broker settings are incompatible with this mode.");
+  }
+  const broker =
+    brokerMode === "scenario"
+      ? { ...next.scenario.broker }
+      : {
+          ...getBrokerPreset(brokerMode),
+          baseCurrency: next.scenario.meta.baseCurrency,
+        };
+  if (
+    context &&
+    (!isBrokerConfigFingerprint(context.brokerFingerprint) ||
+      context.brokerFingerprint !== brokerConfigFingerprint(broker))
+  ) {
+    throw new Error(
+      "Replay context references missing or changed broker execution settings.",
+    );
+  }
+  return { ...next, mode, brokerMode, broker };
 }
 
 function activeDrillLabel(state: SessionState): string {
@@ -1351,6 +1723,29 @@ function initialDrillPlanRejection(
         ", ",
       )}.`
     : undefined;
+}
+
+function drillPrimarySymbolRejection(
+  state: SessionState,
+  symbol: string,
+): string | undefined {
+  const definition = activeDrillFor(state);
+  return definition && symbol !== definition.primarySymbol
+    ? `${activeDrillLabel(state)} accepts orders only for its primary asset (${definition.primarySymbol}).`
+    : undefined;
+}
+
+function volumeLimitedLiquidityRejection(
+  state: SessionState,
+  symbol: string,
+): string | undefined {
+  if (state.broker.partialFillPolicy !== "volume_limited") return undefined;
+  const hasUsableVolume = candlesForSymbol(state.scenario, symbol).some(
+    (candle) => Number.isFinite(candle.volume) && candle.volume > 0,
+  );
+  return hasUsableVolume
+    ? undefined
+    : `The ${symbol} replay has no volume data, so the selected volume-limited broker cannot execute orders. Choose Scenario or Ideal broker settings.`;
 }
 
 function drillViolation(
@@ -1605,7 +2000,6 @@ function updateOcoSiblingsAfterFill(
     if (remainingQuantity <= 1e-9) {
       return {
         ...order,
-        quantity: order.filledQuantity ?? 0,
         remainingQuantity: 0,
         status: "cancelled",
         closedAt: currentTime,
@@ -1933,7 +2327,6 @@ function applyForcedLiquidationIfNeeded(
   fills: Fill[];
   auditEvents: AuditEvent[];
   marginCallActive: boolean;
-  rejectionMessage?: string;
 } {
   const prices = tradablePricesFor(scenario, currentTime, broker);
   let marked = markToMarket(portfolio, prices);
@@ -2106,11 +2499,17 @@ function latestVolatilityFor(
       (a, b) => Date.parse(b.availableAt) - Date.parse(a.availableAt),
     )[0];
   if (!indicator) return undefined;
+  const toFraction = (value: number): number =>
+    indicator.parameters?.unit === "percent" ? value / 100 : value;
   if (typeof indicator.value === "number") {
-    return Number.isFinite(indicator.value) ? Math.max(0, indicator.value) : undefined;
+    return Number.isFinite(indicator.value)
+      ? Math.max(0, toFraction(indicator.value))
+      : undefined;
   }
   const firstFinite = Object.values(indicator.value).find(Number.isFinite);
-  return typeof firstFinite === "number" ? Math.max(0, firstFinite) : undefined;
+  return typeof firstFinite === "number"
+    ? Math.max(0, toFraction(firstFinite))
+    : undefined;
 }
 
 function reservedGrossNotionalFor(
@@ -2541,7 +2940,6 @@ function processTriggeredLimitOrders(
       fills.splice(0, fills.length, ...liquidation.fills);
       auditEvents = liquidation.auditEvents;
       marginCallActive = liquidation.marginCallActive;
-      rejectionMessage = liquidation.rejectionMessage ?? rejectionMessage;
     }
 
     if (Date.parse(accountingTime) < endEpoch) {
@@ -2588,7 +2986,6 @@ function processTriggeredLimitOrders(
     fills.splice(0, fills.length, ...liquidation.fills);
     auditEvents = liquidation.auditEvents;
     marginCallActive = liquidation.marginCallActive;
-    rejectionMessage = liquidation.rejectionMessage ?? rejectionMessage;
     auditEvents.push(
       auditEvent(auditEvents, {
         time: currentTime,
@@ -2616,6 +3013,19 @@ function processTriggeredLimitOrders(
   };
 }
 
+let publishingPersistenceHealth = false;
+
+function publishPersistenceHealth(
+  health: SessionPersistenceHealth | undefined,
+): void {
+  publishingPersistenceHealth = true;
+  try {
+    useSessionStore.setState({ persistenceHealth: health });
+  } finally {
+    publishingPersistenceHealth = false;
+  }
+}
+
 export const useSessionStore = create<SessionStore>((set, get) => ({
   ...initialState(),
 
@@ -2623,20 +3033,21 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set(buildInitialState(id));
   },
 
-  startPractice: (scenarioId, drillId) => {
+  startReplay: (scenarioId, mode, context) => {
     try {
-      const next = buildInitialState(scenarioId, drillId);
-      const definition = activeDrillFor(next);
-      const firstCheckpoint = definition
-        ? buildDrillCheckpointSchedule(definition, next.scenario).find(
-            (checkpoint) => checkpoint.replayIndex === 0,
-          )
-        : undefined;
-      set({
-        ...next,
-        pendingDrillCheckpoint: firstCheckpoint,
-        status: firstCheckpoint ? "paused" : next.status,
-      });
+      set(initialReplayState(scenarioId, mode, context));
+      return { ok: true };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to start replay.";
+      set({ rejectionMessage: message });
+      return { ok: false, message };
+    }
+  },
+
+  startPractice: (scenarioId, drillId, context) => {
+    try {
+      set(initialPracticeState(scenarioId, drillId, context));
       return { ok: true };
     } catch (error) {
       const message =
@@ -2648,7 +3059,33 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   resetScenario: () => {
     const state = get();
-    set(buildInitialState(state.scenario.meta.id, state.activeDrillId));
+    set(
+      state.activeDrillId
+        ? initialPracticeState(state.scenario.meta.id, state.activeDrillId, {
+            scenarioDataVersion:
+              state.activeDrillIdentity?.scenarioDataVersion ??
+              state.scenario.meta.dataVersion ??
+              null,
+            brokerMode: state.brokerMode,
+            brokerFingerprint: brokerConfigFingerprint(state.broker),
+            drillIdentity: state.activeDrillIdentity
+              ? copyActiveDrillIdentity(state.activeDrillIdentity)
+              : undefined,
+            checkpointScheduleFingerprint: state.activeDrillIdentity
+              ? drillCheckpointScheduleFingerprint(
+                  buildDrillCheckpointSchedule(
+                    state.activeDrillIdentity.definitionSnapshot,
+                    state.scenario,
+                  ),
+                )
+              : undefined,
+          })
+        : initialReplayState(state.scenario.meta.id, state.mode, {
+            scenarioDataVersion: state.scenario.meta.dataVersion ?? null,
+            brokerMode: state.brokerMode,
+            brokerFingerprint: brokerConfigFingerprint(state.broker),
+          }),
+    );
   },
 
   play: () => {
@@ -2905,7 +3342,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     finalizeReport();
   },
 
-  submitDrillCheckpoint: (action, reflection) => {
+  submitDrillCheckpoint: (action, reflection, linkedEventIds) => {
     const state = get();
     const definition = activeDrillFor(state);
     const checkpoint = state.pendingDrillCheckpoint;
@@ -2923,6 +3360,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       checkpointId: checkpoint.id,
       replayTime: checkpoint.replayTime,
       eventIds: [...checkpoint.eventIds],
+      linkedEventIds: [...linkedEventIds],
       status: "answered",
       action,
       reflection: reflection.trim(),
@@ -2975,6 +3413,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const state = get();
     if (state.status === "finished") {
       return { ok: false, message: "Scenario already finished." };
+    }
+    const symbolRejection = drillPrimarySymbolRejection(state, req.symbol);
+    if (symbolRejection) {
+      set({ rejectionMessage: symbolRejection });
+      return { ok: false, message: symbolRejection };
+    }
+    const liquidityRejection = volumeLimitedLiquidityRejection(
+      state,
+      req.symbol,
+    );
+    if (liquidityRejection) {
+      set({ rejectionMessage: liquidityRejection });
+      return { ok: false, message: liquidityRejection };
     }
     const planRejection = initialDrillPlanRejection(state, req.decisionPlan);
     if (planRejection) {
@@ -3157,7 +3608,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         state,
         req.decisionPlan,
       ),
-      rejectionMessage: liquidation.rejectionMessage,
+      rejectionMessage: undefined,
     });
     return { ok: true };
   },
@@ -3166,6 +3617,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const state = get();
     if (state.status === "finished") {
       return { ok: false, message: "Scenario already finished." };
+    }
+    const symbolRejection = drillPrimarySymbolRejection(state, req.symbol);
+    if (symbolRejection) {
+      set({ rejectionMessage: symbolRejection });
+      return { ok: false, message: symbolRejection };
+    }
+    const liquidityRejection = volumeLimitedLiquidityRejection(
+      state,
+      req.symbol,
+    );
+    if (liquidityRejection) {
+      set({ rejectionMessage: liquidityRejection });
+      return { ok: false, message: liquidityRejection };
     }
     const planRejection = initialDrillPlanRejection(state, req.decisionPlan);
     if (planRejection) {
@@ -3245,6 +3709,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const state = get();
     if (state.status === "finished") {
       return { ok: false, message: "Scenario already finished." };
+    }
+    const symbolRejection = drillPrimarySymbolRejection(state, req.symbol);
+    if (symbolRejection) {
+      set({ rejectionMessage: symbolRejection });
+      return { ok: false, message: symbolRejection };
+    }
+    const liquidityRejection = volumeLimitedLiquidityRejection(
+      state,
+      req.symbol,
+    );
+    if (liquidityRejection) {
+      set({ rejectionMessage: liquidityRejection });
+      return { ok: false, message: liquidityRejection };
     }
     const planRejection = initialDrillPlanRejection(state, req.decisionPlan);
     if (planRejection) {
@@ -3326,6 +3803,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const state = get();
     if (state.status === "finished") {
       return { ok: false, message: "Scenario already finished." };
+    }
+    const symbolRejection = drillPrimarySymbolRejection(state, req.symbol);
+    if (symbolRejection) {
+      set({ rejectionMessage: symbolRejection });
+      return { ok: false, message: symbolRejection };
+    }
+    const liquidityRejection = volumeLimitedLiquidityRejection(
+      state,
+      req.symbol,
+    );
+    if (liquidityRejection) {
+      set({ rejectionMessage: liquidityRejection });
+      return { ok: false, message: liquidityRejection };
     }
     if (
       !Number.isFinite(req.stopPrice) ||
@@ -3657,7 +4147,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   addJournalNote: (note) => {
-    if (!note.trim()) return;
+    const boundedNote = note.trim().slice(0, SESSION_TEXT_MAX_LENGTH);
+    if (!boundedNote) return;
     const currentTime = currentTimeFor(get());
     set((state) => ({
       journal: [
@@ -3667,7 +4158,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
             .toString(36)
             .slice(2, 6)}`,
           time: currentTime,
-          note: note.trim(),
+          note: boundedNote,
         },
       ],
     }));
@@ -3686,7 +4177,13 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
           message: "Saved session restored.",
         }),
       ];
-      set(restored);
+      if (typeof window !== "undefined") {
+        lastKnownSessionStorageValue = window.localStorage.getItem(
+          SESSION_STORAGE_KEY,
+        );
+      }
+      lastKnownSessionRunInstanceId = restored.runInstanceId;
+      set({ ...restored, persistenceHealth: undefined });
       if (restored.status === "finished" && !restored.report) {
         finalizeReport();
       }
@@ -3700,12 +4197,55 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   clearSavedSession: () => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      const result = {
+        ok: false,
+        message: "Browser storage is unavailable in this environment.",
+      } as const;
+      publishPersistenceHealth({
+        kind: "error",
+        operation: "delete",
+        message: `${result.message} Export the active session before closing this page.`,
+      });
+      return result;
+    }
     try {
       window.localStorage.removeItem(SESSION_STORAGE_KEY);
       window.localStorage.removeItem(LEGACY_SESSION_STORAGE_KEY);
-    } catch {
-      // Clearing persistence is best-effort in privacy-restricted browsers.
+      if (
+        window.localStorage.getItem(SESSION_STORAGE_KEY) !== null ||
+        window.localStorage.getItem(LEGACY_SESSION_STORAGE_KEY) !== null
+      ) {
+        const result = {
+          ok: false,
+          message:
+            "Browser storage did not confirm deletion. The saved session may return after reload.",
+        } as const;
+        publishPersistenceHealth({
+          kind: "error",
+          operation: "delete",
+          message: `${result.message} Retry clearing it or use the browser's site-data controls.`,
+        });
+        return result;
+      }
+      lastKnownSessionStorageValue = null;
+      lastKnownSessionRunInstanceId = get().runInstanceId;
+      publishPersistenceHealth(undefined);
+      return { ok: true };
+    } catch (error) {
+      const result = {
+        ok: false,
+        message:
+          error instanceof Error
+            ? `Browser save could not be cleared: ${error.message}`
+            : "Browser save could not be cleared.",
+      } as const;
+      publishPersistenceHealth({
+        kind: "error",
+        operation: "delete",
+        message: `${result.message} It may return after reload; retry or use the browser's site-data controls.`,
+      });
+      return result;
     }
   },
 
@@ -3765,6 +4305,9 @@ function practiceDrillReportForState(
                   PRACTICE_DRILL_REFLECTION_MAX_LENGTH,
                 ),
                 eventIds: [...response.eventIds],
+                linkedEventIds: response.linkedEventIds
+                  ? [...response.linkedEventIds]
+                  : undefined,
                 workingOrderIds: response.workingOrderIds
                   ? [...response.workingOrderIds]
                   : undefined,
@@ -3821,7 +4364,8 @@ function buildReportForState(state: SessionState): ReportPayload {
       violations: state.drillRuleViolations,
       positionOpened: state.fills.some(
         (fill) =>
-          fill.reason === "user_order" || fill.reason === "working_order",
+          fill.symbol === definition.primarySymbol &&
+          (fill.reason === "user_order" || fill.reason === "working_order"),
       ),
       replayCompleted: state.status === "finished",
     }),
@@ -3838,5 +4382,80 @@ export function selectSnapshot(state: SessionStore): ReplaySnapshot {
 }
 
 useSessionStore.subscribe((state) => {
-  saveSession(state);
+  if (publishingPersistenceHealth) return;
+  if (
+    state.persistenceHealth?.kind === "error" &&
+    (state.persistenceHealth.operation === "read" ||
+      state.persistenceHealth.operation === "restore" ||
+      state.persistenceHealth.operation === "conflict")
+  ) {
+    // Do not silently overwrite an unreadable or invalid startup save with the
+    // fresh fallback session. Explicit clear or a successful restore releases
+    // this guard and makes subsequent automatic saves safe again.
+    return;
+  }
+  const result = saveSession(state);
+  if (!result.ok) {
+    const conflict = result.kind === "conflict";
+    const nextHealth: SessionPersistenceHealth = {
+      kind: "error",
+      operation: conflict ? "conflict" : "write",
+      message: conflict
+        ? `Browser save conflict: ${result.message}. This tab stopped automatic saving to avoid overwriting newer work. Export this tab or start/restore the replay you want to keep.`
+        : `Browser save health: changes are not being saved (${result.message}). Keep this tab open and export the active session; retry after browser storage is available.`,
+    };
+    if (
+      state.persistenceHealth?.kind !== nextHealth.kind ||
+      state.persistenceHealth.operation !== nextHealth.operation ||
+      state.persistenceHealth.message !== nextHealth.message
+    ) {
+      publishPersistenceHealth(nextHealth);
+    }
+    return;
+  }
+  if (
+    state.persistenceHealth?.kind === "error" &&
+    state.persistenceHealth.operation === "write"
+  ) {
+    publishPersistenceHealth({
+      kind: "recovered",
+      operation: "write",
+      message:
+        "Browser save health recovered: the active session is being saved again.",
+    });
+  }
 });
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (
+      event.key !== null &&
+      event.key !== SESSION_STORAGE_KEY &&
+      event.key !== LEGACY_SESSION_STORAGE_KEY
+    ) {
+      return;
+    }
+    try {
+      const currentStored = window.localStorage.getItem(SESSION_STORAGE_KEY);
+      if (currentStored === lastKnownSessionStorageValue) return;
+      const currentState = useSessionStore.getState();
+      if (currentStored === serializeSession(currentState)) {
+        lastKnownSessionStorageValue = currentStored;
+        lastKnownSessionRunInstanceId = currentState.runInstanceId;
+        return;
+      }
+      publishPersistenceHealth({
+        kind: "error",
+        operation: "conflict",
+        message:
+          "Browser save conflict: another tab changed this replay. This tab stopped automatic saving to protect both versions; export it or start/restore the version you want to keep.",
+      });
+    } catch (error) {
+      publishPersistenceHealth({
+        kind: "error",
+        operation: "read",
+        message: `Browser save health: a cross-tab change could not be read (${error instanceof Error ? error.message : "unknown error"}). Export this tab before closing it.`,
+      });
+    }
+  });
+}

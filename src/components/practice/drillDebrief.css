@@ -312,6 +312,29 @@
   flex: 0 0 auto;
 }
 
+.drill-checkpoint-events .drill-event-link-state {
+  width: fit-content;
+  margin-top: 2px;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+
+.drill-checkpoint-events .drill-event-link-state.linked {
+  border-color: rgba(90, 202, 143, 0.36);
+  color: var(--pos);
+}
+
+.drill-checkpoint-events .drill-event-link-state.reviewed {
+  color: var(--text-dim);
+}
+
+.drill-checkpoint-events .drill-event-link-state.legacy {
+  border-color: rgba(242, 182, 90, 0.34);
+  color: var(--accent);
+}
+
 .drill-checkpoint-events > p,
 .drill-checkpoint-response > p {
   margin: 0;

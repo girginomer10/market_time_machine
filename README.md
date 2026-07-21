@@ -50,7 +50,8 @@ component focus, cross-regime transfer, or comparable rerun. Broader unmeasured
 recommendations remain in the report. Event Discipline drills require a
 complete initial plan and explicit Hold, Reduce,
 Exit, or Wait responses when high-importance events become visible. The drill
-rubric scores observable plan coverage, checkpoint coverage, visible-event
+also asks which visible events actually influenced each response; checkpoint
+membership is never automatic linkage credit. The rubric scores observable plan coverage, checkpoint coverage, visible-event
 linkage, and rule adherence; missing evidence remains unassessed and profit is
 not treated as a durable skill rating.
 
@@ -59,20 +60,28 @@ The shipped evidence layer includes:
 - a compact local ledger of up to 250 factual or drill-assessed attempts, without
   raw journal, plan, checkpoint-response, or reflection text;
 - versioned competency evidence claims with evidence breadth, exact
-  source-scenario coverage, confidence, and same-context trend comparisons;
+  source-scenario coverage, confidence, and same-context trend comparisons that
+  also require the same rubric content, mode, and full broker configuration;
 - open Decision Foundations and Event Pressure Transfer tracks backed by the two
-  ECB reference-rate scenarios;
+  ECB reference-rate scenarios. Every credit-bearing unit pins the canonical
+  replay-contract version, practice mode, broker mode, and full broker
+  configuration fingerprint;
 - a Volatility Discipline preview using synthetic QQQ and KRE paths. These units
   can rehearse the drill but cannot award unit or track credit;
 - a V2 practice archive containing up to 12 recent full reports plus the compact
   ledger, with strict import, non-overwriting conflict handling, and migration
   from V1 run-history exports. Full reports can contain private journal, plan,
   checkpoint-decision, and reflection text; compact ledger entries cannot.
+- a surprise Blind/Local Challenge self-test that chooses an eligible lab only
+  after start. It masks identity locally but is explicitly not secure anti-cheat.
 
 Scenario packages may also carry validated, data-only drill definitions. A valid
 authored drill becomes runnable only with its containing scenario and cannot
 replace a reserved built-in definition. Credit-bearing track references remain
 separately curated; importing a runnable drill does not grant track credit.
+Browser imports receive an app-derived SHA-256 identity over the complete replay
+contract, including authored drills, so a reused author version label cannot
+silently make changed content compatible with an older saved session.
 
 See [V2 Product Definition](docs/v2-personal-decision-gym.md) for the exact
 shipped scope, evidence boundaries, and non-goals.
@@ -140,8 +149,8 @@ lab.
 
 | Scenario | Symbol | Theme | Data note |
 | --- | --- | --- | --- |
-| Brexit Referendum: EUR/GBP 2016 | `EURGBP` | Referendum, sterling uncertainty, Bank of England response | ECB daily reference-rate observations; OHLC repeat each daily point and volume is zero |
-| COVID Liquidity Shock: EUR/USD 2020 | `EURUSD` | Pandemic news, dollar funding, Federal Reserve and ECB liquidity response | ECB daily reference-rate observations; OHLC repeat each daily point and volume is zero |
+| Brexit Referendum: EUR/GBP 2016 | `EURGBP` | Referendum, sterling uncertainty, Bank of England response | ECB daily reference-rate observations; OHLC repeat each daily point, volume is zero, and date-only observations use a derived 00:00Z-15:00Z replay window |
+| COVID Liquidity Shock: EUR/USD 2020 | `EURUSD` | Pandemic news, dollar funding, Federal Reserve and ECB liquidity response | ECB daily reference-rate observations; OHLC repeat each daily point, volume is zero, and date-only observations use a derived 00:00Z-15:00Z replay window |
 | Bitcoin 2020-2021 | `BTCUSD` | COVID crash, halving, bull cycle | Synthetic sample prices |
 | S&P 500 COVID Crash & Recovery | `SPY` | Pandemic crash, policy response, vaccine news | Synthetic sample prices |
 | Nasdaq 2022 Rate Shock | `QQQ` | Inflation, Fed tightening, growth-stock repricing | Synthetic sample prices |
@@ -154,7 +163,26 @@ npm run import:ecb-eurgbp -- --force=true --retrieved-at=2026-07-13T00:00:00.000
 ```
 
 Review the diff and current source terms before committing a refreshed
-snapshot; the script deliberately refuses to overwrite by default.
+snapshot; the script deliberately refuses to overwrite by default. The
+snapshot stores a canonical observation SHA-256 as a source sub-identity. The
+shipped scenario's authoritative `dataVersion` is a separate SHA-256 of its
+complete replay contract: replay-relevant metadata, instruments, derived
+candles, events, indicators, benchmarks, default broker, market calendar, and
+corporate actions. `dataVersion` itself and `generatedAt` are excluded, so
+changing only `retrievedAt` does not change replay identity. Any other refreshed
+or authored replay change must be reviewed with the full-contract version test
+and its pinned constant updated.
+
+The ECB source supplies one date and one reference value, not an intraday bar.
+Both ECB labs therefore derive candle open/close times as `00:00Z` and `15:00Z`
+and place the matching benchmark point at `15:00Z`. These timestamps are a
+deterministic replay convention, not observed publication or execution times.
+
+The former observation-only and retrieval-stamped ECB identities remain
+accepted only as explicitly reviewed migration aliases for these built-in
+scenarios. They are not wildcard matches: an unreviewed value compares only by
+exact equality and cannot bridge a session, coach, evidence-comparison, or
+track-credit mismatch.
 
 The second observed ECB snapshot is reproduced with:
 
@@ -178,12 +206,17 @@ This writes to `src/data/scenarios/sp500-covid-2020-fred/`, which is intentional
 Local licensed scenarios are available in the development server but are excluded from normal production bundles, even when their ignored source files exist in the workspace.
 
 FRED closes are source observations, but the importer derives open/high/low and
-sets volume to zero. Generated packages are therefore labeled **Sample data**
-so the UI does not present the derived OHLC candles as fully source-observed.
+sets volume to zero. Generated packages therefore disclose **Observed values
+with derived fields** and list the boundary explicitly. Their version combines
+the imported-content SHA-256 with the bundled event-layer version. Candle times
+also use derived regular 09:30-16:00 America/New_York sessions; exchange
+early-close exceptions are not modeled, so the package is not intraday-timing
+evidence.
 
 The importer will not overwrite an existing generated scenario unless you pass
 `--force=true`. Custom date ranges receive a generic date-range identity and
-only retain events inside that range.
+only retain events inside that range. Its `index.ts` and `README.md` are staged
+and replaced as one recoverable pair, with rollback if installation fails.
 
 ### Optional Licensed OHLCV Local Import
 
@@ -193,17 +226,20 @@ Users with their own redistribution-safe or local-use licensed OHLCV data can ge
 npm run import:ohlcv -- --input=local-data/spy.csv --symbol=SPY --title="SPY Local Replay" --license="Licensed local use only"
 ```
 
-This writes to `src/data/scenarios/local-spy/`, which is gitignored by default. CSV/JSON rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`.
-The importer validates prices, duplicates, timestamps, and output paths before
-an atomic write. It does not invent an exchange calendar; generated scenarios
-leave market-hours enforcement off until you add a verified calendar.
+This writes to `src/data/scenarios/local-spy/`, which is gitignored by default. CSV/JSON rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`. Use `--tickSize=<positive number>` when the instrument needs a custom price increment; FX defaults to `0.0001` and other asset classes default to `0.01`.
+The importer validates prices, duplicates, timestamps, tick size, and output
+paths before staging and recoverably replacing the generated source/README pair.
+It refuses output inside production-copied or bundled source roots. It does not
+invent an exchange calendar; generated scenarios leave market-hours enforcement
+off until you add a verified calendar.
 
 The browser exposes separate controls for restoring a session export and
 importing a complete Market Time Machine scenario package. Neither accepts raw
 OHLCV. User-owned JSON OHLCV is imported through the CLI above as an array of
-row objects. Session backups pin exact scenario/drill versions but do not embed
-an imported scenario package, so that package must be imported first in another
-browser. See [Privacy And Local Data](docs/privacy-and-local-data.md#four-different-json-paths)
+row objects. Current session backups pin the canonical scenario identity and
+full active broker configuration; practice backups also pin the exact drill
+definition. They do not embed an imported scenario package, so that package
+must be imported first in another browser. See [Privacy And Local Data](docs/privacy-and-local-data.md#four-different-json-paths)
 for an exact JSON example, storage boundaries, and deletion instructions.
 
 ## Core Principles
@@ -282,4 +318,4 @@ as legal advice.
 
 ## Disclaimer
 
-Market Time Machine is for education, research, and historical simulation. It is not investment advice, a broker, an exchange, a recommendation engine, or a guarantee of trading performance. Sample or derived prices are not executable market quotes. Sessions, completed-run history, compact practice evidence, imported scenarios, and journal notes are stored locally in the browser; review [Privacy and Local Data](docs/privacy-and-local-data.md) before using a shared device or exporting a session or practice archive.
+Market Time Machine is for education, research, and historical simulation. It is not investment advice, a broker, an exchange, a recommendation engine, or a guarantee of trading performance. Sample or derived prices are not executable market quotes. Local scores, evidence, and tracks are self-assessment aids, not tamper-proof certification. Sessions, completed-run history, compact practice evidence, imported scenarios, and journal notes are stored locally in the browser; review [Privacy and Local Data](docs/privacy-and-local-data.md) before using a shared device or exporting a session or practice archive.

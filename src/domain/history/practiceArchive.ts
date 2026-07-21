@@ -9,6 +9,13 @@ import {
   isCompletedRun,
   type CompletedRun,
 } from "./runHistory";
+import { getScenario } from "../../data/scenarios";
+import {
+  getBuiltInDrill,
+  getDrillForScenario,
+} from "../../data/practice/drills";
+import { scenarioDataVersionsEqual } from "../../data/scenarios/dataVersions";
+import { buildDrillCheckpointSchedule } from "../practice/drills";
 
 export const PRACTICE_ARCHIVE_FORMAT =
   "market-time-machine-practice-archive";
@@ -92,6 +99,81 @@ function sameContent(left: unknown, right: unknown): boolean {
   return JSON.stringify(canonicalize(left)) === JSON.stringify(canonicalize(right));
 }
 
+/**
+ * A current or explicitly reviewed built-in replay contract is authoritative.
+ * Self-consistent imported JSON may retain historical/custom evidence, but it
+ * cannot redefine a known drill's checkpoint schedule or display-only events.
+ */
+function practiceSnapshotMatchesAuthoritativeCatalog(run: CompletedRun): boolean {
+  const snapshot = run.report.practiceDrill;
+  if (!snapshot) return true;
+  const scenario = getScenario(run.scenarioId);
+  const reservedBuiltIn = getBuiltInDrill(snapshot.definition.id);
+  if (!scenario) return reservedBuiltIn === undefined;
+  if (
+    !scenarioDataVersionsEqual(
+      run.scenarioId,
+      run.report.provenance?.dataVersion,
+      scenario.meta.dataVersion,
+    )
+  ) {
+    // Unknown historical versions remain readable but are not eligible for
+    // current evidence or track credit elsewhere in the product.
+    return true;
+  }
+  const definition = getDrillForScenario(snapshot.definition.id, scenario);
+  if (!definition) return reservedBuiltIn === undefined;
+  if (!sameContent(snapshot.definition, definition)) return false;
+
+  const eventById = new Map(scenario.events.map((event) => [event.id, event]));
+  const expected = buildDrillCheckpointSchedule(definition, scenario);
+  if (snapshot.checkpoints.length !== expected.length) return false;
+  return expected.every((checkpoint, index) => {
+    const retained = snapshot.checkpoints[index];
+    if (!retained || !sameContent(retained.checkpoint, checkpoint)) return false;
+    const expectedEvents = checkpoint.eventIds.flatMap((eventId) => {
+      const event = eventById.get(eventId);
+      return event
+        ? [
+            {
+              id: event.id,
+              publishedAt: event.publishedAt,
+              title: event.title,
+              type: event.type,
+              importance: event.importance,
+              source: event.source,
+            },
+          ]
+        : [];
+    });
+    return sameContent(retained.events, expectedEvents);
+  });
+}
+
+function runIdentityAliases(run: CompletedRun): string[] {
+  return [...new Set([run.id, run.runInstanceId].filter(Boolean) as string[])];
+}
+
+function ledgerIdentityAliases(entry: PracticeLedgerEntry): string[] {
+  return [
+    ...new Set(
+      [entry.id, entry.runId, entry.runInstanceId].filter(Boolean) as string[],
+    ),
+  ];
+}
+
+function identitiesOverlap(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  const rightSet = new Set(right);
+  return left.some((identity) => rightSet.has(identity));
+}
+
+function runsShareIdentity(left: CompletedRun, right: CompletedRun): boolean {
+  return identitiesOverlap(runIdentityAliases(left), runIdentityAliases(right));
+}
+
 function normalizeRunsStrict(
   candidates: readonly unknown[],
   context: string,
@@ -101,6 +183,11 @@ function normalizeRunsStrict(
     if (!isCompletedRun(candidate)) {
       throw new PracticeArchiveError(`${context} contains a malformed run.`);
     }
+    if (!practiceSnapshotMatchesAuthoritativeCatalog(candidate)) {
+      throw new PracticeArchiveError(
+        `${context} contains a run whose drill schedule does not match the authoritative scenario.`,
+      );
+    }
     const existing = byId.get(candidate.id);
     if (existing && !sameContent(existing, candidate)) {
       throw new PracticeArchiveError(
@@ -109,7 +196,9 @@ function normalizeRunsStrict(
     }
     if (!existing) byId.set(candidate.id, candidate);
   }
-  return [...byId.values()]
+  const runs = [...byId.values()];
+  assertPracticeArchiveIdentityConsistency(runs, [], context);
+  return runs
     .sort(compareRunsNewestFirst)
     .slice(0, MAX_SAVED_RUNS);
 }
@@ -136,7 +225,9 @@ function normalizeLedgerStrict(
     }
     if (!existing) byId.set(sanitized.id, sanitized);
   }
-  return [...byId.values()]
+  const entries = [...byId.values()];
+  assertPracticeArchiveIdentityConsistency([], entries, context);
+  return entries
     .sort(compareLedgerNewestFirst)
     .slice(0, MAX_PRACTICE_LEDGER_ENTRIES);
 }
@@ -144,6 +235,75 @@ function normalizeLedgerStrict(
 function unassessedLedgerEntry(run: CompletedRun): PracticeLedgerEntry {
   const { practiceAssessment: _practiceAssessment, ...report } = run.report;
   return derivePracticeLedgerEntry({ ...run, report });
+}
+
+function ledgerEntryMatchesRun(
+  entry: PracticeLedgerEntry,
+  run: CompletedRun,
+): boolean {
+  return (
+    sameContent(
+      entry,
+      derivePracticeLedgerEntry(run, run.report.practiceAssessment),
+    ) || sameContent(entry, unassessedLedgerEntry(run))
+  );
+}
+
+function ledgerEntryReferencesRun(
+  entry: PracticeLedgerEntry,
+  run: CompletedRun,
+): boolean {
+  return identitiesOverlap(
+    ledgerIdentityAliases(entry),
+    runIdentityAliases(run),
+  );
+}
+
+export function assertPracticeArchiveIdentityConsistency(
+  runs: readonly CompletedRun[],
+  ledger: readonly PracticeLedgerEntry[],
+  context = "Practice archive",
+): void {
+  const runOwners = new Map<string, number>();
+  for (const [runIndex, run] of runs.entries()) {
+    for (const identity of runIdentityAliases(run)) {
+      const owner = runOwners.get(identity);
+      if (owner !== undefined && owner !== runIndex) {
+        throw new PracticeArchiveError(
+          `${context} contains conflicting runs with identity "${identity}".`,
+        );
+      }
+      runOwners.set(identity, runIndex);
+    }
+  }
+
+  const ledgerOwners = new Map<string, number>();
+  for (const [entryIndex, entry] of ledger.entries()) {
+    for (const identity of ledgerIdentityAliases(entry)) {
+      const owner = ledgerOwners.get(identity);
+      if (owner !== undefined && owner !== entryIndex) {
+        throw new PracticeArchiveError(
+          `${context} contains conflicting ledger entries with replay identity "${identity}".`,
+        );
+      }
+      ledgerOwners.set(identity, entryIndex);
+    }
+  }
+
+  for (const entry of ledger) {
+    const referencedRuns = runs.filter((run) =>
+      ledgerEntryReferencesRun(entry, run),
+    );
+    if (
+      referencedRuns.length > 1 ||
+      (referencedRuns.length === 1 &&
+        !ledgerEntryMatchesRun(entry, referencedRuns[0]))
+    ) {
+      throw new PracticeArchiveError(
+        `${context} ledger entry "${entry.id}" conflicts with its full run identity.`,
+      );
+    }
+  }
 }
 
 function archiveDocument(
@@ -156,20 +316,7 @@ function archiveDocument(
   }
   const normalizedRuns = normalizeRunsStrict(runs, "Practice archive");
   const normalizedLedger = normalizeLedgerStrict(ledger, "Practice archive");
-  const runById = new Map(normalizedRuns.map((run) => [run.id, run]));
-  for (const entry of normalizedLedger) {
-    const run = runById.get(entry.runId);
-    if (!run) continue;
-    const expected = derivePracticeLedgerEntry(
-      run,
-      run.report.practiceAssessment,
-    );
-    if (!sameContent(entry, expected)) {
-      throw new PracticeArchiveError(
-        `Practice archive ledger entry "${entry.id}" conflicts with its full run.`,
-      );
-    }
-  }
+  assertPracticeArchiveIdentityConsistency(normalizedRuns, normalizedLedger);
 
   return {
     format: PRACTICE_ARCHIVE_FORMAT,
@@ -248,12 +395,14 @@ function mergeRuns(
   const normalizedIncoming = normalizeRunsStrict(incoming, "Imported archive");
   const currentIds = new Set(normalizedCurrent.map((entry) => entry.id));
   const byId = new Map(normalizedCurrent.map((entry) => [entry.id, entry]));
+  const retained = [...normalizedCurrent];
   const conflicts: PracticeArchiveMergeConflict[] = [];
 
   for (const entry of normalizedIncoming) {
-    const existing = byId.get(entry.id);
+    const existing = retained.find((run) => runsShareIdentity(run, entry));
     if (!existing) {
       byId.set(entry.id, entry);
+      retained.push(entry);
     } else if (!sameContent(existing, entry)) {
       conflicts.push({ collection: "runs", id: entry.id });
     }
@@ -286,20 +435,25 @@ function mergeLedger(
   );
   const currentIds = new Set(normalizedCurrent.map((entry) => entry.id));
   const byId = new Map(normalizedCurrent.map((entry) => [entry.id, entry]));
+  const retained = [...normalizedCurrent];
   const conflicts: PracticeArchiveMergeConflict[] = [];
 
   for (const entry of normalizedIncoming) {
-    const existing = byId.get(entry.id);
+    const existing = retained.find((candidate) =>
+      identitiesOverlap(
+        ledgerIdentityAliases(candidate),
+        ledgerIdentityAliases(entry),
+      ),
+    );
     if (!existing) {
       byId.set(entry.id, entry);
+      retained.push(entry);
     } else if (!sameContent(existing, entry)) {
       conflicts.push({ collection: "ledger", id: entry.id });
     }
   }
 
-  const entries = [...byId.values()]
-    .sort(compareLedgerNewestFirst)
-    .slice(0, MAX_PRACTICE_LEDGER_ENTRIES);
+  const entries = [...byId.values()].sort(compareLedgerNewestFirst);
   return {
     entries,
     addedIds: entries
@@ -313,9 +467,77 @@ export function mergePracticeArchive(
   current: ArchiveData,
   incoming: ArchiveData,
 ): PracticeArchiveMergeResult {
-  const runs = mergeRuns(current.runs, incoming.runs);
-  const ledger = mergeLedger(current.ledger, incoming.ledger);
-  const conflicts = [...runs.conflicts, ...ledger.conflicts].sort(
+  const normalizedCurrentRuns = normalizeRunsStrict(
+    current.runs,
+    "Current archive",
+  );
+  const normalizedCurrentLedger = normalizeLedgerStrict(
+    current.ledger,
+    "Current archive",
+  );
+  assertPracticeArchiveIdentityConsistency(
+    normalizedCurrentRuns,
+    normalizedCurrentLedger,
+    "Current archive",
+  );
+  const normalizedIncomingRuns = normalizeRunsStrict(
+    incoming.runs,
+    "Imported archive",
+  );
+  const normalizedIncomingLedger = normalizeLedgerStrict(
+    incoming.ledger,
+    "Imported archive",
+  );
+  const currentRunIds = new Set(normalizedCurrentRuns.map((run) => run.id));
+  const incompatibleIncomingRunIds = new Set<string>();
+  const eligibleIncomingRuns = normalizedIncomingRuns.filter((run) => {
+    if (currentRunIds.has(run.id)) return true;
+    const retainedEvidence = normalizedCurrentLedger.filter((entry) =>
+      ledgerEntryReferencesRun(entry, run),
+    );
+    if (
+      retainedEvidence.length === 0 ||
+      retainedEvidence.every((entry) => ledgerEntryMatchesRun(entry, run))
+    ) {
+      return true;
+    }
+    incompatibleIncomingRunIds.add(run.id);
+    return false;
+  });
+  const runs = mergeRuns(normalizedCurrentRuns, eligibleIncomingRuns);
+  const ledger = mergeLedger(normalizedCurrentLedger, normalizedIncomingLedger);
+  const crossLayerConflicts: PracticeArchiveMergeConflict[] = [];
+  const ledgerEntries = ledger.entries
+    .filter((entry) => {
+      const referencedRuns = runs.entries.filter((run) =>
+        ledgerEntryReferencesRun(entry, run),
+      );
+      if (
+        referencedRuns.length === 0 ||
+        (referencedRuns.length === 1 &&
+          ledgerEntryMatchesRun(entry, referencedRuns[0]))
+      ) {
+        return true;
+      }
+      crossLayerConflicts.push({ collection: "ledger", id: entry.id });
+      return false;
+    })
+    .sort(compareLedgerNewestFirst)
+    .slice(0, MAX_PRACTICE_LEDGER_ENTRIES);
+  const retainedLedgerIds = new Set(ledgerEntries.map((entry) => entry.id));
+  const conflictsByIdentity = new Map<string, PracticeArchiveMergeConflict>();
+  for (const conflict of [
+    ...runs.conflicts,
+    ...ledger.conflicts,
+    ...crossLayerConflicts,
+    ...[...incompatibleIncomingRunIds].map((id) => ({
+      collection: "runs" as const,
+      id,
+    })),
+  ]) {
+    conflictsByIdentity.set(`${conflict.collection}:${conflict.id}`, conflict);
+  }
+  const conflicts = [...conflictsByIdentity.values()].sort(
     (left, right) =>
       left.collection.localeCompare(right.collection) ||
       left.id.localeCompare(right.id),
@@ -323,9 +545,9 @@ export function mergePracticeArchive(
 
   return {
     runs: runs.entries,
-    ledger: ledger.entries,
+    ledger: ledgerEntries,
     addedRunIds: runs.addedIds,
-    addedLedgerIds: ledger.addedIds,
+    addedLedgerIds: ledger.addedIds.filter((id) => retainedLedgerIds.has(id)),
     conflicts,
     conflictCount: conflicts.length,
   };

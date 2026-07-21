@@ -1,7 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { getScenario } from "../../data/scenarios";
+import { brokerConfigFingerprint } from "../../domain/broker/executionModels";
 import type { PracticeCoachPlan } from "../../domain/coaching/practiceCoach";
 import PracticeCoach from "./PracticeCoach";
+
+const FOUNDATION_BROKER_FINGERPRINT = brokerConfigFingerprint(
+  getScenario("eurgbp-brexit-2016")!.broker,
+);
 
 function plan(overrides: Partial<PracticeCoachPlan> = {}): PracticeCoachPlan {
   return {
@@ -19,6 +25,9 @@ function plan(overrides: Partial<PracticeCoachPlan> = {}): PracticeCoachPlan {
     drillId: "event-discipline-eurgbp-v1",
     drillTitle: "EUR/GBP Brexit — Event Discipline",
     mode: "explorer",
+    scenarioDataVersion: null,
+    brokerMode: "scenario",
+    brokerFingerprint: FOUNDATION_BROKER_FINGERPRINT,
     focusLabel: "Structured decision baseline",
     steps: ["Brief", "Plan", "Execute", "Review"],
     milestones: [

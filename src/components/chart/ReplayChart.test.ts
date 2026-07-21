@@ -56,6 +56,20 @@ describe("buildOverlayMarkers", () => {
     expect(markers[0].leftPct).toBe(0);
     expect(markers[1].leftPct).toBe(100);
   });
+
+  it("places an intrabar publication on the first candle that closes after it", () => {
+    const candles = [candle(0), candle(1), candle(2)];
+    const publishedAt = new Date(
+      (Date.parse(candles[0].closeTime) + Date.parse(candles[1].closeTime)) / 2,
+    ).toISOString();
+    const markers = buildOverlayMarkers(
+      candles,
+      [event("intrabar", publishedAt)],
+      new Map([["intrabar", 1]]),
+    );
+
+    expect(markers[0].leftPct).toBe(50);
+  });
 });
 
 describe("inferPricePrecision", () => {

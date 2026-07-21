@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   selectSnapshot,
   type BrokerMode,
@@ -7,6 +7,7 @@ import {
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
 import type {
   DecisionPlan,
+  DrillPlanField,
   MarginSnapshot,
   MarketEvent,
   OrderType,
@@ -14,9 +15,18 @@ import type {
   TimeInForce,
   TradablePrice,
 } from "../../types";
+import { SESSION_TEXT_MAX_LENGTH } from "../../types";
 import { estimateOneWaySpreadCost } from "./costEstimates";
+import { getDrillForScenario } from "../../data/practice/drills";
 
 const ZERO_EPSILON = 0.0000001;
+
+const PLAN_FIELD_LABELS: Record<DrillPlanField, string> = {
+  thesis: "thesis",
+  invalidation: "invalidation",
+  exitPlan: "exit plan",
+  acceptedRisk: "accepted risk",
+};
 
 const BROKER_MODES: Array<{
   value: BrokerMode;
@@ -47,7 +57,24 @@ const BROKER_MODES: Array<{
 
 type TicketOrderType = OrderType | "bracket";
 
+type TicketDraft = {
+  quantity: string;
+  side: "buy" | "sell";
+  orderType: TicketOrderType;
+  limitPrice: string;
+  targetPrice: string;
+  timeInForce: TimeInForce;
+  thesis: string;
+  invalidation: string;
+  exitPlan: string;
+  acceptedRisk: string;
+  linkedEventIds: string[];
+};
+
+const ticketDrafts = new Map<string, TicketDraft>();
+
 type Props = {
+  draftKey?: string;
   tradablePrice?: TradablePrice;
   tickSize?: number;
   pricePrecision?: number;
@@ -75,6 +102,7 @@ function signedPct(value: number): string {
 }
 
 export default function TradePanel({
+  draftKey,
   tradablePrice,
   tickSize,
   pricePrecision,
@@ -99,6 +127,7 @@ export default function TradePanel({
   const broker = useSessionStore((s) => s.broker);
   const brokerMode = useSessionStore((s) => s.brokerMode);
   const scenarioMode = useSessionStore((s) => s.mode);
+  const scenario = useSessionStore((s) => s.scenario);
   const activeDrillId = useSessionStore((s) => s.activeDrillId);
   const setBrokerMode = useSessionStore((s) => s.setBrokerMode);
   const fills = useSessionStore((s) => s.fills);
@@ -109,21 +138,66 @@ export default function TradePanel({
     (s) => selectSnapshot(s).currentTime,
   );
 
-  const [quantity, setQuantity] = useState<string>("0.05");
-  const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [orderType, setOrderType] = useState<TicketOrderType>("market");
-  const [limitPrice, setLimitPrice] = useState<string>("");
-  const [targetPrice, setTargetPrice] = useState<string>("");
+  const savedDraft = draftKey ? ticketDrafts.get(draftKey) : undefined;
+  const [quantity, setQuantity] = useState<string>(savedDraft?.quantity ?? "0.05");
+  const [side, setSide] = useState<"buy" | "sell">(savedDraft?.side ?? "buy");
+  const [orderType, setOrderType] = useState<TicketOrderType>(
+    savedDraft?.orderType ?? "market",
+  );
+  const [limitPrice, setLimitPrice] = useState<string>(
+    savedDraft?.limitPrice ?? "",
+  );
+  const [targetPrice, setTargetPrice] = useState<string>(
+    savedDraft?.targetPrice ?? "",
+  );
   // Daily scenarios expose each bar at its close, so a DAY order entered there
   // has no remaining same-session candle to execute against. GTC is the safe
   // default while DAY remains available for deliberate session-only orders.
-  const [timeInForce, setTimeInForce] = useState<TimeInForce>("gtc");
-  const [thesis, setThesis] = useState<string>("");
-  const [invalidation, setInvalidation] = useState<string>("");
-  const [exitPlan, setExitPlan] = useState<string>("");
-  const [acceptedRisk, setAcceptedRisk] = useState<string>("");
-  const [linkedEventIds, setLinkedEventIds] = useState<string[]>([]);
+  const [timeInForce, setTimeInForce] = useState<TimeInForce>(
+    savedDraft?.timeInForce ?? "gtc",
+  );
+  const [thesis, setThesis] = useState<string>(savedDraft?.thesis ?? "");
+  const [invalidation, setInvalidation] = useState<string>(
+    savedDraft?.invalidation ?? "",
+  );
+  const [exitPlan, setExitPlan] = useState<string>(savedDraft?.exitPlan ?? "");
+  const [acceptedRisk, setAcceptedRisk] = useState<string>(
+    savedDraft?.acceptedRisk ?? "",
+  );
+  const [linkedEventIds, setLinkedEventIds] = useState<string[]>(
+    savedDraft?.linkedEventIds ?? [],
+  );
   const [inputError, setInputError] = useState<string>();
+
+  useEffect(() => {
+    if (!draftKey) return;
+    ticketDrafts.set(draftKey, {
+      quantity,
+      side,
+      orderType,
+      limitPrice,
+      targetPrice,
+      timeInForce,
+      thesis,
+      invalidation,
+      exitPlan,
+      acceptedRisk,
+      linkedEventIds: [...linkedEventIds],
+    });
+  }, [
+    acceptedRisk,
+    draftKey,
+    exitPlan,
+    invalidation,
+    limitPrice,
+    linkedEventIds,
+    orderType,
+    quantity,
+    side,
+    targetPrice,
+    thesis,
+    timeInForce,
+  ]);
 
   const totalReturn = useMemo(
     () => (initialCash > 0 ? totalValue / initialCash - 1 : 0),
@@ -156,6 +230,16 @@ export default function TradePanel({
     [currentReplayTime, scenarioEvents],
   );
   const seriousDecisionMode = scenarioMode !== "explorer" || Boolean(activeDrillId);
+  const concealPositionSymbols =
+    status !== "finished" &&
+    (scenarioMode === "blind" || scenarioMode === "challenge");
+  const activeDrill = activeDrillId
+    ? getDrillForScenario(activeDrillId, scenario)
+    : undefined;
+  const requiredPlanFields = activeDrill?.initialPlanRule.requiredFields ?? [];
+  const requiredPlanCopy = requiredPlanFields
+    .map((field) => PLAN_FIELD_LABELS[field])
+    .join(", ");
   const position = positionsBySymbol[symbol];
   const heldQty = position?.quantity ?? 0;
   const marketPrice = tradablePrice?.price ?? position?.marketPrice;
@@ -197,7 +281,7 @@ export default function TradePanel({
   ).length;
   const brokerLocked =
     fills.length > 0 ||
-    workingOrderCount > 0 ||
+    orders.some((order) => order.status !== "rejected") ||
     scenarioMode === "professional" ||
     scenarioMode === "blind" ||
     scenarioMode === "challenge";
@@ -318,6 +402,18 @@ export default function TradePanel({
         visibleDecisionEvents.some((event) => event.id === id),
       ),
     });
+    const missingRequiredPlanFields = requiredPlanFields.filter(
+      (field) => !decisionPlan?.[field]?.trim(),
+    );
+    if (missingRequiredPlanFields.length > 0) {
+      clearRejection();
+      setInputError(
+        `Complete every required practice-plan field before ordering: ${missingRequiredPlanFields
+          .map((field) => PLAN_FIELD_LABELS[field])
+          .join(", ")}.`,
+      );
+      return;
+    }
     if (seriousDecisionMode && !decisionPlan?.thesis) {
       clearRejection();
       setInputError("This mode requires a concise decision thesis.");
@@ -463,7 +559,13 @@ export default function TradePanel({
               {openPositions.map((candidate) => (
                 <article className="open-position-row" key={candidate.symbol}>
                   <div className="open-position-head">
-                    <strong>{candidate.symbol}</strong>
+                    <strong>
+                      {concealPositionSymbols
+                        ? candidate.symbol === symbol
+                          ? "Primary asset"
+                          : "Hidden asset"
+                        : candidate.symbol}
+                    </strong>
                     <span>
                       {candidate.quantity > 0 ? "Long" : "Short"}
                     </span>
@@ -751,8 +853,10 @@ export default function TradePanel({
           <div className="broker-head">
             <span>Decision plan</span>
             <small id="decision-plan-help">
-              {seriousDecisionMode
-                ? "Thesis and one risk control are required in this mode."
+              {activeDrill
+                ? `Required before the first order: ${requiredPlanCopy}.`
+                : seriousDecisionMode
+                  ? "Thesis and one risk control are required in this mode."
                 : "Optional guided evidence for your post-game review."}
             </small>
           </div>
@@ -763,6 +867,7 @@ export default function TradePanel({
           aria-label="Decision thesis"
           aria-describedby="decision-plan-help"
           value={thesis}
+          maxLength={SESSION_TEXT_MAX_LENGTH}
           onChange={(event) => {
             setThesis(event.target.value);
             setInputError(undefined);
@@ -779,6 +884,7 @@ export default function TradePanel({
           <input
             id="decision-invalidation"
             value={invalidation}
+            maxLength={SESSION_TEXT_MAX_LENGTH}
             onChange={(event) => {
               setInvalidation(event.target.value);
               setInputError(undefined);
@@ -796,6 +902,7 @@ export default function TradePanel({
           <input
             id="decision-exit-plan"
             value={exitPlan}
+            maxLength={SESSION_TEXT_MAX_LENGTH}
             onChange={(event) => {
               setExitPlan(event.target.value);
               setInputError(undefined);
@@ -813,6 +920,7 @@ export default function TradePanel({
           <input
             id="decision-accepted-risk"
             value={acceptedRisk}
+            maxLength={SESSION_TEXT_MAX_LENGTH}
             onChange={(event) => {
               setAcceptedRisk(event.target.value);
               setInputError(undefined);

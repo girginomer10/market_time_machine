@@ -4,6 +4,9 @@ export type OrderType = "market" | "limit" | "stop_loss" | "take_profit";
 
 export type TimeInForce = "day" | "gtc";
 
+/** Upper bound shared by live session input and archived report validation. */
+export const SESSION_TEXT_MAX_LENGTH = 100_000;
+
 /**
  * The decision record captured before an order is submitted. Every field is
  * optional so sessions written before structured plans existed remain valid.

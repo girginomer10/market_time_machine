@@ -131,11 +131,16 @@ type ExecutionModel = {
   fixedFee: number;
   spreadBps: number;
   slippageModel: "none" | "fixed_bps" | "volume_based" | "volatility_based";
+  slippageBps?: number;
   allowFractional: boolean;
   allowShort: boolean;
   maxLeverage: number;
-  partialFills: boolean;
-  marketHoursEnforced: boolean;
+  maxParticipationRate?: number;
+  partialFillPolicy?: "disabled" | "volume_limited";
+  stopFillPolicy?: "trigger_price" | "gap_open";
+  marketHoursEnforced?: boolean;
+  marginCallPolicy?: "disabled" | "liquidate_on_threshold" | "reject_new_orders";
+  borrowRateBps?: number;
 };
 ```
 
@@ -145,7 +150,7 @@ For a buy market order:
 
 ```text
 referencePrice = last visible tradable price
-spreadCost = referencePrice * spreadBps / 10000
+spreadCost = referencePrice * spreadBps / 20000
 slippage = model(referencePrice, quantity, volume, volatility)
 fillPrice = referencePrice + spreadCost + slippage
 ```

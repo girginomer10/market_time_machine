@@ -6,8 +6,10 @@ import {
   HARSH_BROKER_CONFIG,
   IDEAL_BROKER_CONFIG,
   REALISTIC_BROKER_CONFIG,
+  brokerConfigFingerprint,
   commissionFor,
   getBrokerPreset,
+  isBrokerConfigFingerprint,
   isBrokerPresetName,
   marketFillPrice,
   slippageBpsFor,
@@ -54,6 +56,41 @@ describe("broker presets", () => {
     expect(isBrokerPresetName("ideal")).toBe(true);
     expect(isBrokerPresetName("harsh")).toBe(true);
     expect(isBrokerPresetName("custom")).toBe(false);
+  });
+
+  it("fingerprints every broker setting in one canonical identity", () => {
+    const current = brokerConfigFingerprint(REALISTIC_BROKER_CONFIG);
+    expect(isBrokerConfigFingerprint(current)).toBe(true);
+    for (const changed of [
+      { ...REALISTIC_BROKER_CONFIG, baseCurrency: "EUR" },
+      { ...REALISTIC_BROKER_CONFIG, commissionRateBps: 6 },
+      { ...REALISTIC_BROKER_CONFIG, fixedFee: 1 },
+      { ...REALISTIC_BROKER_CONFIG, spreadBps: 6 },
+      { ...REALISTIC_BROKER_CONFIG, slippageModel: "none" as const },
+      { ...REALISTIC_BROKER_CONFIG, slippageBps: 4 },
+      { ...REALISTIC_BROKER_CONFIG, allowFractional: false },
+      { ...REALISTIC_BROKER_CONFIG, allowShort: false },
+      { ...REALISTIC_BROKER_CONFIG, maxLeverage: 3 },
+      { ...REALISTIC_BROKER_CONFIG, maxParticipationRate: 0.2 },
+      { ...REALISTIC_BROKER_CONFIG, partialFillPolicy: "disabled" as const },
+      { ...REALISTIC_BROKER_CONFIG, stopFillPolicy: "trigger_price" as const },
+      { ...REALISTIC_BROKER_CONFIG, marketHoursEnforced: false },
+      { ...REALISTIC_BROKER_CONFIG, marginCallPolicy: "disabled" as const },
+      { ...REALISTIC_BROKER_CONFIG, borrowRateBps: 201 },
+    ]) {
+      expect(brokerConfigFingerprint(changed)).not.toBe(current);
+    }
+  });
+
+  it("rejects malformed, non-canonical, and invalid broker fingerprints", () => {
+    const valid = brokerConfigFingerprint(IDEAL_BROKER_CONFIG);
+    expect(isBrokerConfigFingerprint(valid.replace('"USD"', '""'))).toBe(false);
+    expect(isBrokerConfigFingerprint(valid.replace('"fixedFee":0', '"fixedFee":-1'))).toBe(
+      false,
+    );
+    expect(isBrokerConfigFingerprint(`${valid} `)).toBe(false);
+    expect(isBrokerConfigFingerprint("broker-config-v1:{}")).toBe(false);
+    expect(isBrokerConfigFingerprint("broker-config-v2:{}")).toBe(false);
   });
 });
 

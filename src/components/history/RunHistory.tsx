@@ -4,6 +4,7 @@ import {
   compareRunWithPrevious,
   runHistoryStats,
 } from "../../domain/history/runHistory";
+import { authoritativeCompletedPracticeAssessmentScore } from "../../domain/practice/assessmentAuthority";
 import { formatPct } from "../../utils/format";
 import { scenarioModeLabel } from "../../utils/scenarioMode";
 import "./runHistory.css";
@@ -11,17 +12,24 @@ import "./runHistory.css";
 type Props = {
   runs: CompletedRun[];
   hasArchiveData?: boolean;
+  archiveDamaged?: boolean;
+  archiveBusy?: boolean;
   onViewReport: (run: CompletedRun) => void;
   onReplay: (run: CompletedRun) => void;
   onRemove: (run: CompletedRun) => void;
   onExport: () => void;
+  onExportDamaged?: () => void;
   onImport: (event: ChangeEvent<HTMLInputElement>) => void;
   importMessage?: string;
   onClear: () => void;
+  onDiscardDamaged?: () => void;
 };
 
 function scoreLabel(run: CompletedRun): string {
-  const processScore = run.report.practiceAssessment?.overallScore;
+  const processScore = authoritativeCompletedPracticeAssessmentScore(
+    run.report,
+    run.executionCount,
+  );
   if (processScore === undefined) return "Not assessed";
   return `${Math.round(processScore)} / 100`;
 }
@@ -32,22 +40,38 @@ function signedPct(value: number): string {
   return value > 0 ? `+${formatted}` : formatted;
 }
 
+function completedAtLabel(run: CompletedRun): string {
+  return new Date(run.completedAt).toLocaleDateString("en-US", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 export default function RunHistory({
   runs,
   hasArchiveData = runs.length > 0,
+  archiveDamaged = false,
+  archiveBusy = false,
   onViewReport,
   onReplay,
   onRemove,
   onExport,
+  onExportDamaged,
   onImport,
   importMessage,
   onClear,
+  onDiscardDamaged,
 }: Props) {
   const stats = runHistoryStats(runs);
   const importRef = useRef<HTMLInputElement | null>(null);
 
   return (
-    <section className="run-history" aria-labelledby="run-history-title">
+    <section
+      className="run-history"
+      aria-busy={archiveBusy || undefined}
+      aria-labelledby="run-history-title"
+    >
       <div className="run-history-heading">
         <div>
           <span className="run-history-eyebrow">Your local progress</span>
@@ -63,7 +87,10 @@ export default function RunHistory({
                 {
                   runs.filter(
                     (run) =>
-                      run.report.practiceAssessment?.overallScore !== undefined,
+                      authoritativeCompletedPracticeAssessmentScore(
+                        run.report,
+                        run.executionCount,
+                      ) !== undefined,
                   ).length
                 }
               </strong>
@@ -71,20 +98,31 @@ export default function RunHistory({
             </span>
           </div>
           <div className="run-history-library-actions">
-            {hasArchiveData ? (
-              <button className="btn" type="button" onClick={onExport}>
+            {hasArchiveData && !archiveDamaged ? (
+              <button
+                className="btn"
+                type="button"
+                disabled={archiveBusy}
+                onClick={onExport}
+              >
                 Export practice archive
               </button>
             ) : null}
             <button
               className="btn"
               type="button"
+              disabled={archiveDamaged || archiveBusy}
               onClick={() => importRef.current?.click()}
             >
               Import practice archive
             </button>
-            {hasArchiveData ? (
-              <button className="btn danger" type="button" onClick={onClear}>
+            {hasArchiveData && !archiveDamaged ? (
+              <button
+                className="btn danger"
+                type="button"
+                disabled={archiveBusy}
+                onClick={onClear}
+              >
                 Clear history
               </button>
             ) : null}
@@ -95,8 +133,15 @@ export default function RunHistory({
             type="file"
             accept=".json,application/json"
             aria-label="Import practice archive JSON"
+            disabled={archiveDamaged || archiveBusy}
             onChange={onImport}
           />
+          {archiveBusy ? (
+            <p className="run-history-import-message" role="status">
+              Finishing the latest replay save. Archive actions will return
+              when it is safely stored.
+            </p>
+          ) : null}
           {importMessage ? (
             <p className="run-history-import-message" role="status">
               {importMessage}
@@ -104,6 +149,40 @@ export default function RunHistory({
           ) : null}
         </div>
       </div>
+
+      {archiveDamaged ? (
+        <div className="run-history-damaged" role="alert">
+          <div>
+            <strong>Local practice history needs recovery.</strong>
+            <p>
+              The stored archive is unreadable. It was left unchanged, but new
+              replay saves and archive imports are blocked until you remove it.
+            </p>
+          </div>
+          <div className="run-history-damaged-actions">
+            {onExportDamaged ? (
+              <button
+                className="btn"
+                type="button"
+                disabled={archiveBusy}
+                onClick={onExportDamaged}
+              >
+                Download damaged data
+              </button>
+            ) : null}
+            {onDiscardDamaged ? (
+              <button
+                className="btn danger"
+                type="button"
+                disabled={archiveBusy}
+                onClick={onDiscardDamaged}
+              >
+                Remove damaged history
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {runs.length === 0 ? (
         <div className="run-history-empty">
@@ -129,16 +208,12 @@ export default function RunHistory({
         <div className="run-history-list">
           {runs.map((run) => {
             const comparison = compareRunWithPrevious(run, runs);
+            const completedAt = completedAtLabel(run);
+            const accessibleRunLabel = `${run.scenarioTitle}, ${completedAt}`;
             return (
               <article className="run-history-card" key={run.id}>
                 <div className="run-history-card-main">
-                  <span className="run-history-date">
-                    {new Date(run.completedAt).toLocaleDateString("en-US", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })}
-                  </span>
+                  <span className="run-history-date">{completedAt}</span>
                   <h3>{run.scenarioTitle}</h3>
                   <p>
                     {scenarioModeLabel(run.mode)} · {run.brokerMode} broker · {run.executionCount}{" "}
@@ -158,13 +233,29 @@ export default function RunHistory({
                   </p>
                 ) : null}
                 <div className="run-history-actions">
-                  <button className="btn" type="button" onClick={() => onViewReport(run)}>
+                  <button
+                    aria-label={`View report for ${accessibleRunLabel}`}
+                    className="btn"
+                    type="button"
+                    onClick={() => onViewReport(run)}
+                  >
                     View report
                   </button>
-                  <button className="btn primary" type="button" onClick={() => onReplay(run)}>
+                  <button
+                    aria-label={`Replay ${accessibleRunLabel}`}
+                    className="btn primary"
+                    type="button"
+                    onClick={() => onReplay(run)}
+                  >
                     Replay
                   </button>
-                  <button className="btn danger" type="button" onClick={() => onRemove(run)}>
+                  <button
+                    aria-label={`Remove ${accessibleRunLabel}`}
+                    className="btn danger"
+                    type="button"
+                    disabled={archiveBusy}
+                    onClick={() => onRemove(run)}
+                  >
                     Remove
                   </button>
                 </div>

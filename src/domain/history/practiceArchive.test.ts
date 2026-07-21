@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { eventDisciplineEurGbpV1 } from "../../data/practice/drills";
+import { eurGbpBrexit2016Scenario } from "../../data/scenarios/eurgbp-brexit-2016";
 import type { DrillAssessment, ReportPayload } from "../../types";
 import {
   MAX_PRACTICE_LEDGER_ENTRIES,
@@ -29,6 +30,7 @@ function assessment(score = 80): DrillAssessment {
     competencyId: "event-discipline",
     definitionVersion: 1,
     rubricVersion: "event-process-v1",
+    eventLinkageEvidenceVersion: 1,
     status: "completed",
     overallScore: score,
     methodology: "Process-only fixture rubric.",
@@ -322,6 +324,7 @@ function completedRun(
   completedAt = "2026-07-13T10:00:00.000Z",
   overrides: Partial<CompletedRun> = {},
 ): CompletedRun {
+  const completedReport = overrides.report ?? report();
   return {
     id,
     runInstanceId: id,
@@ -335,13 +338,13 @@ function completedRun(
     benchmarkReturn: 0.05,
     excessReturn: 0.05,
     maxDrawdown: 0.08,
-    scoreStatus: "scored",
-    score: 72,
+    scoreStatus: completedReport.score?.status ?? "unavailable",
+    score: completedReport.score?.overall,
     executionCount: 5,
     closedTradeCount: 1,
     journalEntryCount: 1,
-    journalCoverage: 0.75,
-    report: report(),
+    journalCoverage: completedReport.journalQuality?.coverageRate,
+    report: completedReport,
     ...overrides,
   };
 }
@@ -417,6 +420,7 @@ function completedPracticeRun(
               checkpointId: "checkpoint-1",
               replayTime: "2016-06-24T16:00:00.000Z",
               eventIds: ["event-1"],
+              linkedEventIds: ["event-1"],
               status: "answered",
               action: "wait",
               reflection: "PRIVATE CHECKPOINT REFLECTION",
@@ -706,6 +710,15 @@ describe("practice archive", () => {
       ],
     });
     expect(JSON.stringify(parsed.ledger)).not.toContain("PRIVATE REFLECTION");
+
+    const reexported = parsePracticeArchive(
+      exportPracticeArchive(
+        parsed.runs,
+        parsed.ledger,
+        "2026-07-14T09:00:00.000Z",
+      ),
+    );
+    expect(reexported.ledger[0].assessment).toBeUndefined();
   });
 
   it("rejects the whole V2 import when any run or ledger entry is malformed", () => {
@@ -843,6 +856,80 @@ describe("practice archive", () => {
       ),
     ).toThrow(/malformed run/i);
 
+    const forgedExplicitLink: CompletedRun = {
+      ...validRun,
+      id: "forged-explicit-link",
+      runInstanceId: "forged-explicit-link",
+      report: {
+        ...validRun.report,
+        practiceDrill: {
+          ...snapshot,
+          checkpoints: snapshot.checkpoints.map((entry) =>
+            entry.response
+              ? {
+                  ...entry,
+                  response: {
+                    ...entry.response,
+                    linkedEventIds: ["future-or-unrelated-event"],
+                  },
+                }
+              : entry,
+          ),
+        },
+      },
+    };
+    expect(() =>
+      parsePracticeArchive(
+        JSON.stringify(document([forgedExplicitLink], [])),
+      ),
+    ).toThrow(/malformed run/i);
+
+    const missingExplicitProvenance: CompletedRun = {
+      ...validRun,
+      id: "missing-explicit-provenance",
+      runInstanceId: "missing-explicit-provenance",
+      report: {
+        ...validRun.report,
+        practiceDrill: {
+          ...snapshot,
+          checkpoints: snapshot.checkpoints.map((entry) =>
+            entry.response
+              ? {
+                  ...entry,
+                  response: {
+                    ...entry.response,
+                    linkedEventIds: undefined,
+                  },
+                }
+              : entry,
+          ),
+        },
+      },
+    };
+    expect(() =>
+      parsePracticeArchive(
+        JSON.stringify(document([missingExplicitProvenance], [])),
+      ),
+    ).toThrow(/malformed run/i);
+
+    const legacyReadable: CompletedRun = {
+      ...missingExplicitProvenance,
+      id: "legacy-readable-linkage",
+      runInstanceId: "legacy-readable-linkage",
+      report: {
+        ...missingExplicitProvenance.report,
+        practiceAssessment: {
+          ...assessment,
+          eventLinkageEvidenceVersion: undefined,
+        },
+      },
+    };
+    expect(
+      parsePracticeArchive(
+        JSON.stringify(document([legacyReadable], [])),
+      ).runs,
+    ).toHaveLength(1);
+
     expect(() =>
       parsePracticeArchive(
         JSON.stringify(
@@ -853,6 +940,66 @@ describe("practice archive", () => {
         ),
       ),
     ).toThrow(/conflicts with its full run/i);
+  });
+
+  it("rejects a self-consistent partial schedule for a current curated drill", () => {
+    const forged = completedPracticeRun("partial-current-schedule");
+    forged.report = {
+      ...forged.report,
+      provenance: {
+        license: eurGbpBrexit2016Scenario.meta.license,
+        dataSources: [...eurGbpBrexit2016Scenario.meta.dataSources],
+        dataVersion: eurGbpBrexit2016Scenario.meta.dataVersion,
+        isSampleData: eurGbpBrexit2016Scenario.meta.isSampleData ?? false,
+        dataFidelity: eurGbpBrexit2016Scenario.meta.dataFidelity,
+      },
+    };
+
+    expect(() =>
+      parsePracticeArchive(
+        JSON.stringify(document([forged], [derivePracticeLedgerEntry(forged)])),
+      ),
+    ).toThrow(/authoritative scenario/i);
+  });
+
+  it("rejects run/ledger identity-alias collisions instead of attaching foreign evidence", () => {
+    const retainedRun = completedRun(
+      "identity-owner",
+      "2026-07-13T10:00:00.000Z",
+      { runInstanceId: "shared-run-instance" },
+    );
+    const foreignLedger = {
+      ...ledgerEntry(completedRun("foreign-ledger-run")),
+      id: "shared-run-instance",
+    };
+
+    expect(() =>
+      parsePracticeArchive(
+        JSON.stringify(document([retainedRun], [foreignLedger])),
+      ),
+    ).toThrow(/conflicts with its full run identity/i);
+
+    const collidingRun = completedRun(
+      "shared-run-instance",
+      "2026-07-13T11:00:00.000Z",
+      { runInstanceId: "other-run-instance" },
+    );
+    expect(() =>
+      parsePracticeArchive(
+        JSON.stringify(document([retainedRun, collidingRun], [])),
+      ),
+    ).toThrow(/conflicting runs with identity/i);
+
+    const firstLedger = ledgerEntry(completedRun("first-ledger-only"));
+    const collidingLedger = {
+      ...ledgerEntry(completedRun("second-ledger-only")),
+      runId: firstLedger.runId,
+    };
+    expect(() =>
+      parsePracticeArchive(
+        JSON.stringify(document([], [firstLedger, collidingLedger])),
+      ),
+    ).toThrow(/conflicting ledger entries with replay identity/i);
   });
 
   it("rejects invalid JSON, metadata, array shapes, and conflicting duplicate ids", () => {
@@ -1003,6 +1150,166 @@ describe("practice archive", () => {
     expect(repeated.addedRunIds).toEqual([]);
     expect(repeated.addedLedgerIds).toEqual([]);
     expect(repeated.conflicts).toEqual(merged.conflicts);
+  });
+
+  it("does not attach incoming evidence to a conflicting retained run", () => {
+    const currentRun = completedRun(
+      "cross-layer-conflict",
+      "2026-07-13T10:00:00.000Z",
+    );
+    const incomingRun = {
+      ...currentRun,
+      executionCount: currentRun.executionCount + 1,
+    };
+    const incomingLedger = derivePracticeLedgerEntry(incomingRun);
+
+    const merged = mergePracticeArchive(
+      { runs: [currentRun], ledger: [] },
+      { runs: [incomingRun], ledger: [incomingLedger] },
+    );
+
+    expect(merged.runs).toEqual([currentRun]);
+    expect(merged.ledger).toEqual([]);
+    expect(merged.addedRunIds).toEqual([]);
+    expect(merged.addedLedgerIds).toEqual([]);
+    expect(merged.conflicts).toEqual([
+      { collection: "ledger", id: incomingLedger.id },
+      { collection: "runs", id: currentRun.id },
+    ]);
+  });
+
+  it("applies the ledger cap after removing cross-layer conflicts", () => {
+    const currentLedger = Array.from(
+      { length: MAX_PRACTICE_LEDGER_ENTRIES - 1 },
+      (_, index) =>
+        ledgerEntry(
+          completedRun(
+            `current-ledger-${index}`,
+            new Date(Date.UTC(2026, 10, 30 - index)).toISOString(),
+          ),
+        ),
+    );
+    const currentRun = completedRun(
+      "cap-conflict",
+      "2026-12-31T00:00:00.000Z",
+    );
+    const incomingRun = {
+      ...currentRun,
+      executionCount: currentRun.executionCount + 1,
+    };
+    const oldestValid = ledgerEntry(
+      completedRun("oldest-valid", "2000-01-01T00:00:00.000Z"),
+    );
+
+    const merged = mergePracticeArchive(
+      { runs: [currentRun], ledger: currentLedger },
+      {
+        runs: [incomingRun],
+        ledger: [derivePracticeLedgerEntry(incomingRun), oldestValid],
+      },
+    );
+
+    expect(merged.ledger).toHaveLength(MAX_PRACTICE_LEDGER_ENTRIES);
+    expect(merged.ledger.some((entry) => entry.id === oldestValid.id)).toBe(true);
+    expect(merged.ledger.some((entry) => entry.id === currentRun.id)).toBe(false);
+  });
+
+  it("keeps current runs when imported ledger or run aliases collide", () => {
+    const currentRun = completedRun(
+      "identity-owner",
+      "2026-07-13T10:00:00.000Z",
+      { runInstanceId: "shared-run-instance" },
+    );
+    const foreignLedger = {
+      ...ledgerEntry(completedRun("foreign-ledger-run")),
+      id: "shared-run-instance",
+    };
+    const collidingRun = completedRun(
+      "shared-run-instance",
+      "2026-07-13T11:00:00.000Z",
+      { runInstanceId: "other-run-instance" },
+    );
+
+    const merged = mergePracticeArchive(
+      { runs: [currentRun], ledger: [] },
+      { runs: [collidingRun], ledger: [foreignLedger] },
+    );
+
+    expect(merged.runs).toEqual([currentRun]);
+    expect(merged.ledger).toEqual([]);
+    expect(merged.addedRunIds).toEqual([]);
+    expect(merged.addedLedgerIds).toEqual([]);
+    expect(merged.conflicts).toEqual([
+      { collection: "ledger", id: "shared-run-instance" },
+      { collection: "runs", id: "shared-run-instance" },
+    ]);
+  });
+
+  it("keeps current ledger-only evidence and rejects an incompatible incoming full run", () => {
+    const incomingRun = completedRun(
+      "ledger-only-conflict",
+      "2026-07-13T10:00:00.000Z",
+    );
+    const currentLedger = {
+      ...derivePracticeLedgerEntry(incomingRun),
+      facts: {
+        ...derivePracticeLedgerEntry(incomingRun).facts,
+        executionCount: incomingRun.executionCount + 1,
+      },
+    };
+
+    const merged = mergePracticeArchive(
+      { runs: [], ledger: [currentLedger] },
+      { runs: [incomingRun], ledger: [] },
+    );
+
+    expect(merged.runs).toEqual([]);
+    expect(merged.ledger).toEqual([currentLedger]);
+    expect(merged.addedRunIds).toEqual([]);
+    expect(merged.addedLedgerIds).toEqual([]);
+    expect(merged.conflicts).toEqual([
+      { collection: "runs", id: incomingRun.id },
+    ]);
+  });
+
+  it("keeps current ledger-only evidence when an incoming ledger alias collides", () => {
+    const currentLedger = ledgerEntry(completedRun("current-ledger-only"));
+    const incomingLedger = {
+      ...ledgerEntry(completedRun("incoming-ledger-only")),
+      runId: currentLedger.runId,
+    };
+
+    const merged = mergePracticeArchive(
+      { runs: [], ledger: [currentLedger] },
+      { runs: [], ledger: [incomingLedger] },
+    );
+
+    expect(merged.runs).toEqual([]);
+    expect(merged.ledger).toEqual([currentLedger]);
+    expect(merged.addedRunIds).toEqual([]);
+    expect(merged.addedLedgerIds).toEqual([]);
+    expect(merged.conflicts).toEqual([
+      { collection: "ledger", id: incomingLedger.id },
+    ]);
+  });
+
+  it("adds an incoming full run when current ledger-only evidence matches it", () => {
+    const incomingRun = completedRun(
+      "ledger-only-match",
+      "2026-07-13T10:00:00.000Z",
+    );
+    const currentLedger = derivePracticeLedgerEntry(incomingRun);
+
+    const merged = mergePracticeArchive(
+      { runs: [], ledger: [currentLedger] },
+      { runs: [incomingRun], ledger: [] },
+    );
+
+    expect(merged.runs).toEqual([incomingRun]);
+    expect(merged.ledger).toEqual([currentLedger]);
+    expect(merged.addedRunIds).toEqual([incomingRun.id]);
+    expect(merged.addedLedgerIds).toEqual([]);
+    expect(merged.conflicts).toEqual([]);
   });
 
   it("uses ids as the deterministic tie-breaker for equal timestamps", () => {

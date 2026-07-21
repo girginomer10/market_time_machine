@@ -34,6 +34,23 @@ const UNIT_STATUS_LABELS: Record<PracticeTrackUnitProgress["status"], string> = 
   preview: "Preview · No credit",
 };
 
+const BROKER_MODE_LABELS: Record<PracticeTrackUnit["broker"]["mode"], string> = {
+  scenario: "Scenario rules",
+  ideal: "Ideal preset",
+  realistic: "Realistic preset",
+  harsh: "Harsh preset",
+};
+
+/** Display-only checksum; credit always compares the complete fingerprint. */
+function brokerFingerprintDisplayChecksum(fingerprint: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < fingerprint.length; index += 1) {
+    hash ^= BigInt(fingerprint.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
 function fallbackProgress(track: PracticeTrack): PracticeTrackProgress {
   const units = track.units.map(
     (unit): PracticeTrackUnitProgress => ({
@@ -126,6 +143,17 @@ function UnitCard({
             <dt>Rubric and mode</dt>
             <dd>
               {unit.drill.rubricVersion} · {unit.drill.mode}
+            </dd>
+          </div>
+          <div>
+            <dt>Broker execution</dt>
+            <dd>{BROKER_MODE_LABELS[unit.broker.mode]} · exact pinned settings</dd>
+          </div>
+          <div>
+            <dt>Broker config identity</dt>
+            <dd>
+              Config v1 · display checksum{" "}
+              {brokerFingerprintDisplayChecksum(unit.broker.fingerprint)}
             </dd>
           </div>
         </dl>

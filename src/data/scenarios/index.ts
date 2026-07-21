@@ -1,5 +1,6 @@
 import type { ScenarioPackage } from "../../types";
 import { validateScenarioStrict } from "../../domain/scenario/loader";
+import { scenarioReplayContractDataVersion } from "./dataVersions";
 import { localScenarioModules } from "./localScenarioModules";
 
 const USER_SCENARIOS_STORAGE_KEY = "market-time-machine.user-scenarios.v1";
@@ -35,6 +36,36 @@ export function isScenarioPackage(value: unknown): value is ScenarioPackage {
   );
 }
 
+function hasAuthorDeclaredDataVersion(scenario: ScenarioPackage): boolean {
+  return (
+    typeof scenario.meta.dataVersion === "string" &&
+    scenario.meta.dataVersion.trim().length > 0
+  );
+}
+
+function deepFreezeScenario<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    deepFreezeScenario(child, seen);
+  }
+  return Object.freeze(value);
+}
+
+function withDerivedDataVersion(scenario: ScenarioPackage): ScenarioPackage {
+  const copied = JSON.parse(JSON.stringify(scenario)) as ScenarioPackage;
+  return deepFreezeScenario({
+    ...copied,
+    meta: {
+      ...copied.meta,
+      dataVersion: scenarioReplayContractDataVersion(copied),
+    },
+  });
+}
+
 function storedUserScenarios(): ScenarioPackage[] {
   if (typeof window === "undefined") return [];
   try {
@@ -42,9 +73,16 @@ function storedUserScenarios(): ScenarioPackage[] {
     if (!serialized) return [];
     const parsed: unknown = JSON.parse(serialized);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isScenarioPackage).filter((scenario) =>
-      validateScenarioStrict(scenario).valid,
-    );
+    const packages = parsed.filter(isScenarioPackage);
+    const idCounts = new Map<string, number>();
+    for (const scenario of packages) {
+      idCounts.set(scenario.meta.id, (idCounts.get(scenario.meta.id) ?? 0) + 1);
+    }
+    return packages
+      .filter((scenario) => idCounts.get(scenario.meta.id) === 1)
+      .filter(hasAuthorDeclaredDataVersion)
+      .filter((scenario) => validateScenarioStrict(scenario).valid)
+      .map(withDerivedDataVersion);
   } catch {
     return [];
   }
@@ -54,7 +92,9 @@ const scenarios = Object.values(scenarioModules)
   .flatMap((module) => Object.values(module).filter(isScenarioPackage))
   .sort((a, b) => a.meta.id.localeCompare(b.meta.id));
 
-const bundledScenarioIds = new Set(scenarios.map((scenario) => scenario.meta.id));
+const bundledScenarioIds = new Set(
+  scenarios.map((scenario) => scenario.meta.id),
+);
 const userScenarios = storedUserScenarios().filter(
   (scenario) => !bundledScenarioIds.has(scenario.meta.id),
 );
@@ -62,29 +102,38 @@ const userScenarios = storedUserScenarios().filter(
 export function buildScenarioRegistry(
   entries: ScenarioPackage[],
 ): Record<string, ScenarioPackage> {
-  const registry: Record<string, ScenarioPackage> = {};
+  const registry = Object.create(null) as Record<string, ScenarioPackage>;
   for (const scenario of entries) {
-    if (registry[scenario.meta.id]) {
+    if (Object.prototype.hasOwnProperty.call(registry, scenario.meta.id)) {
       throw new Error(`Duplicate scenario id: ${scenario.meta.id}`);
     }
-    registry[scenario.meta.id] = scenario;
+    registry[scenario.meta.id] = deepFreezeScenario(scenario);
   }
   return registry;
 }
 
-export const scenarioRegistry = buildScenarioRegistry([
+const mutableScenarioRegistry = buildScenarioRegistry([
   ...scenarios,
   ...userScenarios,
 ]);
 
+export const scenarioRegistry: Readonly<Record<string, ScenarioPackage>> =
+  new Proxy(mutableScenarioRegistry, {
+    set: () => false,
+    deleteProperty: () => false,
+    defineProperty: () => false,
+    setPrototypeOf: () => false,
+    preventExtensions: () => false,
+  });
+
 export const defaultScenarioId = "eurgbp-brexit-2016";
 
 export function getScenario(id: string): ScenarioPackage | undefined {
-  return scenarioRegistry[id];
+  return mutableScenarioRegistry[id];
 }
 
 export function listScenarios(): ScenarioPackage[] {
-  return Object.values(scenarioRegistry).sort((a, b) =>
+  return Object.values(mutableScenarioRegistry).sort((a, b) =>
     a.meta.title.localeCompare(b.meta.title),
   );
 }
@@ -99,14 +148,18 @@ export type RegisterUserScenarioResult = {
 
 function persistUserScenarios(): boolean {
   if (typeof window === "undefined") return false;
-  const entries = Object.values(scenarioRegistry).filter(
+  const entries = Object.values(mutableScenarioRegistry).filter(
     (scenario) => !bundledScenarioIds.has(scenario.meta.id),
   );
   try {
-    window.localStorage.setItem(
-      USER_SCENARIOS_STORAGE_KEY,
-      JSON.stringify(entries),
-    );
+    if (entries.length === 0) {
+      window.localStorage.removeItem(USER_SCENARIOS_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(
+        USER_SCENARIOS_STORAGE_KEY,
+        JSON.stringify(entries),
+      );
+    }
     return true;
   } catch {
     return false;
@@ -120,7 +173,16 @@ export function registerUserScenario(
     return {
       ok: false,
       persisted: false,
-      message: "The file is not a complete Market Time Machine scenario package.",
+      message:
+        "The file is not a complete Market Time Machine scenario package.",
+    };
+  }
+  if (!hasAuthorDeclaredDataVersion(candidate)) {
+    return {
+      ok: false,
+      persisted: false,
+      message:
+        "Imported scenarios require a non-empty meta.dataVersion author label. After validation, the app replaces it with a content-derived SHA-256 identity so saved sessions restore against the exact data.",
     };
   }
   const validation = validateScenarioStrict(candidate);
@@ -141,13 +203,26 @@ export function registerUserScenario(
       message: `The bundled scenario id "${candidate.meta.id}" cannot be replaced.`,
     };
   }
+  if (
+    Object.prototype.hasOwnProperty.call(
+      mutableScenarioRegistry,
+      candidate.meta.id,
+    )
+  ) {
+    return {
+      ok: false,
+      persisted: false,
+      message: `An imported scenario with id "${candidate.meta.id}" already exists. Remove it before importing a replacement.`,
+    };
+  }
 
-  scenarioRegistry[candidate.meta.id] = candidate;
+  const scenario = withDerivedDataVersion(candidate);
+  mutableScenarioRegistry[candidate.meta.id] = scenario;
   const persisted = persistUserScenarios();
   return {
     ok: true,
     persisted,
-    scenario: candidate,
+    scenario,
     warnings: validation.warnings.map((issue) => issue.message),
     message: persisted
       ? "Scenario added to this browser."
@@ -155,13 +230,31 @@ export function registerUserScenario(
   };
 }
 
-export function removeUserScenario(id: string): boolean {
-  if (bundledScenarioIds.has(id) || !scenarioRegistry[id]) return false;
-  delete scenarioRegistry[id];
-  persistUserScenarios();
-  return true;
+export type RemoveUserScenarioResult = {
+  ok: boolean;
+  persisted: boolean;
+  message: string;
+};
+
+export function removeUserScenario(id: string): RemoveUserScenarioResult {
+  if (bundledScenarioIds.has(id) || !mutableScenarioRegistry[id]) {
+    return {
+      ok: false,
+      persisted: false,
+      message: "That imported scenario is no longer available in this browser.",
+    };
+  }
+  delete mutableScenarioRegistry[id];
+  const persisted = persistUserScenarios();
+  return {
+    ok: true,
+    persisted,
+    message: persisted
+      ? "Imported scenario removed from this browser."
+      : "Imported scenario removed for this visit, but browser storage could not be updated; it may return after reload.",
+  };
 }
 
 export function isUserScenario(id: string): boolean {
-  return Boolean(scenarioRegistry[id]) && !bundledScenarioIds.has(id);
+  return Boolean(mutableScenarioRegistry[id]) && !bundledScenarioIds.has(id);
 }

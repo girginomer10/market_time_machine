@@ -15,6 +15,7 @@ function assessment(
     drillId: eventDisciplineEurGbpV1.id,
     definitionVersion: eventDisciplineEurGbpV1.definitionVersion,
     rubricVersion: eventDisciplineEurGbpV1.rubricVersion,
+    eventLinkageEvidenceVersion: 1,
     status: "completed",
     overallScore: 84,
     methodology:
@@ -89,6 +90,7 @@ function drillSnapshot(
           checkpointId: "checkpoint-later",
           replayTime: "2016-06-24T16:00:00.000Z",
           eventIds: ["event-later"],
+          linkedEventIds: [],
           status: "answered",
           action: "hold",
           reflection: "The plan still holds under the newly visible evidence.",
@@ -120,6 +122,7 @@ function drillSnapshot(
           checkpointId: "checkpoint-first",
           replayTime: "2016-06-24T15:00:00.000Z",
           eventIds: ["event-first", "event-second"],
+          linkedEventIds: ["event-first"],
           status: "answered",
           action: "reduce",
           reflection: firstReflection,
@@ -242,12 +245,21 @@ describe("DrillDebrief", () => {
     const records = checkpointSection!.querySelectorAll(".drill-checkpoint-record");
     expect(records).toHaveLength(2);
     expect(records[0]).toHaveTextContent("2016-06-24 15:00Z");
+    expect(records[0]).toHaveTextContent("Replay step 9");
     expect(records[0]).toHaveTextContent("Reduce");
     expect(records[0]).toHaveTextContent(
       "The new evidence weakens the timing case, so I reduced risk.",
     );
     expect(records[1]).toHaveTextContent("2016-06-24 16:00Z");
+    expect(records[1]).toHaveTextContent("Replay step 13");
     expect(records[1]).toHaveTextContent("Hold");
+    expect(within(records[0] as HTMLElement).getByText("Linked to decision"))
+      .toBeInTheDocument();
+    expect(
+      within(records[0] as HTMLElement).getByText("Reviewed, not linked"),
+    ).toBeInTheDocument();
+    expect(within(records[1] as HTMLElement).getByText("Reviewed, not linked"))
+      .toBeInTheDocument();
 
     const firstEvent = within(records[0] as HTMLElement).getByText(
       "First official event",
@@ -286,5 +298,52 @@ describe("DrillDebrief", () => {
     expect(container.querySelector("blockquote")?.textContent).toHaveLength(
       PRACTICE_DRILL_REFLECTION_MAX_LENGTH,
     );
+  });
+
+  it("labels legacy checkpoint membership as unrecorded linkage", () => {
+    const legacy = drillSnapshot();
+    const legacyCheckpoints = legacy.checkpoints.map((item) => ({
+      ...item,
+      response: item.response
+        ? {
+            ...item.response,
+            linkedEventIds: undefined,
+          }
+        : undefined,
+    }));
+
+    render(
+      <DrillDebrief
+        definition={eventDisciplineEurGbpV1}
+        assessment={assessment({
+          eventLinkageEvidenceVersion: undefined,
+          components: assessment().components.map((component) =>
+            component.id === "event_linkage"
+              ? {
+                  ...component,
+                  status: "assessed" as const,
+                  score: 100,
+                  evidence: "Every checkpoint event was linked automatically.",
+                }
+              : component,
+          ),
+        })}
+        practiceDrill={{ ...legacy, checkpoints: legacyCheckpoints }}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent("Legacy · unassessed");
+    expect(screen.getByText("Not recorded")).toBeInTheDocument();
+    expect(
+      screen.getByText(/not used for evidence, trends, coaching claims, or track credit/i),
+    ).toBeInTheDocument();
+    const eventComponent = screen.getByText("Event linkage").closest("li");
+    expect(eventComponent).not.toBeNull();
+    expect(within(eventComponent!).getByText("Not assessed")).toBeInTheDocument();
+    expect(eventComponent).not.toHaveTextContent(
+      "Every checkpoint event was linked automatically.",
+    );
+    expect(screen.getAllByText("Linkage not recorded")).toHaveLength(3);
+    expect(screen.queryByText("Linked to decision")).not.toBeInTheDocument();
   });
 });

@@ -4,6 +4,7 @@
   "apiUrl": "https://data-api.ecb.europa.eu/service/data/EXR/D.GBP.EUR.SP00.A?startPeriod=2016-03-01&endPeriod=2016-09-30&format=csvdata",
   "licenseUrl": "https://www.ecb.europa.eu/stats/ecb_statistics/governance_and_quality_framework/html/usage_policy.en.html",
   "retrievedAt": "2026-07-13T00:00:00.000Z",
+  "contentSha256": "67affe6052df19864c846c4eb5d474af9a7f6965d3bb5df79fcf0627edc11d2d",
   "observationCount": 152,
   "observations": [
     {

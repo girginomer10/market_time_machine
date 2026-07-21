@@ -357,6 +357,23 @@ describe("validateMarketOrder", () => {
     expect(r.ok).toBe(true);
   });
 
+  it("rejects a non-positive execution price before creating a fill", () => {
+    const r = validateMarketOrder({
+      side: "buy",
+      rawQuantity: 1,
+      normalizedQuantity: 1,
+      referencePrice: 100,
+      executionPrice: -5,
+      cash: 1000,
+      fees: 0,
+      broker: cashOnly,
+      hasPrice: true,
+      marketOpen: true,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.code).toBe("INVALID_EXECUTION_PRICE");
+  });
+
   it("short-circuits on the first failure (no price beats invalid quantity)", () => {
     const r = validateMarketOrder({
       side: "buy",

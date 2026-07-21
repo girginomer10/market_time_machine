@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { CompletedRun } from "./runHistory";
+import {
+  loadRunHistory,
+  persistRunHistory,
+  RUN_HISTORY_STORAGE_KEY,
+  type CompletedRun,
+} from "./runHistory";
 import type { DrillAssessment, ReportPayload } from "../../types";
+import {
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+} from "../practice/drills";
 import {
   MAX_PRACTICE_LEDGER_ENTRIES,
   PRACTICE_LEDGER_FORMAT,
@@ -15,13 +24,19 @@ import {
   reconcilePracticeLedger,
   recordPracticeLedgerEntry,
   removePracticeLedgerEntry,
+  type PracticeLedgerEntry,
 } from "./practiceLedger";
+import {
+  PRACTICE_ARCHIVE_STORAGE_KEY,
+  serializePracticeArchiveEnvelope,
+} from "./practiceArchiveEnvelope";
 
 function assessment(score = 80): DrillAssessment {
   return {
     drillId: "event-discipline-v1",
     definitionVersion: 1,
     rubricVersion: "event-process-v1",
+    eventLinkageEvidenceVersion: 1,
     status: "completed",
     overallScore: score,
     methodology: "Process-only fixture rubric.",
@@ -69,6 +84,7 @@ function report(): ReportPayload {
     },
     equityCurve: [],
     totalTrades: 1,
+    closedTradeCount: 1,
     behavioralFlags: [
       {
         id: "flag-1",
@@ -134,8 +150,7 @@ function completedRun(
     benchmarkReturn: 0.05,
     excessReturn: 0.05,
     maxDrawdown: 0.08,
-    scoreStatus: "scored",
-    score: 99,
+    scoreStatus: "unavailable",
     executionCount: 5,
     closedTradeCount: 1,
     journalEntryCount: 1,
@@ -184,21 +199,106 @@ describe("practice ledger", () => {
   });
 
   it("preserves a valid competency id while accepting legacy assessments without one", () => {
+    const rubricFingerprint = drillRubricFingerprint({
+      weights: {
+        plan_coverage: 0.25,
+        checkpoint_coverage: 0.25,
+        event_linkage: 0.25,
+        rule_adherence: 0.25,
+      },
+      violationPenalty: 20,
+    });
     const current = {
       ...assessment(),
       competencyId: "event-discipline",
+      rubricFingerprint,
+      overallScore: 100,
+      components: assessment().components.map((component) => ({
+        ...component,
+        score: 100,
+      })),
     } satisfies DrillAssessment;
 
     expect(parseDrillAssessment(current)).toMatchObject({
       drillId: "event-discipline-v1",
       competencyId: "event-discipline",
-      overallScore: 80,
+      overallScore: 100,
+      rubricFingerprint,
+      eventLinkageEvidenceVersion: 1,
     });
+    expect(
+      parseDrillAssessment({ ...current, linkedEventCount: 2 }),
+    ).toBeUndefined();
+    expect(
+      parseDrillAssessment({ ...current, linkedEventCount: 0 }),
+    ).toBeUndefined();
+    expect(
+      parseDrillAssessment({
+        ...current,
+        overallScore: 83.3,
+        linkedEventCount: 2,
+        components: current.components.map((component) =>
+          component.id === "event_linkage"
+            ? { ...component, score: 33.3 }
+            : component,
+        ),
+      }),
+    ).toMatchObject({
+      status: "completed",
+      overallScore: 83.3,
+      linkedEventCount: 2,
+    });
+    expect(
+      parseDrillAssessment({ ...current, eventLinkageEvidenceVersion: 2 }),
+    ).toBeUndefined();
+    expect(
+      parseDrillAssessment({
+        ...current,
+        eventLinkageEvidenceVersion: undefined,
+      }),
+    ).not.toHaveProperty("eventLinkageEvidenceVersion");
     expect(parseDrillAssessment(assessment())).not.toHaveProperty(
       "competencyId",
     );
+    expect(parseDrillAssessment(assessment())).not.toHaveProperty(
+      "rubricFingerprint",
+    );
+    expect(
+      parseDrillAssessment({ ...current, rubricFingerprint: "   " }),
+    ).toBeUndefined();
     expect(
       parseDrillAssessment({ ...current, competencyId: "   " }),
+    ).toBeUndefined();
+
+    const checkpointScheduleFingerprint =
+      drillCheckpointScheduleFingerprint(
+        Array.from({ length: 5 }, (_, index) => ({
+          id: `checkpoint-${index + 1}`,
+          drillId: current.drillId,
+          definitionVersion: current.definitionVersion,
+          replayIndex: index + 1,
+          replayTime: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+          eventIds:
+            index === 0
+              ? ["event-1", "event-2"]
+              : [`event-${index + 2}`],
+        })),
+      );
+    expect(
+      parseDrillAssessment({
+        ...current,
+        checkpointScheduleFingerprint,
+      }),
+    ).toBeDefined();
+    expect(
+      parseDrillAssessment({
+        ...current,
+        checkpointScheduleFingerprint,
+        eligibleCheckpointCount: 1,
+        answeredCheckpointCount: 1,
+        eligibleEventCount: 1,
+        linkedEventCount: 1,
+      }),
     ).toBeUndefined();
 
     const invalidWeights = {
@@ -208,6 +308,18 @@ describe("practice ledger", () => {
       ),
     };
     expect(parseDrillAssessment(invalidWeights)).toBeUndefined();
+
+    const forgedFingerprint = {
+      ...current,
+      components: current.components.map((component) =>
+        component.id === "plan_coverage"
+          ? { ...component, weight: 0.35 }
+          : component.id === "checkpoint_coverage"
+            ? { ...component, weight: 0.15 }
+            : component,
+      ),
+    };
+    expect(parseDrillAssessment(forgedFingerprint)).toBeUndefined();
 
     const completedWithoutMeasuredPlan = {
       ...current,
@@ -367,5 +479,181 @@ describe("practice ledger", () => {
     expect(
       window.localStorage.getItem(PRACTICE_LEDGER_STORAGE_KEY),
     ).toBeNull();
+  });
+
+  it("preserves canonical full reports while writing or clearing the ledger", () => {
+    const run = completedRun("run-to-preserve");
+    persistRunHistory([run]);
+
+    persistPracticeLedger([
+      derivePracticeLedgerEntry(completedRun("ledger-entry")),
+    ]);
+    expect(loadRunHistory().map((entry) => entry.id)).toEqual([
+      "run-to-preserve",
+    ]);
+
+    removePracticeLedgerEntry("ledger-entry");
+    expect(loadRunHistory().map((entry) => entry.id)).toEqual([
+      "run-to-preserve",
+    ]);
+    clearPracticeLedger();
+    expect(loadRunHistory().map((entry) => entry.id)).toEqual([
+      "run-to-preserve",
+    ]);
+  });
+
+  it("sanitizes and migrates legacy reports during a normal ledger write", () => {
+    const legacyRun = completedRun("legacy-run");
+    window.localStorage.setItem(
+      RUN_HISTORY_STORAGE_KEY,
+      JSON.stringify([legacyRun, { id: "malformed" }]),
+    );
+
+    persistPracticeLedger([
+      derivePracticeLedgerEntry(completedRun("new-ledger-entry")),
+    ]);
+
+    expect(loadRunHistory().map((entry) => entry.id)).toEqual(["legacy-run"]);
+    expect(window.localStorage.getItem(RUN_HISTORY_STORAGE_KEY)).toBeNull();
+  });
+
+  it("fails closed and refuses writes when the canonical archive is malformed", () => {
+    const staleEntry = derivePracticeLedgerEntry(completedRun("stale-ledger"));
+    const serializedLegacy = JSON.stringify({
+      format: PRACTICE_LEDGER_FORMAT,
+      version: PRACTICE_LEDGER_VERSION,
+      entries: [staleEntry],
+    });
+    window.localStorage.setItem(
+      PRACTICE_ARCHIVE_STORAGE_KEY,
+      "{damaged-canonical",
+    );
+    window.localStorage.setItem(
+      PRACTICE_LEDGER_STORAGE_KEY,
+      serializedLegacy,
+    );
+
+    expect(loadPracticeLedger()).toEqual([]);
+    expect(
+      persistPracticeLedger([
+        derivePracticeLedgerEntry(completedRun("must-not-write")),
+      ]),
+    ).toEqual([]);
+    expect(window.localStorage.getItem(PRACTICE_ARCHIVE_STORAGE_KEY)).toBe(
+      "{damaged-canonical",
+    );
+    expect(window.localStorage.getItem(PRACTICE_LEDGER_STORAGE_KEY)).toBe(
+      serializedLegacy,
+    );
+  });
+
+  it("fails the ledger reader and writer closed when canonical runs are invalid", () => {
+    const validEntry = derivePracticeLedgerEntry(
+      completedRun("canonical-valid-ledger"),
+    );
+    const serializedLegacy = JSON.stringify({
+      format: PRACTICE_LEDGER_FORMAT,
+      version: PRACTICE_LEDGER_VERSION,
+      entries: [validEntry],
+    });
+    const malformedCanonical = serializePracticeArchiveEnvelope({
+      runs: [{ id: "malformed-run" }],
+      ledger: [validEntry],
+    });
+    window.localStorage.setItem(
+      PRACTICE_ARCHIVE_STORAGE_KEY,
+      malformedCanonical,
+    );
+    window.localStorage.setItem(
+      PRACTICE_LEDGER_STORAGE_KEY,
+      serializedLegacy,
+    );
+
+    expect(loadPracticeLedger()).toEqual([]);
+    expect(
+      persistPracticeLedger([
+        derivePracticeLedgerEntry(completedRun("must-not-repair-half")),
+      ]),
+    ).toEqual([]);
+    expect(window.localStorage.getItem(PRACTICE_ARCHIVE_STORAGE_KEY)).toBe(
+      malformedCanonical,
+    );
+  });
+
+  it("fails the ledger reader and writer closed on canonical identity collisions", () => {
+    const owner = completedRun(
+      "canonical-owner",
+      "2026-07-13T10:00:00.000Z",
+      { runInstanceId: "shared-replay-identity" },
+    );
+    const foreignEntry = {
+      ...derivePracticeLedgerEntry(completedRun("foreign-entry")),
+      runId: "shared-replay-identity",
+    };
+    const damagedCanonical = serializePracticeArchiveEnvelope({
+      runs: [owner],
+      ledger: [foreignEntry],
+    });
+    window.localStorage.setItem(
+      PRACTICE_ARCHIVE_STORAGE_KEY,
+      damagedCanonical,
+    );
+
+    expect(loadPracticeLedger()).toEqual([]);
+    expect(
+      persistPracticeLedger([
+        derivePracticeLedgerEntry(completedRun("must-not-repair-collision")),
+      ]),
+    ).toEqual([]);
+    expect(window.localStorage.getItem(PRACTICE_ARCHIVE_STORAGE_KEY)).toBe(
+      damagedCanonical,
+    );
+  });
+
+  it("fails closed when two canonical ledger-only entries share a replay alias", () => {
+    const first = derivePracticeLedgerEntry(completedRun("first-owner"));
+    const second = {
+      ...derivePracticeLedgerEntry(completedRun("second-owner")),
+      runId: first.runId,
+    };
+    const damagedCanonical = serializePracticeArchiveEnvelope({
+      runs: [],
+      ledger: [first, second],
+    });
+    window.localStorage.setItem(
+      PRACTICE_ARCHIVE_STORAGE_KEY,
+      damagedCanonical,
+    );
+
+    expect(loadPracticeLedger()).toEqual([]);
+    expect(
+      persistPracticeLedger([
+        derivePracticeLedgerEntry(completedRun("must-not-repair-aliases")),
+      ]),
+    ).toEqual([]);
+    expect(window.localStorage.getItem(PRACTICE_ARCHIVE_STORAGE_KEY)).toBe(
+      damagedCanonical,
+    );
+  });
+
+  it("refuses malformed ledger write candidates without clearing valid evidence", () => {
+    const current = persistPracticeLedger([
+      derivePracticeLedgerEntry(completedRun("valid-current-evidence")),
+    ]);
+    const canonicalBefore = window.localStorage.getItem(
+      PRACTICE_ARCHIVE_STORAGE_KEY,
+    );
+    const malformed = { id: "malformed" } as PracticeLedgerEntry;
+
+    expect(persistPracticeLedger([malformed])).toEqual(current);
+    expect(
+      persistPracticeLedger([
+        derivePracticeLedgerEntry(completedRun("valid-but-not-committed")),
+        malformed,
+      ]),
+    ).toEqual(current);
+    expect(window.localStorage.getItem(PRACTICE_ARCHIVE_STORAGE_KEY)).toBe(
+      canonicalBefore,
+    );
   });
 });

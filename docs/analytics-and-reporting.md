@@ -222,15 +222,17 @@ assessment from four observable components:
 
 Return, benchmark outperformance, and hindsight are not inputs to this drill
 score. Missing evidence stays unassessed rather than becoming zero. Evidence
-profile claims group compatible definitions by stable competency id and rubric
-version while retaining the exact drill and definition identities represented.
-Trend remains narrower and additionally requires the same scenario/data
-version, drill/definition, mode, and broker.
+profile claims first require the complete authoritative checkpoint schedule,
+then group compatible definitions by stable competency id, rubric version, and
+rubric-content fingerprint while retaining the exact drill and definition
+identities represented. Trend remains narrower and additionally requires the
+same scenario/data version, drill/definition, checkpoint-schedule fingerprint,
+mode, broker mode, and full broker fingerprint.
 
 Practice tracks apply a stricter completion policy than merely finishing a
-drill. Every criterion must pass in one exact-version attempt. The two synthetic
-Volatility Discipline units are available for rehearsal but are never
-credit-bearing.
+drill. Every criterion must pass in one attempt with the exact curated replay,
+drill, rubric, mode, and full broker identity. The two synthetic Volatility
+Discipline units are available for rehearsal but are never credit-bearing.
 
 ## Journal Quality
 

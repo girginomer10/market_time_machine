@@ -5,6 +5,7 @@ import type {
   PracticeEvidenceClaim,
   PracticeEvidenceProfile,
 } from "../../domain/practice/evidenceProfile";
+import { rubricContentReference } from "../../domain/practice/evidenceProfile";
 import "./evidenceProfile.css";
 
 type Props = {
@@ -64,6 +65,12 @@ function ClaimCard({ claim }: { claim: PracticeEvidenceClaim }) {
         <div>
           <dt>Rubric</dt>
           <dd>{claim.rubricVersion}</dd>
+        </div>
+        <div>
+          <dt>Rubric content</dt>
+          <dd title={claim.rubricFingerprint}>
+            {rubricContentReference(claim.rubricFingerprint)}
+          </dd>
         </div>
       </dl>
 
@@ -175,8 +182,8 @@ function ClaimCard({ claim }: { claim: PracticeEvidenceClaim }) {
         ) : (
           <p>
             {claim.trend.currentRunId
-              ? `Current assessed run: ${claim.trend.currentRunId}. A second run with the same scenario and data version, mode, broker, drill id, definition version, and rubric is required for comparison.`
-              : "Two assessed runs with the same scenario and data version, mode, broker, drill id, definition version, and rubric are required for comparison."}
+              ? `Current assessed run: ${claim.trend.currentRunId}. A second run with the same scenario and data version, mode, exact broker settings, drill id, definition version, and rubric content is required for comparison.`
+              : "Two assessed runs with the same scenario and data version, mode, exact broker settings, drill id, definition version, and rubric content are required for comparison."}
           </p>
         )}
       </section>

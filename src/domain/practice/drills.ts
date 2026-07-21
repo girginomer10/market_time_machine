@@ -36,6 +36,386 @@ const COMPONENT_LABELS: Record<DrillAssessmentComponentId, string> = {
   event_linkage: "Event linkage",
   rule_adherence: "Rule adherence",
 };
+const RUBRIC_COMPONENT_IDS = [
+  "plan_coverage",
+  "checkpoint_coverage",
+  "event_linkage",
+  "rule_adherence",
+] as const satisfies readonly DrillAssessmentComponentId[];
+const RUBRIC_FINGERPRINT_PREFIX = "drill-rubric-v1:";
+const LEGACY_RUBRIC_FINGERPRINT_PREFIX = "legacy-drill-rubric-v1:";
+const CHECKPOINT_SCHEDULE_FINGERPRINT_PREFIX = "drill-checkpoints-v1:";
+
+type CanonicalRubricFingerprintPayload = {
+  weights: Array<[DrillAssessmentComponentId, number]>;
+  violationPenalty: number;
+};
+
+export type ParsedDrillRubricFingerprint = DrillDefinition["rubric"];
+
+type CanonicalCheckpointScheduleEntry = Pick<
+  DrillCheckpoint,
+  | "id"
+  | "drillId"
+  | "definitionVersion"
+  | "replayIndex"
+  | "replayTime"
+> & { eventIds: string[] };
+
+function canonicalCheckpointSchedule(
+  checkpoints: readonly DrillCheckpoint[],
+): CanonicalCheckpointScheduleEntry[] {
+  return [...new Map(checkpoints.map((checkpoint) => [checkpoint.id, checkpoint])).values()]
+    .sort(
+      (left, right) =>
+        left.replayIndex - right.replayIndex || left.id.localeCompare(right.id),
+    )
+    .map((checkpoint) => ({
+      id: checkpoint.id,
+      drillId: checkpoint.drillId,
+      definitionVersion: checkpoint.definitionVersion,
+      replayIndex: checkpoint.replayIndex,
+      replayTime: checkpoint.replayTime,
+      eventIds: [...checkpoint.eventIds].sort((left, right) =>
+        left.localeCompare(right),
+      ),
+    }));
+}
+
+/** Collision-free identity for every input that defines checkpoint coverage. */
+export function drillCheckpointScheduleFingerprint(
+  checkpoints: readonly DrillCheckpoint[],
+): string {
+  return `${CHECKPOINT_SCHEDULE_FINGERPRINT_PREFIX}${JSON.stringify(
+    canonicalCheckpointSchedule(checkpoints),
+  )}`;
+}
+
+export function parseDrillCheckpointScheduleFingerprint(
+  fingerprint: string,
+): CanonicalCheckpointScheduleEntry[] | undefined {
+  if (!fingerprint.startsWith(CHECKPOINT_SCHEDULE_FINGERPRINT_PREFIX)) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(
+      fingerprint.slice(CHECKPOINT_SCHEDULE_FINGERPRINT_PREFIX.length),
+    );
+    if (!Array.isArray(parsed)) return undefined;
+    const entries: DrillCheckpoint[] = [];
+    const ids = new Set<string>();
+    for (const value of parsed) {
+      if (
+        typeof value !== "object" ||
+        value === null ||
+        Object.keys(value).length !== 6 ||
+        !("id" in value) ||
+        typeof value.id !== "string" ||
+        value.id.trim().length === 0 ||
+        ids.has(value.id) ||
+        !("drillId" in value) ||
+        typeof value.drillId !== "string" ||
+        value.drillId.trim().length === 0 ||
+        !("definitionVersion" in value) ||
+        !Number.isInteger(value.definitionVersion) ||
+        Number(value.definitionVersion) < 1 ||
+        !("replayIndex" in value) ||
+        !Number.isInteger(value.replayIndex) ||
+        Number(value.replayIndex) < 0 ||
+        !("replayTime" in value) ||
+        typeof value.replayTime !== "string" ||
+        !Number.isFinite(Date.parse(value.replayTime)) ||
+        !("eventIds" in value) ||
+        !Array.isArray(value.eventIds) ||
+        value.eventIds.length === 0 ||
+        value.eventIds.some(
+          (eventId: unknown) =>
+            typeof eventId !== "string" || !eventId.trim(),
+        ) ||
+        new Set(value.eventIds).size !== value.eventIds.length
+      ) {
+        return undefined;
+      }
+      ids.add(value.id);
+      entries.push({
+        id: value.id,
+        drillId: value.drillId,
+        definitionVersion: Number(value.definitionVersion),
+        replayIndex: Number(value.replayIndex),
+        replayTime: value.replayTime,
+        eventIds: value.eventIds as string[],
+      });
+    }
+    const canonical = canonicalCheckpointSchedule(entries);
+    return drillCheckpointScheduleFingerprint(canonical) === fingerprint
+      ? canonical
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Verifies that persisted assessment totals describe the schedule encoded by
+ * the fingerprint instead of merely repeating a trusted fingerprint string.
+ */
+export function assessmentMatchesCheckpointScheduleFingerprint(
+  assessment: Pick<
+    DrillAssessment,
+    | "drillId"
+    | "definitionVersion"
+    | "checkpointScheduleFingerprint"
+    | "eligibleCheckpointCount"
+    | "answeredCheckpointCount"
+    | "skippedCheckpointCount"
+    | "eligibleEventCount"
+    | "linkedEventCount"
+  >,
+): boolean {
+  if (!assessment.checkpointScheduleFingerprint) return false;
+  const schedule = parseDrillCheckpointScheduleFingerprint(
+    assessment.checkpointScheduleFingerprint,
+  );
+  if (!schedule) return false;
+  const eventCount = new Set(
+    schedule.flatMap((checkpoint) => checkpoint.eventIds),
+  ).size;
+  return (
+    schedule.length > 0 &&
+    schedule.every(
+      (checkpoint) =>
+        checkpoint.drillId === assessment.drillId &&
+        checkpoint.definitionVersion === assessment.definitionVersion,
+    ) &&
+    assessment.eligibleCheckpointCount === schedule.length &&
+    assessment.answeredCheckpointCount + assessment.skippedCheckpointCount <=
+      schedule.length &&
+    assessment.eligibleEventCount === eventCount &&
+    assessment.linkedEventCount <= eventCount
+  );
+}
+
+/**
+ * Returns a collision-free canonical identity for every scoring input owned by
+ * a drill rubric. Key order is fixed deliberately so authored JSON property
+ * order cannot change the identity.
+ */
+export function drillRubricFingerprint(
+  rubric: DrillDefinition["rubric"],
+): string {
+  const payload: CanonicalRubricFingerprintPayload = {
+    weights: RUBRIC_COMPONENT_IDS.map((id) => [id, rubric.weights[id]]),
+    violationPenalty: rubric.violationPenalty,
+  };
+  return `${RUBRIC_FINGERPRINT_PREFIX}${JSON.stringify(payload)}`;
+}
+
+export function parseDrillRubricFingerprint(
+  fingerprint: string,
+): ParsedDrillRubricFingerprint | undefined {
+  if (!fingerprint.startsWith(RUBRIC_FINGERPRINT_PREFIX)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(
+      fingerprint.slice(RUBRIC_FINGERPRINT_PREFIX.length),
+    );
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Object.keys(parsed).length !== 2 ||
+      !("weights" in parsed) ||
+      !("violationPenalty" in parsed) ||
+      !Array.isArray((parsed as CanonicalRubricFingerprintPayload).weights) ||
+      !Number.isFinite(
+        (parsed as CanonicalRubricFingerprintPayload).violationPenalty,
+      ) ||
+      (parsed as CanonicalRubricFingerprintPayload).violationPenalty < 0 ||
+      (parsed as CanonicalRubricFingerprintPayload).violationPenalty > 100
+    ) {
+      return undefined;
+    }
+    const weights = new Map<DrillAssessmentComponentId, number>();
+    for (const entry of (parsed as CanonicalRubricFingerprintPayload).weights) {
+      if (
+        !Array.isArray(entry) ||
+        entry.length !== 2 ||
+        !RUBRIC_COMPONENT_IDS.includes(entry[0]) ||
+        !Number.isFinite(entry[1]) ||
+        entry[1] < 0 ||
+        entry[1] > 1 ||
+        weights.has(entry[0])
+      ) {
+        return undefined;
+      }
+      weights.set(entry[0], entry[1]);
+    }
+    if (
+      weights.size !== RUBRIC_COMPONENT_IDS.length ||
+      Math.abs([...weights.values()].reduce((sum, weight) => sum + weight, 0) - 1) >
+        1e-9
+    ) {
+      return undefined;
+    }
+    const rubric: ParsedDrillRubricFingerprint = {
+      weights: {
+        plan_coverage: weights.get("plan_coverage")!,
+        checkpoint_coverage: weights.get("checkpoint_coverage")!,
+        event_linkage: weights.get("event_linkage")!,
+        rule_adherence: weights.get("rule_adherence")!,
+      },
+      violationPenalty: (
+        parsed as CanonicalRubricFingerprintPayload
+      ).violationPenalty,
+    };
+    return drillRubricFingerprint(rubric) === fingerprint ? rubric : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function assessmentWeightsMatchRubric(
+  assessment: DrillAssessment,
+  rubric: ParsedDrillRubricFingerprint,
+): boolean {
+  return (
+    assessment.components.length === RUBRIC_COMPONENT_IDS.length &&
+    RUBRIC_COMPONENT_IDS.every((id) => {
+      const matching = assessment.components.filter((entry) => entry.id === id);
+      return (
+        matching.length === 1 &&
+        Number.isFinite(matching[0].weight) &&
+        Math.abs(matching[0].weight - rubric.weights[id]) <= 0.000001
+      );
+    })
+  );
+}
+
+function scoreMatches(left: number | undefined, right: number): boolean {
+  return (
+    left !== undefined &&
+    Number.isFinite(left) &&
+    left >= 0 &&
+    left <= 100 &&
+    Math.abs(left - right) <= 0.000001
+  );
+}
+
+function nonNegativeSafeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * Recomputes every completed-assessment score from its compact aggregate
+ * evidence. This preserves ledger-only assessment history without trusting a
+ * persisted component or overall score that contradicts the recorded counts.
+ */
+export function completedAssessmentMatchesAggregateEvidence(
+  assessment: DrillAssessment,
+): boolean {
+  if (assessment.status !== "completed" || !assessment.rubricFingerprint) {
+    return false;
+  }
+  const rubric = parseDrillRubricFingerprint(assessment.rubricFingerprint);
+  if (!rubric || !assessmentWeightsMatchRubric(assessment, rubric)) {
+    return false;
+  }
+  if (
+    !nonNegativeSafeInteger(assessment.eligibleCheckpointCount) ||
+    assessment.eligibleCheckpointCount <= 0 ||
+    !nonNegativeSafeInteger(assessment.answeredCheckpointCount) ||
+    !nonNegativeSafeInteger(assessment.skippedCheckpointCount) ||
+    assessment.answeredCheckpointCount !==
+      assessment.eligibleCheckpointCount ||
+    assessment.skippedCheckpointCount !== 0 ||
+    !nonNegativeSafeInteger(assessment.eligibleEventCount) ||
+    assessment.eligibleEventCount <= 0 ||
+    !nonNegativeSafeInteger(assessment.linkedEventCount) ||
+    assessment.linkedEventCount > assessment.eligibleEventCount ||
+    !nonNegativeSafeInteger(assessment.violationCount)
+  ) {
+    return false;
+  }
+
+  const expectedScores: Record<DrillAssessmentComponentId, number> = {
+    plan_coverage: 100,
+    checkpoint_coverage: roundedScore(
+      (assessment.answeredCheckpointCount /
+        assessment.eligibleCheckpointCount) *
+        100,
+    ),
+    event_linkage: roundedScore(
+      (assessment.linkedEventCount / assessment.eligibleEventCount) * 100,
+    ),
+    rule_adherence: roundedScore(
+      100 - assessment.violationCount * rubric.violationPenalty,
+    ),
+  };
+  const components = new Map<
+    DrillAssessmentComponentId,
+    DrillAssessmentComponent
+  >();
+  for (const component of assessment.components) {
+    if (
+      components.has(component.id) ||
+      component.status !== "assessed" ||
+      !scoreMatches(component.score, expectedScores[component.id])
+    ) {
+      return false;
+    }
+    components.set(component.id, component);
+  }
+  if (
+    components.size !== RUBRIC_COMPONENT_IDS.length ||
+    !RUBRIC_COMPONENT_IDS.every((id) => components.has(id))
+  ) {
+    return false;
+  }
+  const expectedOverallScore = roundedScore(
+    RUBRIC_COMPONENT_IDS.reduce(
+      (sum, id) => sum + expectedScores[id] * rubric.weights[id],
+      0,
+    ),
+  );
+  return scoreMatches(assessment.overallScore, expectedOverallScore);
+}
+
+export function assessmentHasConsistentRubricFingerprint(
+  assessment: DrillAssessment,
+): boolean {
+  if (assessment.rubricFingerprint === undefined) return true;
+  const rubric = parseDrillRubricFingerprint(assessment.rubricFingerprint);
+  return Boolean(rubric && assessmentWeightsMatchRubric(assessment, rubric));
+}
+
+/**
+ * Legacy assessments did not persist violationPenalty. They remain readable
+ * and comparable with assessments that share their exact component weights,
+ * but are intentionally isolated from fully identified new rubrics.
+ */
+export function effectiveAssessmentRubricFingerprint(
+  assessment: DrillAssessment,
+): string {
+  if (assessment.rubricFingerprint?.trim()) {
+    return assessment.rubricFingerprint;
+  }
+  const weights = RUBRIC_COMPONENT_IDS.map((id) => [
+    id,
+    assessment.components.find((component) => component.id === id)?.weight ??
+      null,
+  ]);
+  return `${LEGACY_RUBRIC_FINGERPRINT_PREFIX}${JSON.stringify({ weights })}`;
+}
+
+/** Only explicitly fingerprinted assessments can match a complete rubric. */
+export function assessmentMatchesRubricFingerprint(
+  assessment: DrillAssessment,
+  expectedFingerprint: string,
+): boolean {
+  if (!parseDrillRubricFingerprint(expectedFingerprint)) return false;
+  return (
+    assessment.rubricFingerprint === expectedFingerprint &&
+    assessmentHasConsistentRubricFingerprint(assessment)
+  );
+}
 
 function timestamp(value: string): number | undefined {
   const parsed = Date.parse(value);
@@ -290,6 +670,12 @@ export function validateDrillDefinition(
       "Initial-plan fields must be unique supported decision-plan fields.",
       "initialPlanRule.requiredFields",
     );
+  } else if (planFields.length === 0) {
+    add(
+      "definition.plan_fields_empty",
+      "A practice drill must require at least one supported initial-plan field.",
+      "initialPlanRule.requiredFields",
+    );
   }
 
   const weightEntries = Object.entries(definition.rubric.weights) as Array<
@@ -431,7 +817,7 @@ export function validateDrillCheckpointResponse(
   ) {
     add(
       "response.events_mismatch",
-      "Response must link every event in its checkpoint exactly once.",
+      "Response must preserve every checkpoint event exactly once.",
       "eventIds",
     );
   }
@@ -441,6 +827,26 @@ export function validateDrillCheckpointResponse(
       "A checkpoint response cannot reference an event outside the visible snapshot.",
       "eventIds",
     );
+  }
+  if (response.linkedEventIds !== undefined) {
+    if (!uniqueStrings(response.linkedEventIds)) {
+      add(
+        "response.linked_events_invalid",
+        "Explicitly linked event ids must be non-empty and unique.",
+        "linkedEventIds",
+      );
+    } else if (
+      response.linkedEventIds.some(
+        (eventId) =>
+          !checkpoint.eventIds.includes(eventId) || !visible.has(eventId),
+      )
+    ) {
+      add(
+        "response.linked_event_not_visible",
+        "An explicit event link must belong to this visible checkpoint.",
+        "linkedEventIds",
+      );
+    }
   }
   if (response.status !== "answered" && response.status !== "skipped") {
     add(
@@ -471,6 +877,12 @@ export function validateDrillCheckpointResponse(
       "response.skipped_action_present",
       "A skipped checkpoint cannot claim a decision action.",
       "action",
+    );
+  } else if ((response.linkedEventIds?.length ?? 0) > 0) {
+    add(
+      "response.skipped_links_present",
+      "A skipped checkpoint cannot claim explicit event links.",
+      "linkedEventIds",
     );
   }
   if (
@@ -582,9 +994,14 @@ export function assessDrill(input: DrillAssessmentInput): DrillAssessment {
   const eligibleEventIds = new Set(
     checkpoints.flatMap((checkpoint) => checkpoint.eventIds),
   );
+  const hasExplicitEventLinkage = answered.every(
+    (response) => response.linkedEventIds !== undefined,
+  );
   const linkedEventIds = new Set(
     answered.flatMap((response) =>
-      response.eventIds.filter((eventId) => eligibleEventIds.has(eventId)),
+      (response.linkedEventIds ?? []).filter((eventId) =>
+        eligibleEventIds.has(eventId),
+      ),
     ),
   );
   const requiredPlanFields = definition.initialPlanRule.requiredFields;
@@ -658,6 +1075,13 @@ export function assessDrill(input: DrillAssessmentInput): DrillAssessment {
           "No answered checkpoint linked visible events; missing evidence is not scored as zero.",
       });
     }
+    if (!hasExplicitEventLinkage) {
+      return component(definition, "event_linkage", {
+        status: "insufficient_evidence",
+        evidence:
+          "This legacy attempt did not record which visible events the user explicitly linked; checkpoint membership is not treated as a decision link.",
+      });
+    }
     return component(definition, "event_linkage", {
       status: "assessed",
       score: roundedScore((linkedEventIds.size / eligibleEventIds.size) * 100),
@@ -709,6 +1133,7 @@ export function assessDrill(input: DrillAssessmentInput): DrillAssessment {
     input.positionOpened &&
     planComplete &&
     allCheckpointsAnswered &&
+    hasExplicitEventLinkage &&
     skipped.length === 0
       ? "completed"
       : "incomplete";
@@ -718,6 +1143,12 @@ export function assessDrill(input: DrillAssessmentInput): DrillAssessment {
     competencyId: definition.competencyId,
     definitionVersion: definition.definitionVersion,
     rubricVersion: definition.rubricVersion,
+    rubricFingerprint: drillRubricFingerprint(definition.rubric),
+    checkpointScheduleFingerprint:
+      drillCheckpointScheduleFingerprint(checkpoints),
+    ...(hasExplicitEventLinkage
+      ? { eventLinkageEvidenceVersion: 1 as const }
+      : {}),
     status,
     overallScore,
     methodology: `Process-only score: ${roundedScore(

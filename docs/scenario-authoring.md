@@ -18,12 +18,46 @@ Minimum required parts:
 
 `assembleScenario` will normalize sort order. It validates and defensively copies optional authored drills because malformed drill rules must never enter a replay. Call `validateScenarioPackage` from `src/domain/validation/scenario.ts` to check the complete package.
 
+## Replay-Contract Identity
+
+Treat `meta.dataVersion` as the immutable identity of the scenario contract, not
+as a label for the price file alone. The shipped ECB packages pin a SHA-256 of a
+canonical payload containing replay-relevant metadata, instruments, candles,
+events, indicators, benchmarks, the scenario broker, market calendar, and
+corporate actions. `dataVersion` itself is excluded to avoid recursion, and
+`generatedAt` is excluded because retrieval time alone does not change replay.
+Array order remains significant. When a browser-imported package contains
+scenario-authored drills, those definitions are also included in the canonical
+scenario identity in addition to carrying their own definition, competency,
+rubric, and rubric-content identities.
+
+Browser imports must still declare a non-empty author `dataVersion`, but the app
+does not trust that label as proof of sameness. It derives and persists an
+app-owned `sha256:<digest>` from the complete canonical replay contract. Removing
+and re-importing changed content under the same id and author label therefore
+produces a different restore identity.
+
+A source snapshot's `contentSha256` can be useful provenance, but it is only one
+sub-identity. If an included observation, derivation rule, event, instrument,
+broker default, calendar, corporate action, or report-relevant metadata changes,
+assign a new scenario version. The built-in `dataVersions` regression recomputes
+the ECB full contracts and checks their pinned constants.
+
+Do not reuse an old value to make a changed package restore or earn evidence.
+The runtime recognizes only a small set of centrally reviewed, scenario-specific
+built-in aliases; there is no general fallback or prefix match. Unknown versions
+receive no migration and compare only by exact equality. Current session exports
+also fingerprint the active broker configuration separately, because a
+selectable preset can differ from the scenario's versioned default broker.
+
 ## Optional Data-Only Practice Drills
 
 A scenario package may include `drills?: DrillDefinition[]`. These are JSON-compatible definitions, not executable extensions. See the compact [event-discipline example](examples/event-discipline-drill.json).
 
 Each definition requires:
 
+- a non-empty `meta.dataVersion` on the containing scenario, so session restore
+  and comparable evidence can reject changed market/event data
 - a scenario-local unique `id` and a positive integer `definitionVersion`
 - a non-empty stable `competencyId`, `rubricVersion`, title, and description
 - `scenarioId` exactly matching the containing package
@@ -41,7 +75,9 @@ Valid scenario-authored drills appear as runnable library options only with thei
 `competencyId` groups compatible definitions in the evidence profile; use the
 same value only when they assess the same process under the same rubric. It does
 not grant track credit or make two runs trend-comparable. Trends still require
-the exact same scenario/data version, drill/definition, mode, and broker.
+the same canonical scenario identity, drill/definition and rubric content, mode,
+broker mode, and full broker fingerprint. A reviewed built-in version alias can
+match its canonical successor; an unreviewed mismatch cannot.
 
 Authoring is intentionally data-only. Custom functions, scripts, arbitrary scoring code, and a no-code drill editor are not supported; a no-code editor is a product non-goal for this schema version.
 
@@ -58,7 +94,13 @@ Before opening a pull request, confirm:
 - `affectedSymbols` and candle symbols all appear in `instruments`
 - Broker assumptions are realistic for the asset class (crypto vs. equities differ on fractional, leverage, hours)
 - License and data sources are declared
-- Local/professional scenarios should also declare `dataVersion`, `sourceManifest`, `generatedAt`, `priceAdjustment`, and `marketCalendarId` when those are known
+- Every imported scenario must declare a non-empty `dataVersion`; packages with
+  authored drills are subject to the same rule. The browser normalizes it to a
+  full-contract SHA-256 rather than trusting a reused author label. Also declare `sourceManifest`,
+  `generatedAt`, `priceAdjustment`, and `marketCalendarId` when those are known
+- A changed replay-contract layer has a new `dataVersion`; a source-file digest
+  alone is not enough when authored events, broker assumptions, or other layers
+  can also change
 - Optional drills pass structural parsing, domain validation, scenario matching, and unique-id/version checks
 
 The validator returns errors and warnings:
@@ -130,7 +172,14 @@ Important licensing notes:
 - Generated files should stay local unless you have separate redistribution permission from the data owner.
 - Local licensed scenarios are discovered by the development server only. The normal production build aliases local discovery to an empty registry, and its release check verifies that `FRED:SP500` licensing markers are absent from `dist`.
 - The importer uses source close values only. Open/high/low are derived from adjacent closes and volume is set to `0`, so the generated scenario is useful for broad timing practice, not intraday execution realism.
-- Because open/high/low are derived rather than source observations, the generated package sets `meta.isSampleData = true`. The sample-data badge describes the derived candle construction; it does not imply that the FRED close observations are synthetic.
+- Candle open/close timestamps are derived from regular 09:30-16:00
+  America/New_York sessions. Exchange early-close exceptions are not modeled,
+  so those timestamps are not source observations or intraday event-time evidence.
+- Because open/high/low are derived rather than source observations, the generated package sets `meta.isSampleData = true`, `meta.dataFidelity = "mixed"`, and explicit observed/derived field lists. The briefing says that the closes are observed and the remaining replay fields are derived; it does not call the FRED close observations synthetic.
+- `meta.dataVersion` combines a SHA-256 identity of normalized imported market content with the bundled S&P 500 event-layer version. A changed close, requested range, derivation contract, or authored event layer therefore creates a different replay identity; `generatedAt` alone does not.
+- The generator schema fixes the remaining emitted instrument, broker, calendar,
+  and derivation defaults. If you hand-edit any generated replay layer afterward,
+  assign a new version instead of retaining the importer-produced identity.
 
 Optional date range:
 
@@ -141,7 +190,11 @@ npm run import:fred-sp500 -- --start=2020-01-02 --end=2020-12-31
 Custom ranges use a generic `S&P 500 FRED Replay` identity and keep only events
 inside the requested interval. Existing output is protected; use
 `--force=true` only when you intentionally want to replace it. Custom output
-paths may be git-visible, so always inspect `git status` before publishing.
+paths may be git-visible, so always inspect `git status` before publishing. The
+new `index.ts` and `README.md` are staged together; if either install step
+fails, the importer restores the prior pair. Output under `public/`, `dist/`,
+bundled `src/` roots, or a shipped scenario directory is refused so a local
+licensed snapshot cannot be placed directly on a production path.
 
 ## Local Licensed OHLCV Import
 
@@ -151,7 +204,16 @@ If you already have local-use or redistribution-safe OHLCV data, generate a giti
 npm run import:ohlcv -- --input=local-data/spy.csv --symbol=SPY --title="SPY Local Replay" --license="Licensed local use only"
 ```
 
-Input may be CSV or JSON. Rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`. The importer validates timestamps, positive OHLC values, OHLC relationships, duplicates, metadata, IDs, and output paths before writing atomically. The generated package includes source-manifest metadata, configurable asset class/granularity/currency/timezone/initial cash, professional broker assumptions, and an empty `corporateActions` array that can be filled later for splits or dividends.
+Input may be CSV or JSON. Rows should include `date` or `openTime`/`closeTime`, plus `open`, `high`, `low`, `close`, and optional `volume`. Both camelCase and snake_case timestamp headers are accepted in CSV. Date-only values are normalized as UTC dates; every date-time value must carry an explicit `Z` or numeric UTC offset so imports are identical across host timezones. The importer validates timestamps, positive OHLC values, OHLC relationships, duplicates, metadata, IDs, tick size, and output paths before staging both generated files and replacing them as a recoverable pair. Publication uses an owner-identified lock and a recoverable transaction manifest, so a later run can reclaim a dead writer and either roll back an interrupted pair or finalize a completely installed pair. FX defaults to a `0.0001` tick; other asset classes default to `0.01`, and `--tickSize=<positive number>` overrides either default. Tick size is included in the SHA-256 `dataVersion`, which covers the normalized generator inputs and schema and is independent of generation time. The generated package includes source-manifest metadata, configurable asset class/granularity/currency/timezone/initial cash, professional broker assumptions, and an empty `corporateActions` array. If you later fill that array or hand-edit events, broker settings, or another replay layer, assign a new version.
+
+Lock takeover is serialized and rechecks the observed owner's file identity before
+reclaiming it, so two recovery contenders cannot move a newly acquired live lock.
+Staged files, manifests, installed outputs, commit markers, locks, and their
+critical directories are flushed before publication advances. Recovery deletes
+only a valid importer-owned transaction described by its manifest; a missing,
+corrupt, or unexpected transaction directory is preserved and reported for
+manual inspection. A hard power loss can leave an abandoned `.preparing-*` or
+takeover-guard artifact, but those fail closed and do not overwrite user files.
 
 The importer deliberately does not invent a market calendar from a timezone.
 Generated scenarios set `marketHoursEnforced: false`; add a verified exchange
@@ -159,7 +221,11 @@ calendar and enable enforcement only when the actual sessions and holidays are
 known. Pass `--force=true` to intentionally replace an existing generated
 scenario.
 
-Generated `src/data/scenarios/local-*/` folders are ignored by git. Keep them local unless the data owner grants explicit redistribution rights.
+Generated `src/data/scenarios/local-*/` folders are ignored by git. The importer
+rejects output under `public/`, `dist/`, bundled `src/` roots, or a shipped
+scenario directory; custom repository paths outside those roots can still be
+git-visible. Keep generated data local unless the data owner grants explicit
+redistribution rights.
 
 ## Running the Validator Locally
 

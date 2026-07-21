@@ -2,7 +2,7 @@
  * static, same-origin resources so future API responses or user data are never
  * persisted accidentally. Bump CACHE_VERSION when cache behavior or the
  * release-critical app shell changes. */
-const CACHE_VERSION = "personal-decision-gym-v2";
+const CACHE_VERSION = "personal-decision-gym-v2-2";
 const CACHE_PREFIX = "market-time-machine-";
 const APP_SHELL_CACHE = `${CACHE_PREFIX}shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${CACHE_VERSION}`;
@@ -22,6 +22,26 @@ function isCacheableResponse(response) {
   return response.ok && (response.type === "basic" || response.type === "default");
 }
 
+function isCanonicalAppShellResponse(requestUrl, response) {
+  const shellUrl = appUrl();
+  if (requestUrl.href !== shellUrl.href || !isCacheableResponse(response)) {
+    return false;
+  }
+
+  const contentType = response.headers
+    .get("content-type")
+    ?.split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (contentType !== "text/html" || !response.url) return false;
+
+  try {
+    return new URL(response.url, shellUrl).href === shellUrl.href;
+  } catch {
+    return false;
+  }
+}
+
 async function cacheResponse(cache, request, response) {
   if (isCacheableResponse(response)) {
     await cache.put(request, response.clone());
@@ -33,18 +53,21 @@ async function cacheAppShell() {
   const cache = await caches.open(APP_SHELL_CACHE);
   const shellUrl = appUrl();
   const shellResponse = await fetch(shellUrl, { cache: "reload" });
-  if (!isCacheableResponse(shellResponse)) {
-    throw new Error(`Unable to cache app shell: HTTP ${shellResponse.status}`);
+  if (!isCanonicalAppShellResponse(shellUrl, shellResponse)) {
+    throw new Error(
+      `Unable to cache canonical HTML app shell: HTTP ${shellResponse.status}`,
+    );
   }
 
   await cache.put(shellUrl, shellResponse.clone());
   const html = await shellResponse.text();
-  const assetUrls = new Set([
+  const optionalAssetUrls = new Set([
     appUrl("manifest.webmanifest").href,
     appUrl("icons/icon-192.png").href,
     appUrl("icons/icon-512.png").href,
     appUrl("icons/icon-maskable-512.png").href,
   ]);
+  const criticalAssetUrls = new Set();
   const attributePattern = /\b(?:href|src)=["']([^"']+)["']/g;
   for (const match of html.matchAll(attributePattern)) {
     const candidate = new URL(match[1], shellUrl);
@@ -52,17 +75,30 @@ async function cacheAppShell() {
       candidate.origin === shellUrl.origin &&
       candidate.href.startsWith(self.registration.scope)
     ) {
-      assetUrls.add(candidate.href);
+      criticalAssetUrls.add(candidate.href);
+      optionalAssetUrls.delete(candidate.href);
     }
   }
 
   await Promise.all(
-    [...assetUrls].map(async (url) => {
+    [...criticalAssetUrls].map(async (url) => {
+      const response = await fetch(url, { cache: "reload" });
+      if (!isCacheableResponse(response)) {
+        throw new Error(
+          `Unable to cache critical app asset ${url}: HTTP ${response.status}`,
+        );
+      }
+      await cache.put(url, response.clone());
+    }),
+  );
+
+  await Promise.all(
+    [...optionalAssetUrls].map(async (url) => {
       try {
         const response = await fetch(url, { cache: "reload" });
         await cacheResponse(cache, url, response);
       } catch {
-        // The app shell remains usable even if a non-critical icon cannot cache.
+        // The app shell remains usable even if a manifest/icon cannot cache.
       }
     }),
   );
@@ -110,8 +146,11 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then(async (response) => {
-          const cache = await caches.open(APP_SHELL_CACHE);
-          return cacheResponse(cache, appUrl(), response);
+          if (isCanonicalAppShellResponse(requestUrl, response)) {
+            const cache = await caches.open(APP_SHELL_CACHE);
+            await cache.put(appUrl(), response.clone());
+          }
+          return response;
         })
         .catch(async () => {
           const cached = await caches.match(appUrl());

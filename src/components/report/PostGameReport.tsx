@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   DecisionReplayPoint,
+  DrillDefinition,
   EquityPoint,
   ReportPayload,
   TradeOutcome,
 } from "../../types";
 import { formatCurrency, formatNumber, formatPct } from "../../utils/format";
-import { getBuiltInDrill } from "../../data/practice/drills";
+import { authoritativePracticeAssessmentContext } from "../../domain/practice/assessmentAuthority";
 import DrillDebrief from "../practice/DrillDebrief";
 import "./PostGameReport.css";
 
@@ -14,10 +15,14 @@ const ZERO_EPSILON = 0.0000001;
 
 type Props = {
   report: ReportPayload;
+  archiveWarning?: string;
+  archiveSaving?: boolean;
   currency?: string;
   pricePrecision?: number;
   onClose: () => void;
   onReset: () => void;
+  onRetryArchive?: () => void;
+  onDownloadRecoveryArchive?: () => void;
   onChooseNextPractice?: () => void;
   previousComparablePracticeScore?: number;
 };
@@ -34,12 +39,23 @@ function signedPct(value: number): string {
   return value > 0 ? `+${formatted}` : formatted;
 }
 
+function matchingAssessmentFallback(
+  report: ReportPayload,
+): DrillDefinition | undefined {
+  if (!report.practiceAssessment || report.practiceDrill) return undefined;
+  return authoritativePracticeAssessmentContext(report)?.definition;
+}
+
 export default function PostGameReport({
   report,
+  archiveWarning,
+  archiveSaving = false,
   currency = "USD",
   pricePrecision = 2,
   onClose,
   onReset,
+  onRetryArchive,
+  onDownloadRecoveryArchive,
   onChooseNextPractice,
   previousComparablePracticeScore,
 }: Props) {
@@ -52,15 +68,19 @@ export default function PostGameReport({
   const verdict = verdictFor(m.excessReturn, closedTradeCount);
   const rights = buildRights(report, closedTradeCount);
   const watchItems = buildWatchItems(report, closedTradeCount, currency);
-  const summary = useMemo(
-    () => reportSummary(report, closedTradeCount, currency),
-    [closedTradeCount, currency, report],
-  );
   const practiceDefinition =
-    report.practiceDrill?.definition ??
-    (report.practiceAssessment
-      ? getBuiltInDrill(report.practiceAssessment.drillId)
-      : undefined);
+    report.practiceDrill?.definition ?? matchingAssessmentFallback(report);
+  const summary = useMemo(
+    () =>
+      reportSummary(
+        report,
+        closedTradeCount,
+        currency,
+        practiceDefinition !== undefined,
+      ),
+    [closedTradeCount, currency, practiceDefinition, report],
+  );
+  const archiveNavigationBlocked = archiveSaving || Boolean(archiveWarning);
 
   useEffect(() => {
     const priorFocus = document.activeElement as HTMLElement | null;
@@ -71,7 +91,7 @@ export default function PostGameReport({
     function handleKeyDown(event: KeyboardEvent): void {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        if (!archiveNavigationBlocked) onClose();
         return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
@@ -96,7 +116,7 @@ export default function PostGameReport({
       document.body.style.overflow = previousOverflow;
       priorFocus?.focus();
     };
-  }, [onClose]);
+  }, [archiveNavigationBlocked, onClose]);
 
   const copySummary = async (
     successMessage = "Report summary copied.",
@@ -182,6 +202,7 @@ export default function PostGameReport({
               onClick={onClose}
               aria-label="Close report"
               ref={closeRef}
+              disabled={archiveNavigationBlocked}
             >
               Close
             </button>
@@ -190,6 +211,39 @@ export default function PostGameReport({
         {shareMessage ? (
           <div className="report-share-message" role="status">
             {shareMessage}
+          </div>
+        ) : null}
+        {archiveSaving ? (
+          <div className="report-share-message" role="status">
+            Saving the completed replay and compact evidence to this browser…
+          </div>
+        ) : null}
+        {archiveWarning ? (
+          <div className="report-save-warning" role="alert">
+            <div className="report-save-warning-content">
+              <strong>This completed replay was not saved to local history.</strong>
+              <span>
+                {archiveWarning} Retry the local save, or download an importable
+                recovery archive before closing this report. <b>Export JSON</b>{" "}
+                remains a report-only copy.
+              </span>
+            </div>
+            <div className="report-save-warning-actions">
+              {onRetryArchive ? (
+                <button className="btn" type="button" onClick={onRetryArchive}>
+                  Retry saving
+                </button>
+              ) : null}
+              {onDownloadRecoveryArchive ? (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={onDownloadRecoveryArchive}
+                >
+                  Download recovery archive
+                </button>
+              ) : null}
+            </div>
           </div>
         ) : null}
 
@@ -207,6 +261,18 @@ export default function PostGameReport({
             practiceDrill={report.practiceDrill}
             previousComparableProcessScore={previousComparablePracticeScore}
           />
+        ) : null}
+        {report.practiceAssessment && !practiceDefinition ? (
+          <section className="report-section" role="note">
+            <h3>Archived drill definition unavailable</h3>
+            <p>
+              This report keeps assessment facts for drill{" "}
+              {report.practiceAssessment.drillId} v
+              {report.practiceAssessment.definitionVersion}, but its exact
+              rubric definition is not embedded and does not match the current
+              catalog. The app will not relabel it as a current drill.
+            </p>
+          </section>
         ) : null}
 
         <section className="report-summary" aria-label="Performance summary">
@@ -454,21 +520,32 @@ export default function PostGameReport({
             or thesis to test how robust the reasoning is.
           </p>
           <div>
-            <button className="btn" type="button" onClick={onClose}>
+            <button
+              className="btn"
+              type="button"
+              onClick={onClose}
+              disabled={archiveNavigationBlocked}
+            >
               Return to lab
             </button>
             <button
               className={onChooseNextPractice ? "btn" : "btn primary"}
               type="button"
               onClick={onReset}
+              disabled={archiveNavigationBlocked}
             >
-              Replay scenario
+              {archiveSaving
+                ? "Saving replay…"
+                : archiveWarning
+                  ? "Secure recovery first"
+                  : "Replay scenario"}
             </button>
             {onChooseNextPractice ? (
               <button
                 className="btn primary"
                 type="button"
                 onClick={onChooseNextPractice}
+                disabled={archiveNavigationBlocked}
               >
                 Choose next practice
               </button>
@@ -547,7 +624,7 @@ function buildWatchItems(
   });
   if (closedTradeCount > 0 && report.metrics.excessReturn < 0) {
     items.push(
-      `Trading trailed the benchmark by ${signedPct(report.metrics.excessReturn)}.`,
+      `Trading trailed the benchmark by ${formatPct(Math.abs(report.metrics.excessReturn))}.`,
     );
   }
   if (closedTradeCount === 0) {
@@ -562,6 +639,7 @@ function reportSummary(
   report: ReportPayload,
   closedTradeCount: number,
   currency: string,
+  hasAuthoritativePracticeDefinition: boolean,
 ): string {
   const m = report.metrics;
   return [
@@ -576,6 +654,22 @@ function reportSummary(
     ...(report.score?.overall !== undefined
       ? [`Decision quality score: ${formatNumber(report.score.overall, 0)}/100`]
       : []),
+    ...(hasAuthoritativePracticeDefinition &&
+      report.practiceAssessment?.status === "completed" &&
+      report.practiceAssessment.eventLinkageEvidenceVersion === 1 &&
+      report.practiceAssessment.overallScore !== undefined
+      ? [
+          `Practice process score: ${formatNumber(report.practiceAssessment.overallScore, 0)}/100 · rubric ${report.practiceAssessment.rubricVersion}`,
+        ]
+      : report.practiceAssessment
+        ? [
+            report.practiceAssessment.eventLinkageEvidenceVersion !== 1
+              ? "Practice process: unassessed legacy attempt · explicit event links were not recorded"
+              : report.practiceAssessment.status !== "completed"
+                ? `Practice process: ${report.practiceAssessment.status.replaceAll("_", " ")} · no assessed score`
+                : "Practice process: retained facts only · exact drill schedule unavailable",
+          ]
+        : []),
   ].join("\n");
 }
 

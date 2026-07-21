@@ -9,33 +9,33 @@ import {
   parseEcbCsv,
   sourcePayload,
   validateDateRange,
-} from "./import-ecb-eurusd.mjs";
+} from "./import-ecb-eurgbp.mjs";
 
 const CSV = [
   "KEY,TIME_PERIOD,OBS_VALUE,TITLE_COMPL",
-  'EXR.D.USD.EUR.SP00.A,2020-02-04,1.1048,"ECB reference, daily"',
-  'EXR.D.USD.EUR.SP00.A,2020-02-03,1.1066,"ECB reference, daily"',
+  'EXR.D.GBP.EUR.SP00.A,2016-03-02,0.7741,"ECB reference, daily"',
+  'EXR.D.GBP.EUR.SP00.A,2016-03-01,0.778,"ECB reference, daily"',
 ].join("\n");
 
-describe("import-ecb-eurusd", () => {
+describe("import-ecb-eurgbp", () => {
   it("validates real ordered calendar dates", () => {
-    expect(() => validateDateRange("2020-02-03", "2020-06-30")).not.toThrow();
-    expect(() => validateDateRange("2020-02-30", "2020-06-30")).toThrow(
+    expect(() => validateDateRange("2016-03-01", "2016-09-30")).not.toThrow();
+    expect(() => validateDateRange("2016-02-30", "2016-09-30")).toThrow(
       "valid YYYY-MM-DD",
     );
-    expect(() => validateDateRange("2020-07-01", "2020-06-30")).toThrow(
+    expect(() => validateDateRange("2016-10-01", "2016-09-30")).toThrow(
       "on or before",
     );
   });
 
   it.each([
-    "07/14/2026 00:00:00Z",
+    "07/13/2026 00:00:00Z",
     "2026-02-30T00:00:00Z",
-    "2026-07-14T24:00:00Z",
-    "2026-07-14T00:00:60Z",
-    "2026-07-14T00:00:00",
-    "2026-07-14T00:00:00+24:00",
-    "2026-07-14T00:00:00+14:01",
+    "2026-07-13T24:00:00Z",
+    "2026-07-13T00:00:60Z",
+    "2026-07-13T00:00:00",
+    "2026-07-13T00:00:00+24:00",
+    "2026-07-13T00:00:00+14:01",
   ])("rejects invalid retrievedAt timestamp %s before fetching", async (value) => {
     const fetchImpl = vi.fn();
     await expect(
@@ -46,52 +46,52 @@ describe("import-ecb-eurusd", () => {
 
   it("parses quoted ECB CSV rows and sorts observations deterministically", () => {
     expect(
-      parseEcbCsv(CSV, { start: "2020-02-03", end: "2020-02-04" }),
+      parseEcbCsv(CSV, { start: "2016-03-01", end: "2016-03-02" }),
     ).toEqual([
-      { date: "2020-02-03", value: 1.1066 },
-      { date: "2020-02-04", value: 1.1048 },
+      { date: "2016-03-01", value: 0.778 },
+      { date: "2016-03-02", value: 0.7741 },
     ]);
   });
 
   it.each([
     {
       name: "missing columns",
-      csv: "DATE,VALUE\n2020-02-03,1.1\n2020-02-04,1.2",
+      csv: "DATE,VALUE\n2016-03-01,0.7\n2016-03-02,0.8",
       error: "missing KEY, TIME_PERIOD, or OBS_VALUE",
     },
     {
       name: "non-positive values",
-      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.USD.EUR.SP00.A,2020-02-03,0\nEXR.D.USD.EUR.SP00.A,2020-02-04,1.2",
+      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.GBP.EUR.SP00.A,2016-03-01,0\nEXR.D.GBP.EUR.SP00.A,2016-03-02,0.8",
       error: "Invalid ECB observation",
     },
     {
       name: "duplicate dates",
-      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.USD.EUR.SP00.A,2020-02-03,1.1\nEXR.D.USD.EUR.SP00.A,2020-02-03,1.2",
+      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.GBP.EUR.SP00.A,2016-03-01,0.7\nEXR.D.GBP.EUR.SP00.A,2016-03-01,0.8",
       error: "duplicate observation date",
     },
     {
       name: "out-of-range records",
-      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.USD.EUR.SP00.A,2020-02-02,1.1\nEXR.D.USD.EUR.SP00.A,2020-02-03,1.2",
+      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.GBP.EUR.SP00.A,2016-02-29,0.7\nEXR.D.GBP.EUR.SP00.A,2016-03-01,0.8",
       error: "falls outside",
     },
     {
       name: "unterminated quoted values",
-      csv: 'KEY,TIME_PERIOD,OBS_VALUE,TITLE\nEXR.D.USD.EUR.SP00.A,2020-02-03,1.1,"broken\nEXR.D.USD.EUR.SP00.A,2020-02-04,1.2,ok',
+      csv: 'KEY,TIME_PERIOD,OBS_VALUE,TITLE\nEXR.D.GBP.EUR.SP00.A,2016-03-01,0.7,"broken\nEXR.D.GBP.EUR.SP00.A,2016-03-02,0.8,ok',
       error: "unterminated CSV quote",
     },
     {
       name: "malformed column counts",
-      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.USD.EUR.SP00.A,2020-02-03,1.1,extra\nEXR.D.USD.EUR.SP00.A,2020-02-04,1.2",
+      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.GBP.EUR.SP00.A,2016-03-01,0.7,extra\nEXR.D.GBP.EUR.SP00.A,2016-03-02,0.8",
       error: "4 columns; expected 3",
     },
     {
       name: "a different ECB series",
-      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.GBP.EUR.SP00.A,2020-02-03,0.84\nEXR.D.GBP.EUR.SP00.A,2020-02-04,0.85",
-      error: "unexpected series key EXR.D.GBP.EUR.SP00.A",
+      csv: "KEY,TIME_PERIOD,OBS_VALUE\nEXR.D.USD.EUR.SP00.A,2016-03-01,1.1\nEXR.D.USD.EUR.SP00.A,2016-03-02,1.2",
+      error: "unexpected series key EXR.D.USD.EUR.SP00.A",
     },
   ])("rejects $name", ({ csv, error }) => {
     expect(() =>
-      parseEcbCsv(csv, { start: "2020-02-03", end: "2020-02-04" }),
+      parseEcbCsv(csv, { start: "2016-03-01", end: "2016-03-02" }),
     ).toThrow(error);
   });
 
@@ -113,40 +113,34 @@ describe("import-ecb-eurusd", () => {
     ).rejects.toThrow("timed out after 5 ms");
   });
 
-  it("builds a stable attributed source payload", () => {
+  it("builds a content-addressed payload independent of retrieval time", () => {
+    const observations = [{ date: "2016-03-01", value: 0.778 }];
     const first = sourcePayload({
-      apiUrl: apiUrlFor("2020-02-03", "2020-02-04"),
-      retrievedAt: "2026-07-14T00:00:00.000Z",
-      observations: [{ date: "2020-02-03", value: 1.1066 }],
+      apiUrl: apiUrlFor("2016-03-01", "2016-03-02"),
+      retrievedAt: "2026-07-13T00:00:00.000Z",
+      observations,
     });
-    expect(first).toMatchObject({
-      seriesKey: "D.USD.EUR.SP00.A",
-      title: "US dollar/Euro ECB reference exchange rate",
-      retrievedAt: "2026-07-14T00:00:00.000Z",
-      contentSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
-      observationCount: 1,
-      licenseUrl: expect.stringContaining("ecb.europa.eu"),
+    const second = sourcePayload({
+      apiUrl: apiUrlFor("2016-03-01", "2016-03-02"),
+      retrievedAt: "2026-07-16T00:00:00.000Z",
+      observations,
     });
+
+    expect(first.contentSha256).toBe(second.contentSha256);
+    expect(first.contentSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(
       sourcePayload({
-        apiUrl: apiUrlFor("2020-02-03", "2020-02-04"),
-        retrievedAt: "2026-07-16T00:00:00.000Z",
-        observations: [{ date: "2020-02-03", value: 1.1066 }],
-      }).contentSha256,
-    ).toBe(first.contentSha256);
-    expect(
-      sourcePayload({
-        apiUrl: apiUrlFor("2020-02-03", "2020-02-04"),
-        retrievedAt: "2026-07-14T03:00:00+03:00",
-        observations: [{ date: "2020-02-03", value: 1.1066 }],
+        apiUrl: apiUrlFor("2016-03-01", "2016-03-02"),
+        retrievedAt: "2026-07-13T03:00:00+03:00",
+        observations,
       }).retrievedAt,
-    ).toBe("2026-07-14T00:00:00.000Z");
+    ).toBe("2026-07-13T00:00:00.000Z");
   });
 
   it("matches the committed snapshot content identity", async () => {
     const snapshot = JSON.parse(
       await readFile(
-        "src/data/scenarios/eurusd-covid-liquidity-2020/ecb-eurusd.json",
+        "src/data/scenarios/eurgbp-brexit-2016/ecb-eurgbp.json",
         "utf8",
       ),
     );
@@ -159,9 +153,9 @@ describe("import-ecb-eurusd", () => {
     );
   });
 
-  it("writes a reproducible snapshot with mocked network data and requires force", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "mtm-ecb-eurusd-"));
-    const output = join(dir, "ecb-eurusd.json");
+  it("writes a reproducible snapshot and requires force", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mtm-ecb-eurgbp-"));
+    const output = join(dir, "ecb-eurgbp.json");
     const fetchImpl = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -169,25 +163,25 @@ describe("import-ecb-eurusd", () => {
       text: async () => CSV,
     }));
     const args = [
-      "--start=2020-02-03",
-      "--end=2020-02-04",
+      "--start=2016-03-01",
+      "--end=2016-03-02",
       `--output=${output}`,
-      "--retrieved-at=2026-07-14T00:00:00.000Z",
+      "--retrieved-at=2026-07-13T00:00:00.000Z",
     ];
 
     await main(args, { fetchImpl, log: vi.fn() });
     const written = JSON.parse(await readFile(output, "utf8"));
     expect(written).toMatchObject({
-      seriesKey: "D.USD.EUR.SP00.A",
+      seriesKey: "D.GBP.EUR.SP00.A",
       observationCount: 2,
       contentSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       observations: [
-        { date: "2020-02-03", value: 1.1066 },
-        { date: "2020-02-04", value: 1.1048 },
+        { date: "2016-03-01", value: 0.778 },
+        { date: "2016-03-02", value: 0.7741 },
       ],
     });
     expect(fetchImpl).toHaveBeenCalledWith(
-      expect.stringContaining("D.USD.EUR.SP00.A"),
+      expect.stringContaining("D.GBP.EUR.SP00.A"),
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     await expect(main(args, { fetchImpl, log: vi.fn() })).rejects.toThrow(

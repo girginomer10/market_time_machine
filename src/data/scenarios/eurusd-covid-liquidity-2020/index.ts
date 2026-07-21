@@ -5,6 +5,7 @@ import type {
   ScenarioPackage,
 } from "../../../types";
 import sourceData from "./ecb-eurusd.json";
+import { EURUSD_COVID_LIQUIDITY_2020_DATA_VERSION } from "../dataVersions";
 
 const SYMBOL = "EURUSD";
 
@@ -193,7 +194,7 @@ export const eurUsdCovidLiquidity2020Scenario: ScenarioPackage = {
       "Official Federal Reserve monetary-policy publications",
       "Official European Central Bank monetary-policy publications",
     ],
-    dataVersion: `ECB EXR ${sourceData.seriesKey}; retrieved ${sourceData.retrievedAt}`,
+    dataVersion: EURUSD_COVID_LIQUIDITY_2020_DATA_VERSION,
     sourceManifest: [
       "src/data/scenarios/eurusd-covid-liquidity-2020/README.md",
       "src/data/scenarios/eurusd-covid-liquidity-2020/ecb-eurusd.json",
@@ -217,6 +218,8 @@ export const eurUsdCovidLiquidity2020Scenario: ScenarioPackage = {
     derivedFields: [
       "Open, high, and low repeat the single daily reference observation",
       "Volume is unavailable and set to zero",
+      "Candle open/close times use a deterministic 00:00Z-15:00Z replay window because the ECB source observation is date-only",
+      "Benchmark timestamps use the same derived 15:00Z replay close",
     ],
   },
   instruments: [

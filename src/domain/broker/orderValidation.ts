@@ -7,6 +7,7 @@ import type {
 
 export const REJECTION_REASONS = {
   INVALID_QUANTITY: "Invalid quantity",
+  INVALID_EXECUTION_PRICE: "Invalid execution price",
   NO_TRADABLE_PRICE: "No tradable price at current replay time",
   INSTRUMENT_NOT_TRADABLE: "Instrument not tradable",
   INVALID_ACCOUNT_STATE: "Invalid account state",
@@ -326,6 +327,11 @@ export function validateMarketOrder(
   const lot = checkLotSize(inputs.normalizedQuantity);
   if (!lot.ok) return lot;
 
+  const executionPrice = inputs.executionPrice ?? inputs.referencePrice;
+  if (!Number.isFinite(executionPrice) || executionPrice <= 0) {
+    return rejection("INVALID_EXECUTION_PRICE");
+  }
+
   const hasAccountContext =
     inputs.accountEquity !== undefined ||
     inputs.positionsGrossNotional !== undefined ||
@@ -342,7 +348,7 @@ export function validateMarketOrder(
   }
 
   if (hasAccountContext) {
-    const notionalPrice = inputs.executionPrice ?? inputs.referencePrice;
+    const notionalPrice = executionPrice;
     const power = checkBuyingPower({
       cash: inputs.cash,
       notional: inputs.normalizedQuantity * notionalPrice,
@@ -360,7 +366,7 @@ export function validateMarketOrder(
     });
     if (!power.ok) return power;
   } else if (inputs.side === "buy") {
-    const notionalPrice = inputs.executionPrice ?? inputs.referencePrice;
+    const notionalPrice = executionPrice;
     const power = checkBuyingPower({
       cash: inputs.cash,
       notional: inputs.normalizedQuantity * notionalPrice,
@@ -372,7 +378,7 @@ export function validateMarketOrder(
     const held = Math.max(0, inputs.position?.quantity ?? 0);
     const shortQuantity = Math.max(0, inputs.normalizedQuantity - held);
     if (shortQuantity > QUANTITY_EPSILON) {
-      const notionalPrice = inputs.executionPrice ?? inputs.referencePrice;
+      const notionalPrice = executionPrice;
       const power = checkBuyingPower({
         cash: inputs.cash,
         notional: shortQuantity * notionalPrice,

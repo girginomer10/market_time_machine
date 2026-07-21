@@ -1,8 +1,9 @@
-import type {
-  PracticeTrack,
-  PracticeTrackCompletionCriteria,
-  PracticeTrackEvidenceScope,
-  PracticeTrackUnit,
+import {
+  validatePracticeTrackCatalog,
+  type PracticeTrack,
+  type PracticeTrackCompletionCriteria,
+  type PracticeTrackEvidenceScope,
+  type PracticeTrackUnit,
 } from "../../domain/practice/tracks";
 import {
   eventDisciplineEurGbpV1,
@@ -10,11 +11,93 @@ import {
   eventDisciplineKreV1,
   eventDisciplineQqqV1,
 } from "./drills";
+import {
+  buildDrillCheckpointSchedule,
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+} from "../../domain/practice/drills";
+import { brokerConfigFingerprint } from "../../domain/broker/executionModels";
+import type { BrokerConfig } from "../../types";
+import type { ScenarioPackage } from "../../types";
+import { eurGbpBrexit2016Scenario } from "../scenarios/eurgbp-brexit-2016";
+import { eurUsdCovidLiquidity2020Scenario } from "../scenarios/eurusd-covid-liquidity-2020";
+import { qqqRateHike2022Scenario } from "../scenarios/qqq-rate-hike-2022";
+import { kreBankingCrisis2023Scenario } from "../scenarios/kre-banking-crisis-2023";
+import {
+  EURGBP_BREXIT_2016_DATA_VERSION,
+  EURUSD_COVID_LIQUIDITY_2020_DATA_VERSION,
+  KRE_BANKING_CRISIS_2023_DATA_VERSION,
+  QQQ_RATE_HIKE_2022_DATA_VERSION,
+} from "../scenarios/dataVersions";
+export {
+  EURGBP_BREXIT_2016_DATA_VERSION,
+  EURUSD_COVID_LIQUIDITY_2020_DATA_VERSION,
+} from "../scenarios/dataVersions";
 
-export const EURGBP_BREXIT_2016_DATA_VERSION =
-  "ECB EXR D.GBP.EUR.SP00.A; retrieved 2026-07-13T00:00:00.000Z" as const;
-export const EURUSD_COVID_LIQUIDITY_2020_DATA_VERSION =
-  "ECB EXR D.USD.EUR.SP00.A; retrieved 2026-07-14T00:00:00.000Z" as const;
+// These duplicated, explicit configs are intentional track-version pins. The
+// catalog validator compares their fingerprints with the live scenarios so an
+// execution-rule change cannot silently rewrite existing unit identity.
+const EURGBP_SCENARIO_BROKER = {
+  baseCurrency: "GBP",
+  commissionRateBps: 0,
+  fixedFee: 0,
+  spreadBps: 5,
+  slippageModel: "fixed_bps",
+  slippageBps: 2,
+  allowFractional: true,
+  allowShort: true,
+  maxLeverage: 3,
+  partialFillPolicy: "disabled",
+  stopFillPolicy: "gap_open",
+  marketHoursEnforced: false,
+  marginCallPolicy: "liquidate_on_threshold",
+  borrowRateBps: 100,
+} as const satisfies BrokerConfig;
+
+const EURUSD_SCENARIO_BROKER = {
+  baseCurrency: "USD",
+  commissionRateBps: 0,
+  fixedFee: 0,
+  spreadBps: 3,
+  slippageModel: "fixed_bps",
+  slippageBps: 1,
+  allowFractional: true,
+  allowShort: true,
+  maxLeverage: 3,
+  partialFillPolicy: "disabled",
+  stopFillPolicy: "gap_open",
+  marketHoursEnforced: false,
+  marginCallPolicy: "liquidate_on_threshold",
+  borrowRateBps: 100,
+} as const satisfies BrokerConfig;
+
+const QQQ_SCENARIO_BROKER = {
+  baseCurrency: "USD",
+  commissionRateBps: 0,
+  fixedFee: 0,
+  spreadBps: 3,
+  slippageModel: "fixed_bps",
+  slippageBps: 2,
+  allowFractional: true,
+  allowShort: true,
+  maxLeverage: 2,
+  marginCallPolicy: "reject_new_orders",
+  borrowRateBps: 350,
+} as const satisfies BrokerConfig;
+
+const KRE_SCENARIO_BROKER = {
+  baseCurrency: "USD",
+  commissionRateBps: 0,
+  fixedFee: 0,
+  spreadBps: 5,
+  slippageModel: "fixed_bps",
+  slippageBps: 4,
+  allowFractional: true,
+  allowShort: true,
+  maxLeverage: 2,
+  marginCallPolicy: "reject_new_orders",
+  borrowRateBps: 500,
+} as const satisfies BrokerConfig;
 
 const CLEAN_EVENT_PROCESS_CRITERIA = {
   assessmentStatus: "completed",
@@ -57,6 +140,8 @@ function validatedFxUnit(input: {
   description: string;
   scenarioId: string;
   scenarioDataVersion: string;
+  scenario: ScenarioPackage;
+  brokerFingerprint: string;
   drill: typeof eventDisciplineEurGbpV1;
 }): PracticeTrackUnit {
   return {
@@ -76,7 +161,15 @@ function validatedFxUnit(input: {
       id: input.drill.id,
       definitionVersion: input.drill.definitionVersion,
       rubricVersion: input.drill.rubricVersion,
+      rubricFingerprint: drillRubricFingerprint(input.drill.rubric),
+      checkpointScheduleFingerprint: drillCheckpointScheduleFingerprint(
+        buildDrillCheckpointSchedule(input.drill, input.scenario),
+      ),
       mode: input.drill.mode,
+    },
+    broker: {
+      mode: "scenario",
+      fingerprint: input.brokerFingerprint,
     },
     evidenceScope: SOURCE_OBSERVED_FX_SCOPE,
     completionCriteria: CLEAN_EVENT_PROCESS_CRITERIA,
@@ -89,6 +182,9 @@ function previewSyntheticUnit(input: {
   title: string;
   description: string;
   scenarioId: string;
+  scenarioDataVersion: string;
+  scenario: ScenarioPackage;
+  brokerFingerprint: string;
   drill: typeof eventDisciplineQqqV1;
 }): PracticeTrackUnit {
   return {
@@ -100,7 +196,7 @@ function previewSyntheticUnit(input: {
     description: input.description,
     scenario: {
       id: input.scenarioId,
-      dataVersion: null,
+      dataVersion: input.scenarioDataVersion,
       dataFidelity: "synthetic",
       sampleData: true,
     },
@@ -108,7 +204,15 @@ function previewSyntheticUnit(input: {
       id: input.drill.id,
       definitionVersion: input.drill.definitionVersion,
       rubricVersion: input.drill.rubricVersion,
+      rubricFingerprint: drillRubricFingerprint(input.drill.rubric),
+      checkpointScheduleFingerprint: drillCheckpointScheduleFingerprint(
+        buildDrillCheckpointSchedule(input.drill, input.scenario),
+      ),
       mode: input.drill.mode,
+    },
+    broker: {
+      mode: "scenario",
+      fingerprint: input.brokerFingerprint,
     },
     evidenceScope: OFFICIAL_EVENTS_SYNTHETIC_MARKET_SCOPE,
     completionCriteria: CLEAN_EVENT_PROCESS_CRITERIA,
@@ -130,6 +234,8 @@ const decisionFoundationsEurGbpUnit = validatedFxUnit({
     "Demonstrate a complete initial plan and a clean response at every important EUR/GBP event checkpoint.",
   scenarioId: "eurgbp-brexit-2016",
   scenarioDataVersion: EURGBP_BREXIT_2016_DATA_VERSION,
+  scenario: eurGbpBrexit2016Scenario,
+  brokerFingerprint: brokerConfigFingerprint(EURGBP_SCENARIO_BROKER),
   drill: eventDisciplineEurGbpV1,
 });
 
@@ -141,6 +247,8 @@ const eventPressureEurGbpUnit = validatedFxUnit({
     "Apply event discipline to the Brexit result and the policy sequence that follows it.",
   scenarioId: "eurgbp-brexit-2016",
   scenarioDataVersion: EURGBP_BREXIT_2016_DATA_VERSION,
+  scenario: eurGbpBrexit2016Scenario,
+  brokerFingerprint: brokerConfigFingerprint(EURGBP_SCENARIO_BROKER),
   drill: eventDisciplineEurGbpV1,
 });
 
@@ -152,6 +260,8 @@ const eventPressureEurUsdUnit = validatedFxUnit({
     "Transfer the same process to a different regime with overlapping health, funding, Fed, and ECB releases.",
   scenarioId: "eurusd-covid-liquidity-2020",
   scenarioDataVersion: EURUSD_COVID_LIQUIDITY_2020_DATA_VERSION,
+  scenario: eurUsdCovidLiquidity2020Scenario,
+  brokerFingerprint: brokerConfigFingerprint(EURUSD_SCENARIO_BROKER),
   drill: eventDisciplineEurUsdV1,
 });
 
@@ -162,6 +272,9 @@ const volatilityQqqUnit = previewSyntheticUnit({
   description:
     "Preview the process around official CPI and Federal Reserve releases; synthetic QQQ prices cannot earn track credit.",
   scenarioId: "qqq-rate-hike-2022",
+  scenarioDataVersion: QQQ_RATE_HIKE_2022_DATA_VERSION,
+  scenario: qqqRateHike2022Scenario,
+  brokerFingerprint: brokerConfigFingerprint(QQQ_SCENARIO_BROKER),
   drill: eventDisciplineQqqV1,
 });
 
@@ -172,6 +285,9 @@ const volatilityKreUnit = previewSyntheticUnit({
   description:
     "Preview the process around official regulator and policy releases; synthetic KRE prices cannot earn track credit.",
   scenarioId: "kre-banking-crisis-2023",
+  scenarioDataVersion: KRE_BANKING_CRISIS_2023_DATA_VERSION,
+  scenario: kreBankingCrisis2023Scenario,
+  brokerFingerprint: brokerConfigFingerprint(KRE_SCENARIO_BROKER),
   drill: eventDisciplineKreV1,
 });
 
@@ -223,6 +339,31 @@ const BUILT_IN_TRACKS: readonly PracticeTrack[] = [
   eventPressureTransferTrack,
   volatilityDisciplineTrack,
 ];
+
+const BUILT_IN_TRACK_VALIDATION = validatePracticeTrackCatalog(
+  BUILT_IN_TRACKS,
+  {
+    scenarios: [
+      eurGbpBrexit2016Scenario,
+      eurUsdCovidLiquidity2020Scenario,
+      qqqRateHike2022Scenario,
+      kreBankingCrisis2023Scenario,
+    ],
+    drills: [
+      eventDisciplineEurGbpV1,
+      eventDisciplineEurUsdV1,
+      eventDisciplineQqqV1,
+      eventDisciplineKreV1,
+    ],
+  },
+);
+if (!BUILT_IN_TRACK_VALIDATION.valid) {
+  throw new Error(
+    `Built-in practice track catalog is invalid: ${BUILT_IN_TRACK_VALIDATION.issues
+      .map((issue) => `${issue.path ?? issue.code}: ${issue.message}`)
+      .join(" ")}`,
+  );
+}
 
 export function listBuiltInPracticeTracks(): PracticeTrack[] {
   return [...BUILT_IN_TRACKS];

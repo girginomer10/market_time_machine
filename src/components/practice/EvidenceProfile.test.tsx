@@ -4,6 +4,7 @@ import type {
   PracticeEvidenceClaim,
   PracticeEvidenceProfile,
 } from "../../domain/practice/evidenceProfile";
+import { rubricContentReference } from "../../domain/practice/evidenceProfile";
 import EvidenceProfile from "./EvidenceProfile";
 
 function claim(
@@ -13,6 +14,7 @@ function claim(
     id: "event-discipline:event-discipline-process-v1",
     competencyId: "event-discipline",
     rubricVersion: "event-discipline-process-v1",
+    rubricFingerprint: "drill-rubric-v1:test-fixture",
     drillDefinitions: [
       { drillId: "event-discipline-eurgbp-v1", definitionVersion: 1 },
       { drillId: "event-discipline-eurusd-v1", definitionVersion: 1 },
@@ -88,6 +90,37 @@ describe("EvidenceProfile", () => {
     expect(screen.queryByText(/P\/L|profit|loss|report score/i)).not.toBeInTheDocument();
   });
 
+  it("shows distinct content references for claims that share a rubric version", () => {
+    const firstFingerprint = "drill-rubric-v1:first-content";
+    const secondFingerprint = "drill-rubric-v1:second-content";
+    render(
+      <EvidenceProfile
+        profile={profile([
+          claim({
+            id: "event-discipline:event-discipline-process-v1:first",
+            rubricFingerprint: firstFingerprint,
+          }),
+          claim({
+            id: "event-discipline:event-discipline-process-v1:second",
+            rubricFingerprint: secondFingerprint,
+          }),
+        ])}
+      />,
+    );
+
+    expect(
+      screen.getAllByText("event-discipline-process-v1"),
+    ).toHaveLength(2);
+    const references = screen
+      .getAllByText(/^content-[0-9a-f]{8}$/)
+      .map((element) => element.textContent);
+    expect(references).toEqual([
+      rubricContentReference(firstFingerprint),
+      rubricContentReference(secondFingerprint),
+    ]);
+    expect(new Set(references).size).toBe(2);
+  });
+
   it("labels missing process evidence and explains why trend is unavailable", () => {
     render(
       <EvidenceProfile
@@ -114,6 +147,7 @@ describe("EvidenceProfile", () => {
     expect(screen.getByText("Insufficient evidence breadth")).toBeInTheDocument();
     expect(screen.getByText("Not enough comparable runs")).toBeInTheDocument();
     expect(screen.getByText(/Two assessed runs with the same scenario and data version/)).toBeInTheDocument();
+    expect(screen.getByText(/exact broker settings/)).toBeInTheDocument();
   });
 
   it("has an explicit empty state without manufacturing a score", () => {

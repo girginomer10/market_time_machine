@@ -2,7 +2,10 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { listScenarios } from "../../data/scenarios";
-import { listBuiltInDrills } from "../../data/practice/drills";
+import {
+  eventDisciplineQqqV1,
+  listBuiltInDrills,
+} from "../../data/practice/drills";
 import {
   decisionFoundationsTrack,
   volatilityDisciplineTrack,
@@ -38,6 +41,7 @@ function renderLibrary(
     hasActiveSession: false,
     onContinue: vi.fn(),
     onStart: vi.fn(),
+    onStartSurprise: vi.fn(),
     onExport: vi.fn(),
     onRestore: vi.fn(),
     onImportScenario: vi.fn(),
@@ -46,8 +50,8 @@ function renderLibrary(
     onClearSavedSession: vi.fn(),
     ...overrides,
   };
-  render(<ScenarioLibrary {...props} />);
-  return props;
+  const view = render(<ScenarioLibrary {...props} />);
+  return { ...view, props };
 }
 
 describe("ScenarioLibrary", () => {
@@ -105,6 +109,11 @@ describe("ScenarioLibrary", () => {
       unit.scenario.id,
       unit.drill.mode,
       unit.drill.id,
+      {
+        scenarioDataVersion: unit.scenario.dataVersion,
+        brokerMode: unit.broker.mode,
+        brokerFingerprint: unit.broker.fingerprint,
+      },
     );
     raf.mockRestore();
   });
@@ -158,8 +167,33 @@ describe("ScenarioLibrary", () => {
       unit.scenario.id,
       unit.drill.mode,
       unit.drill.id,
+      {
+        scenarioDataVersion: unit.scenario.dataVersion,
+        brokerMode: unit.broker.mode,
+        brokerFingerprint: unit.broker.fingerprint,
+      },
     );
     raf.mockRestore();
+  });
+
+  it("shows the same no-credit disclosure when a preview drill is selected directly", () => {
+    renderLibrary({
+      drills: listBuiltInDrills(),
+      practiceTracks: [decisionFoundationsTrack, volatilityDisciplineTrack],
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose Nasdaq 2022 Rate Shock" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: new RegExp(eventDisciplineQqqV1.title),
+      }),
+    );
+
+    expect(
+      screen.getByText("Preview practice · No completion credit"),
+    ).toBeInTheDocument();
   });
 
   it("briefs a fresh user on product boundaries and scenario rules", () => {
@@ -233,6 +267,27 @@ describe("ScenarioLibrary", () => {
     expect(onStart).toHaveBeenCalledWith("qqq-rate-hike-2022", "challenge");
   });
 
+  it("starts a concealed surprise self-test without selecting a visible scenario", () => {
+    const onStartSurprise = vi.fn();
+    renderLibrary({ onStartSurprise });
+
+    expect(
+      screen.getByRole("heading", { name: "Start without choosing the lab" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/local self-test—not secure anti-cheat/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Scenario identity and the ending are masked/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Identity and progress are masked/i)).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Start surprise Blind replay" }),
+    );
+    expect(onStartSurprise).toHaveBeenCalledWith("blind");
+  });
+
   it("supports roving focus and standard radiogroup keyboard navigation", () => {
     renderLibrary();
 
@@ -280,16 +335,40 @@ describe("ScenarioLibrary", () => {
     expect(challenge).toHaveFocus();
   });
 
+  it("keeps guided-drill keyboard navigation inside its single visible mode", () => {
+    renderLibrary({ drills: listBuiltInDrills() });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /EUR\/GBP Brexit — Event Discipline/,
+      }),
+    );
+    const guidedMode = screen.getByRole("radio", {
+      name: /Explorer/,
+    });
+
+    guidedMode.focus();
+    fireEvent.keyDown(guidedMode, { key: "ArrowRight" });
+
+    expect(screen.getAllByRole("radio")).toEqual([guidedMode]);
+    expect(guidedMode).toBeChecked();
+    expect(guidedMode).toHaveFocus();
+  });
+
   it("prepares the coach assignment in the existing briefing before start", () => {
     const available = scenarios();
     const practicePlan = buildPracticeCoachPlan([], available)!;
+    const onStart = vi.fn();
     const raf = vi
       .spyOn(window, "requestAnimationFrame")
       .mockImplementation((callback) => {
         callback(0);
         return 1;
       });
-    renderLibrary({ practicePlan });
+    renderLibrary({
+      practicePlan,
+      drills: listBuiltInDrills(),
+      onStart,
+    });
 
     fireEvent.click(
       screen.getByRole("button", { name: "Review first practice" }),
@@ -297,7 +376,61 @@ describe("ScenarioLibrary", () => {
 
     expect(document.getElementById("briefing-title")).toHaveFocus();
     expect(screen.getByRole("radio", { name: /Explorer/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Start guided drill" }));
+    expect(onStart).toHaveBeenCalledWith(
+      practicePlan.scenarioId,
+      practicePlan.mode,
+      practicePlan.drillId,
+      {
+        scenarioDataVersion: practicePlan.scenarioDataVersion,
+        brokerMode: practicePlan.brokerMode,
+        brokerFingerprint: practicePlan.brokerFingerprint,
+      },
+    );
     raf.mockRestore();
+  });
+
+  it("does not start with a prepared coach context after the current plan changes", () => {
+    const available = scenarios();
+    const practicePlan = buildPracticeCoachPlan([], available)!;
+    const replacementPlan = {
+      ...practicePlan,
+      brokerFingerprint: `${practicePlan.brokerFingerprint}-replacement`,
+      title: "Updated coaching assignment",
+    };
+    const onStart = vi.fn();
+    const props = renderLibrary({
+      practicePlan,
+      drills: listBuiltInDrills(),
+      onStart,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review first practice" }),
+    );
+
+    const { rerender } = props;
+    rerender(
+      <ScenarioLibrary
+        {...props.props}
+        practicePlan={replacementPlan}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start guided drill" }));
+
+    expect(onStart).toHaveBeenCalledWith(
+      practicePlan.scenarioId,
+      practicePlan.mode,
+      practicePlan.drillId,
+    );
+    expect(onStart).not.toHaveBeenCalledWith(
+      practicePlan.scenarioId,
+      practicePlan.mode,
+      practicePlan.drillId,
+      expect.objectContaining({
+        brokerFingerprint: practicePlan.brokerFingerprint,
+      }),
+    );
   });
 
   it("keeps an active replay intact while the coach only prepares a briefing", () => {
@@ -341,7 +474,7 @@ describe("ScenarioLibrary", () => {
       onImportScenario,
     });
 
-    expect(screen.getByText("Saved on this device")).toBeInTheDocument();
+    expect(screen.getByText("Active in this browser")).toBeInTheDocument();
     expect(screen.getByText(/37% complete/)).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "Continue active replay" }),

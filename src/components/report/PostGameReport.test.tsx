@@ -1,6 +1,18 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { eventDisciplineEurGbpV1 } from "../../data/practice/drills";
+import { listScenarios } from "../../data/scenarios";
+import {
+  buildDrillCheckpointSchedule,
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+} from "../../domain/practice/drills";
 import PostGameReport from "./PostGameReport";
 import type {
   DrillAssessment,
@@ -43,26 +55,102 @@ const neutralReport: ReportPayload = {
   behavioralFlags: [],
 };
 
+const practiceScenario = listScenarios().find(
+  (scenario) => scenario.meta.id === eventDisciplineEurGbpV1.scenarioId,
+)!;
+const practiceSchedule = buildDrillCheckpointSchedule(
+  eventDisciplineEurGbpV1,
+  practiceScenario,
+);
+const practiceEventCount = new Set(
+  practiceSchedule.flatMap((checkpoint) => checkpoint.eventIds),
+).size;
+const practiceProvenance = {
+  license: practiceScenario.meta.license,
+  dataSources: [...practiceScenario.meta.dataSources],
+  dataVersion: practiceScenario.meta.dataVersion,
+  isSampleData: practiceScenario.meta.isSampleData ?? true,
+};
+
 function practiceAssessment(
   overrides: Partial<DrillAssessment> = {},
 ): DrillAssessment {
   return {
     drillId: eventDisciplineEurGbpV1.id,
+    competencyId: eventDisciplineEurGbpV1.competencyId,
     definitionVersion: eventDisciplineEurGbpV1.definitionVersion,
     rubricVersion: eventDisciplineEurGbpV1.rubricVersion,
+    rubricFingerprint: drillRubricFingerprint(eventDisciplineEurGbpV1.rubric),
+    checkpointScheduleFingerprint:
+      drillCheckpointScheduleFingerprint(practiceSchedule),
+    eventLinkageEvidenceVersion: 1,
     status: "completed",
     overallScore: 80,
     methodology: "Process-only score based on recorded plan and checkpoint evidence.",
-    components: [],
-    eligibleCheckpointCount: 1,
-    answeredCheckpointCount: 1,
+    components: Object.entries(eventDisciplineEurGbpV1.rubric.weights).map(
+      ([id, weight]) => ({
+        id: id as DrillAssessment["components"][number]["id"],
+        label: id,
+        weight,
+        status: "assessed" as const,
+        score: 80,
+        evidence: "Fixture evidence.",
+      }),
+    ),
+    eligibleCheckpointCount: practiceSchedule.length,
+    answeredCheckpointCount: practiceSchedule.length,
     skippedCheckpointCount: 0,
-    eligibleEventCount: 1,
-    linkedEventCount: 1,
+    eligibleEventCount: practiceEventCount,
+    linkedEventCount: practiceEventCount,
     violationCount: 0,
     ...overrides,
   };
 }
+
+const staleAssessmentCases: Array<[string, Partial<DrillAssessment>]> = [
+  ["missing competency", { competencyId: undefined }],
+  ["changed competency", { competencyId: "risk-discipline" }],
+  [
+    "changed definition version",
+    { definitionVersion: eventDisciplineEurGbpV1.definitionVersion - 1 },
+  ],
+  [
+    "changed rubric version",
+    { rubricVersion: "event-discipline-process-v0" },
+  ],
+  ["missing rubric fingerprint", { rubricFingerprint: undefined }],
+  [
+    "changed rubric fingerprint",
+    {
+      rubricFingerprint: drillRubricFingerprint({
+        ...eventDisciplineEurGbpV1.rubric,
+        violationPenalty: eventDisciplineEurGbpV1.rubric.violationPenalty + 1,
+      }),
+    },
+  ],
+  [
+    "rubric fingerprint conflicts with recorded component weights",
+    {
+      components: practiceAssessment().components.map((component) =>
+        component.id === "plan_coverage"
+          ? { ...component, weight: component.weight + 0.01 }
+          : component,
+      ),
+    },
+  ],
+  [
+    "self-consistent partial checkpoint schedule",
+    {
+      checkpointScheduleFingerprint: drillCheckpointScheduleFingerprint(
+        practiceSchedule.slice(0, 1),
+      ),
+      eligibleCheckpointCount: 1,
+      answeredCheckpointCount: 1,
+      eligibleEventCount: new Set(practiceSchedule[0]?.eventIds ?? []).size,
+      linkedEventCount: new Set(practiceSchedule[0]?.eventIds ?? []).size,
+    },
+  ],
+];
 
 describe("PostGameReport", () => {
   afterEach(() => {
@@ -116,6 +204,31 @@ describe("PostGameReport", () => {
     expect(screen.queryByText(/Active decisions added/i)).not.toBeInTheDocument();
   });
 
+  it("describes benchmark underperformance as a positive gap magnitude", () => {
+    render(
+      <PostGameReport
+        report={{
+          ...neutralReport,
+          metrics: {
+            ...neutralReport.metrics,
+            totalReturn: -0.1,
+            benchmarkReturn: 0,
+            excessReturn: -0.1,
+          },
+          totalTrades: 1,
+          closedTradeCount: 1,
+        }}
+        onClose={vi.fn()}
+        onReset={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("Trading trailed the benchmark by 10.00%."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/trailed the benchmark by -/i)).not.toBeInTheDocument();
+  });
+
   it("provides a named modal, focuses Close, and closes with Escape", () => {
     const onClose = vi.fn();
     render(
@@ -133,6 +246,78 @@ describe("PostGameReport", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers retry and an importable recovery archive after a save failure", () => {
+    const onRetryArchive = vi.fn();
+    const onDownloadRecoveryArchive = vi.fn();
+    const onClose = vi.fn();
+    const onReset = vi.fn();
+    const onChooseNextPractice = vi.fn();
+
+    render(
+      <PostGameReport
+        report={neutralReport}
+        archiveWarning="Browser storage rejected the archive update."
+        onRetryArchive={onRetryArchive}
+        onDownloadRecoveryArchive={onDownloadRecoveryArchive}
+        onClose={onClose}
+        onReset={onReset}
+        onChooseNextPractice={onChooseNextPractice}
+      />,
+    );
+
+    const warning = screen.getByRole("alert");
+    expect(warning).toHaveTextContent(
+      /this completed replay was not saved to local history/i,
+    );
+    fireEvent.click(within(warning).getByRole("button", { name: "Retry saving" }));
+    fireEvent.click(
+      within(warning).getByRole("button", {
+        name: "Download recovery archive",
+      }),
+    );
+
+    expect(onRetryArchive).toHaveBeenCalledOnce();
+    expect(onDownloadRecoveryArchive).toHaveBeenCalledOnce();
+    expect(warning).toHaveTextContent(/export json.*report-only copy/i);
+    expect(screen.getByRole("button", { name: "Close report" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Return to lab" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Secure recovery first" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Choose next practice" }),
+    ).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onReset).not.toHaveBeenCalled();
+    expect(onChooseNextPractice).not.toHaveBeenCalled();
+  });
+
+  it("prevents replacing a completed replay while its archive write is pending", () => {
+    const onClose = vi.fn();
+    const onReset = vi.fn();
+    render(
+      <PostGameReport
+        report={neutralReport}
+        archiveSaving
+        onClose={onClose}
+        onReset={onReset}
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /saving the completed replay and compact evidence/i,
+    );
+    expect(
+      screen.getByRole("button", { name: "Saving replay…" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close report" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Return to lab" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onReset).not.toHaveBeenCalled();
   });
 
   it("hands the finished report into the next-practice loop", () => {
@@ -357,11 +542,13 @@ describe("PostGameReport", () => {
     expect(screen.queryByText(eventDisciplineEurGbpV1.title)).not.toBeInTheDocument();
   });
 
-  it("keeps the built-in definition fallback for legacy assessment-only reports", () => {
+  it("uses a built-in definition only for an exactly matched assessment-only report", () => {
     render(
       <PostGameReport
         report={{
           ...neutralReport,
+          scenarioId: eventDisciplineEurGbpV1.scenarioId,
+          provenance: practiceProvenance,
           practiceAssessment: practiceAssessment(),
         }}
         onClose={vi.fn()}
@@ -377,6 +564,57 @@ describe("PostGameReport", () => {
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Checkpoint decision record" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(staleAssessmentCases)(
+    "does not relabel stale assessment-only evidence with the current drill: %s",
+    (_caseName, overrides) => {
+      render(
+        <PostGameReport
+          report={{
+            ...neutralReport,
+            scenarioId: eventDisciplineEurGbpV1.scenarioId,
+            provenance: practiceProvenance,
+            practiceAssessment: practiceAssessment(overrides),
+          }}
+          onClose={vi.fn()}
+          onReset={vi.fn()}
+        />,
+      );
+
+      expect(
+        screen.getByRole("heading", {
+          name: "Archived drill definition unavailable",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", {
+          name: eventDisciplineEurGbpV1.title,
+        }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("does not apply a built-in drill definition to another scenario's assessment", () => {
+    render(
+      <PostGameReport
+        report={{
+          ...neutralReport,
+          practiceAssessment: practiceAssessment(),
+        }}
+        onClose={vi.fn()}
+        onReset={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Archived drill definition unavailable",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: eventDisciplineEurGbpV1.title }),
     ).not.toBeInTheDocument();
   });
 
@@ -499,7 +737,12 @@ describe("PostGameReport", () => {
     const print = vi.spyOn(window, "print").mockImplementation(() => undefined);
     render(
       <PostGameReport
-        report={neutralReport}
+        report={{
+          ...neutralReport,
+          scenarioId: eventDisciplineEurGbpV1.scenarioId,
+          provenance: practiceProvenance,
+          practiceAssessment: practiceAssessment(),
+        }}
         onClose={vi.fn()}
         onReset={vi.fn()}
       />,
@@ -511,7 +754,7 @@ describe("PostGameReport", () => {
       expect.objectContaining({
         title: "Market Time Machine — Neutral report scenario",
         text: expect.stringContaining(
-          "Market Time Machine · Decision-quality report",
+          "Practice process score: 80/100 · rubric event-discipline-process-v1",
         ),
       }),
     );
@@ -548,5 +791,111 @@ describe("PostGameReport", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Report summary copied.",
     );
+  });
+
+  it("labels an incomplete practice assessment without sharing its provisional score", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(
+      <PostGameReport
+        report={{
+          ...neutralReport,
+          practiceAssessment: practiceAssessment({
+            status: "incomplete",
+            overallScore: 65,
+          }),
+        }}
+        onClose={vi.fn()}
+        onReset={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy summary" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const summary = String(writeText.mock.calls[0]?.[0]);
+    expect(summary).toContain("Practice process: incomplete · no assessed score");
+    expect(summary).not.toContain("Practice process score: 65/100");
+  });
+
+  it("does not share a completed partial-schedule assessment as measured", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const partialSchedule = practiceSchedule.slice(0, 1);
+    const partialEventCount = new Set(
+      partialSchedule.flatMap((checkpoint) => checkpoint.eventIds),
+    ).size;
+    render(
+      <PostGameReport
+        report={{
+          ...neutralReport,
+          scenarioId: eventDisciplineEurGbpV1.scenarioId,
+          provenance: practiceProvenance,
+          practiceAssessment: practiceAssessment({
+            checkpointScheduleFingerprint:
+              drillCheckpointScheduleFingerprint(partialSchedule),
+            eligibleCheckpointCount: partialSchedule.length,
+            answeredCheckpointCount: partialSchedule.length,
+            eligibleEventCount: partialEventCount,
+            linkedEventCount: partialEventCount,
+          }),
+        }}
+        onClose={vi.fn()}
+        onReset={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy summary" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const summary = String(writeText.mock.calls[0]?.[0]);
+    expect(summary).toContain(
+      "Practice process: retained facts only · exact drill schedule unavailable",
+    );
+    expect(summary).not.toContain("Practice process score: 80/100");
+  });
+
+  it("does not share a legacy automatic-link score as assessed", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(
+      <PostGameReport
+        report={{
+          ...neutralReport,
+          practiceAssessment: practiceAssessment({
+            eventLinkageEvidenceVersion: undefined,
+          }),
+        }}
+        onClose={vi.fn()}
+        onReset={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy summary" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const summary = String(writeText.mock.calls[0]?.[0]);
+    expect(summary).toContain(
+      "Practice process: unassessed legacy attempt · explicit event links were not recorded",
+    );
+    expect(summary).not.toContain("Practice process score: 80/100");
   });
 });

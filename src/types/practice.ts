@@ -62,7 +62,13 @@ export type DrillCheckpointResponse = {
   definitionVersion: number;
   checkpointId: string;
   replayTime: string;
+  /** Exact event membership of the checkpoint; retained for replay integrity. */
   eventIds: string[];
+  /**
+   * Events the user explicitly selected as influencing this decision. Absent
+   * only on legacy responses created before explicit linkage was captured.
+   */
+  linkedEventIds?: string[];
   status: "answered" | "skipped";
   action?: DrillCheckpointAction;
   reflection?: string;
@@ -109,6 +115,23 @@ export type DrillAssessment = {
   competencyId?: string;
   definitionVersion: number;
   rubricVersion: string;
+  /**
+   * Canonical identity of the rubric weights and violation penalty used for
+   * this assessment. Optional only for persisted assessments created before
+   * rubric-content identity was introduced.
+   */
+  rubricFingerprint?: string;
+  /**
+   * Canonical identity of the exact checkpoint ids, replay positions, times,
+   * and event membership scored by this assessment. Optional only for legacy
+   * assessments created before schedule identity was persisted.
+   */
+  checkpointScheduleFingerprint?: string;
+  /**
+   * Present only when event-linkage scores came from explicit user selections
+   * rather than legacy automatic checkpoint membership.
+   */
+  eventLinkageEvidenceVersion?: 1;
   status: "completed" | "incomplete";
   overallScore?: number;
   methodology: string;

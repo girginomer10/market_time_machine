@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildCloseOnlyCandles,
   fetchFredCsvText,
+  fredImportedDataVersion,
   main,
   marketSessionTimes,
   parseFredCsv,
@@ -120,6 +121,7 @@ describe("import-fred-sp500", () => {
       requestedEndDate: "2023-01-31",
       observationStartDate: "2023-01-02",
       observationEndDate: "2023-01-13",
+      importedDataVersion: "sha256:fixture",
       ...identity,
     });
 
@@ -128,10 +130,42 @@ describe("import-fred-sp500", () => {
       title: "S&P 500 FRED Replay (2023-01-02 to 2023-01-31)",
     });
     expect(source).toContain('isSampleData: true');
+    expect(source).toContain('dataFidelity: "mixed"');
+    expect(source).toContain('observedFields: ["FRED SP500 daily close observations"]');
+    expect(source).toContain(
+      "Open/close timestamps use regular 09:30-16:00 America/New_York sessions; exchange early-close exceptions are not modeled",
+    );
+    expect(source).toContain(
+      'IMPORTED_DATA_VERSION + ";events:" + sp500Covid2020Scenario.meta.dataVersion',
+    );
     expect(source).toContain("event.publishedAt >= REQUESTED_EVENT_START");
     expect(source).toContain("event.publishedAt <= REQUESTED_EVENT_END");
     expect(source).toContain("if (i >= volWindow)");
     expect(source).toContain("slice(i - volWindow, i + 1)");
+  });
+
+  it("uses normalized imported content instead of generation time for identity", () => {
+    const candles = buildCloseOnlyCandles([
+      { date: "2023-01-03", close: 3_800 },
+      { date: "2023-01-04", close: 3_810 },
+    ]);
+    const input = {
+      candles,
+      requestedStartDate: "2023-01-03",
+      requestedEndDate: "2023-01-04",
+      scenarioId: "sp500-fred-2023-01-03-to-2023-01-04",
+    };
+
+    expect(fredImportedDataVersion(input)).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(fredImportedDataVersion(input)).toBe(fredImportedDataVersion(input));
+    expect(
+      fredImportedDataVersion({
+        ...input,
+        candles: candles.map((candle, index) =>
+          index === 1 ? { ...candle, close: 3_811 } : candle,
+        ),
+      }),
+    ).not.toBe(fredImportedDataVersion(input));
   });
 
   it("keeps the established identity only for the default COVID range", () => {
@@ -173,10 +207,13 @@ describe("import-fred-sp500", () => {
     const readme = await readFile(join(out, "README.md"), "utf8");
     expect(source).toContain('id: "sp500-fred-2023-07-01-to-2023-07-06"');
     expect(source).toContain('"openTime": "2023-07-03T13:30:00.000Z"');
+    expect(readme).toContain("paths may be git-visible");
+    expect(readme).toContain("lists observed versus derived fields in the app");
     expect(readme).toContain(
-      "Custom output paths may be git-visible",
+      "Exchange early-close exceptions are not modeled",
     );
-    expect(readme).toContain("shown as Sample data in the app");
+    expect(readme).toContain("regular 09:30-16:00");
+    expect(source).toMatch(/const IMPORTED_DATA_VERSION = "sha256:[a-f0-9]{64}"/);
 
     await expect(main(command, dependencies)).rejects.toThrow("--force=true");
     await expect(
@@ -207,5 +244,23 @@ describe("import-fred-sp500", () => {
         fetchImpl: vi.fn(),
       }),
     ).rejects.toThrow("Refusing unsafe output directory");
+
+    for (const unsafeOutput of [
+      "public/local-fred",
+      "dist/local-fred",
+      "src/components/local-fred",
+      "src/data/scenarios/eurgbp-brexit-2016",
+    ]) {
+      await expect(
+        main(
+          [
+            `--out=${unsafeOutput}`,
+            "--start=2023-01-01",
+            "--end=2023-02-01",
+          ],
+          { fetchImpl: vi.fn() },
+        ),
+      ).rejects.toThrow("Refusing unsafe output directory");
+    }
   });
 });

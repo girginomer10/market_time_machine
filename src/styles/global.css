@@ -365,6 +365,24 @@ textarea:focus {
   font-size: 11px;
 }
 
+.global-session-notice {
+  margin: 10px 16px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(242, 182, 90, 0.35);
+  border-radius: 8px;
+  background: rgba(242, 182, 90, 0.08);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.global-session-notice.error {
+  border-color: rgba(238, 106, 106, 0.45);
+  background: rgba(238, 106, 106, 0.08);
+  color: var(--neg);
+}
+
 .visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -1132,17 +1150,6 @@ textarea:focus {
 
 .open-position-head strong {
   font-family: var(--mono);
-}
-
-.restricted-replay .open-position-head strong {
-  font-size: 0;
-}
-
-.restricted-replay .open-position-head strong::after {
-  content: "Primary asset";
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 12px;
 }
 
 .open-position-head span {
@@ -1981,6 +1988,22 @@ textarea:focus {
   text-align: right;
 }
 
+.report-save-warning {
+  background: var(--neg-soft);
+  border: 1px solid color-mix(in srgb, var(--neg) 55%, var(--border));
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  display: grid;
+  gap: 6px;
+  margin: 12px 18px 0;
+  padding: 12px 14px;
+}
+
+.report-save-warning span {
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
 .verdict {
   display: grid;
   gap: 8px;
@@ -2704,6 +2727,26 @@ textarea:focus {
   padding: 18px;
 }
 
+.surprise-replay-card {
+  border-color: rgba(123, 183, 224, 0.3);
+  background:
+    linear-gradient(120deg, rgba(123, 183, 224, 0.08), transparent 48%),
+    rgba(14, 18, 26, 0.92);
+}
+
+.surprise-replay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.surprise-replay-boundary {
+  margin: 12px 0 0;
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .library-history-card {
   padding: 18px;
 }
@@ -3389,6 +3432,8 @@ textarea:focus {
   }
 
   .continue-card .btn,
+  .surprise-replay-actions,
+  .surprise-replay-actions .btn,
   .scenario-import-row .btn,
   .library-session-actions,
   .library-session-actions .btn {

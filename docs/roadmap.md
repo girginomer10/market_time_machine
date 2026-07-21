@@ -21,13 +21,15 @@ Shipped in Personal Decision Gym v2:
 
 - Local Practice Coach and report-to-next-practice handoff
 - Versioned Event Discipline drills with initial-plan enforcement, visible-event
-  checkpoints, explicit process decisions, and a process-only rubric
+  checkpoints, explicit process decisions and event links, and a process-only rubric
 - Two source-reviewed ECB reference-rate scenarios for credit-bearing units
 - Compact 250-entry practice ledger and versioned evidence profile
-- Decision Foundations and Event Pressure Transfer tracks with exact-version,
-  same-attempt credit rules
+- Decision Foundations and Event Pressure Transfer tracks with exact replay,
+  drill, rubric, mode, and full broker-configuration identity plus same-attempt
+  credit rules
 - Preview-only synthetic QQQ/KRE practice units that cannot award credit
 - V2 practice archive export/import with V1 run-history migration
+- Surprise Blind/Local Challenge self-tests with an explicit local-security boundary
 - Validated scenario-package drill-definition authoring surface
 
 Future hosted platform work:
@@ -57,12 +59,14 @@ Shipped in `0.3.0`:
 - Versioned `practice-coach-v1` rubric label
 - EUR/GBP, EUR/USD, QQQ, and KRE Event Discipline definitions
 - Process-only assessment with plan, checkpoint, event-link, and rule evidence
+- Explicit learner-selected event linkage; legacy automatic linkage remains
+  readable but cannot create evidence or track credit
 - Compact factual/assessment ledger, confidence-aware evidence claims, and
   comparable-context trends
 - Open Decision Foundations and Event Pressure Transfer tracks
 - Preview Volatility Discipline track whose synthetic units award no credit
-- Deep-validated, atomic V2 practice archive with deterministic merge, storage
-  rollback, and V1 migration
+- Deep-validated, single-envelope atomic V2 practice archive with deterministic
+  merge, storage rollback, and V1 migration
 - Exact scenario-data and drill-definition identity for active practice backups
 - Scenario-package drill-definition parsing, validation, and scenario-scoped
   runtime discovery; track credit remains separately curated

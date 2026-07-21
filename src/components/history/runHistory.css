@@ -60,11 +60,32 @@
 }
 
 .run-history-empty,
+.run-history-damaged,
 .run-history-card {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 18px;
+}
+
+.run-history-damaged {
+  align-items: center;
+  border-color: color-mix(in srgb, var(--neg) 55%, var(--border));
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.run-history-damaged p {
+  color: var(--text-dim);
+  margin: 6px 0 0;
+}
+
+.run-history-damaged-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .run-history-empty p,
@@ -125,6 +146,7 @@
 
 @media (max-width: 860px) {
   .run-history-heading,
+  .run-history-damaged,
   .run-history-card {
     align-items: stretch;
     display: grid;

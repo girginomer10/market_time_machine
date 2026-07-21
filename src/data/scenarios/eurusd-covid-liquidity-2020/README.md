@@ -11,6 +11,7 @@ reference-rate replay, not an intraday executable-price record.
 - Requested range: 2020-02-03 through 2020-06-30
 - Committed observations: 104
 - Snapshot retrieval time: 2026-07-14T00:00:00.000Z
+- Normalized observation content SHA-256: `3ce0c0483a1204994bdfbc44be48b5c4351e1e84fec9adefd2e6bf94b14587d9`
 - API URL: <https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?startPeriod=2020-02-03&endPeriod=2020-06-30&format=csvdata>
 - ECB statistics usage policy: <https://www.ecb.europa.eu/stats/ecb_statistics/governance_and_quality_framework/html/usage_policy.en.html>
 
@@ -24,6 +25,9 @@ The committed `OBS_VALUE` values are reproduced without price transformation.
 Because the source publishes one daily reference observation rather than an
 OHLCV bar, each candle repeats that value for open, high, low, and close; volume
 is unavailable and set to zero. The benchmark repeats the same observed series.
+The date-only observation is placed in a deterministic `00:00Z`-`15:00Z`
+replay window, and the matching benchmark point uses `15:00Z`. Those timestamps
+are app-derived replay boundaries, not observed publication or execution times.
 These derivations are disclosed in scenario metadata and in the in-app briefing.
 
 ## Event sources
@@ -53,4 +57,5 @@ npm run import:ecb-eurusd -- \
 The importer validates the date range, CSV fields, positive finite values,
 duplicates, and requested-range containment before replacing the snapshot
 atomically. Review the diff and the current ECB reuse terms before committing a
-refreshed snapshot.
+refreshed snapshot. The content digest excludes `retrievedAt`, so a retrieval
+timestamp change alone does not create a different scenario `dataVersion`.

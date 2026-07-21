@@ -462,6 +462,18 @@ export function parseScenarioDrillDefinitions(
   }
 
   const issues: DrillAuthoringIssue[] = [];
+  if (
+    value.length > 0 &&
+    (typeof scenario.meta.dataVersion !== "string" ||
+      !scenario.meta.dataVersion.trim())
+  ) {
+    addIssue(
+      issues,
+      "meta.data_version_required_for_drills",
+      "Scenario dataVersion must be a non-empty string when authored drills are present.",
+      "meta.dataVersion",
+    );
+  }
   const drills: DrillDefinition[] = [];
   const seenIds = new Map<string, number>();
   for (let index = 0; index < value.length; index++) {

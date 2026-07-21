@@ -4,7 +4,7 @@ All notable changes to Market Time Machine will be tracked here.
 
 The project follows a lightweight changelog for the local-first product.
 
-## 0.3.0 - Personal Decision Gym v2 - 2026-07-14
+## 0.3.0 - Personal Decision Gym v2 - 2026-07-16
 
 - Defined V2 as a local deliberate-practice product that connects replay
   evidence to one focused next exercise without accounts, telemetry, or AI
@@ -32,25 +32,67 @@ The project follows a lightweight changelog for the local-first product.
 - Added a versioned evidence profile that groups compatible drill definitions by
   stable competency and rubric identity while retaining their exact definition
   identities, evidence counts, source-scenario coverage, and confidence labels.
-  Trends compare only runs sharing the same scenario version, mode, broker,
-  drill, definition, and rubric.
+  Trends compare only runs sharing the same scenario version, mode, broker mode
+  and full configuration, drill, definition, and rubric content.
 - Added curated Decision Foundations and Event Pressure Transfer tracks. Track
-  credit requires every criterion in one exact-version attempt; synthetic QQQ
-  and KRE Volatility Discipline units remain explicitly preview-only and cannot
-  award credit.
+  credit requires every criterion in one attempt with the exact replay, drill,
+  rubric, mode, and full broker identity; synthetic QQQ and KRE Volatility
+  Discipline units remain explicitly preview-only and cannot award credit.
 - Replaced run-history-only export with the V2 practice archive: up to 12 recent
-  full reports plus 250 compact entries, deep render-safe validation, atomic
-  two-layer persistence with rollback, deterministic non-overwriting conflict
-  handling, and migration from V1 history exports as factual unassessed evidence.
+  full reports plus 250 compact entries, deep render-safe validation, one
+  canonical atomic storage envelope with rollback, deterministic non-overwriting
+  conflict handling, and migration from V1 history exports as factual unassessed
+  evidence.
 - Added scenario-package drill-definition authoring, validation, and
   scenario-scoped runtime discovery. Valid imported definitions are runnable
   with their containing scenario, cannot replace reserved built-ins, and do not
   enter the separately curated credit-bearing track catalog.
 - Pinned active practice-session backups to the exact scenario data version,
-  competency, definition, rubric, and normalized drill snapshot; restore rejects
-  drift and requires imported scenario packages to be installed separately.
+  competency, definition, rubric, normalized drill snapshot, and full broker
+  configuration; restore rejects drift and requires imported scenario packages
+  to be installed separately.
 - Added keyboard radiogroup navigation and improved muted-text contrast in the
   scenario library.
+- Hardened the V2 release contract with explicit learner-selected checkpoint
+  event links, legacy automatic-link non-credit, complete rubric-content
+  fingerprints, authored-drill primary-symbol enforcement, version-safe legacy
+  session restore, and a truthful surprise Blind/Local Challenge self-test.
+- Consolidated completed reports and compact evidence into one verified
+  canonical browser envelope with fail-closed migration, atomic per-run
+  add/remove/clear/import behavior, and honest quota/readback rollback.
+- Content-addressed ECB, FRED, and local-import replay versions; added staged
+  two-file importer replacement/rollback, EUR/GBP parser parity, and explicit
+  observed-versus-derived FRED disclosure.
+- Hardened importer provenance and release packaging with exact ECB series-key
+  validation, documented camelCase CSV timestamps, version-bound configurable
+  tick sizes, protected output roots, and extension-independent text-asset scans.
+- Added authoritative checkpoint-schedule fingerprints across assessments,
+  evidence, coaching, tracks, archives, and exact archived-drill replay; partial
+  or self-declared schedules cannot earn completion credit or appear as a
+  measured history/report/coach score. Competency claims still combine
+  compatible cross-regime drills by competency and rubric identity; schedules
+  remain an admission and exact-trend boundary rather than fragmenting claims.
+- Made report-save failure recovery non-lossy, destructive archive operations
+  non-cancelable after commit, session restore explicitly replace active work,
+  browser-save deletion report its verified result, and history actions wait for
+  pending archive writes.
+- Required versioned, non-replacing user scenario packages, then normalized
+  browser imports to an app-derived full-contract SHA-256 that includes authored
+  drills; duplicate stored ids fail closed without bricking startup.
+- Made initial plans/checkpoint responses/violations replacement-protected,
+  rechecked progress after asynchronous restore reads, added explicit fresh
+  unassessed fallback for drifted archived drills, and surfaced browser-save
+  read/write/delete/recovery health globally.
+- Hardened local imports against host-timezone drift, stale-lock takeover races,
+  arbitrary transaction-directory deletion, impossible/non-ISO timestamps, and
+  interrupted or power-loss-exposed paired writes with guarded recovery and
+  flushed files/manifests/directories.
+- Clarified that deep validation of user-editable local archives establishes
+  bounded internal consistency, not cryptographic authorship, anti-cheat, or
+  real-world skill certification.
+- Corrected the March 15, 2020 Fed event visibility to `21:00Z`, versioned that
+  replay change fail-closed, and disclosed the ECB date-only `00:00Z`-`15:00Z`
+  replay-window derivation in metadata and source documentation.
 
 ## 0.2.0 - Local Lab v1 - 2026-07-13
 

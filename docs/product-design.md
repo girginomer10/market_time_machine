@@ -42,13 +42,17 @@ The shipped V2 product:
 - keep Practice orientation milestones distinct from the credit-bearing
   Decision Foundations track;
 - preserve active-session confirmations and the information firewall;
+- record event linkage only from explicit learner selections and keep legacy
+  automatic checkpoint membership out of evidence and track credit;
 - keep raw journal, plan, checkpoint-response, and reflection text out of the
   compact evidence ledger;
-- award track credit only to exact curated scenario/data/drill/rubric versions
-  that meet every criterion in one attempt;
+- award track credit only to exact curated scenario/data/drill/rubric, mode, and
+  full broker-configuration identities that meet every criterion in one attempt;
 - keep synthetic QQQ/KRE practice units visibly preview-only and non-creditable;
 - preserve recent reports and longer-lived compact evidence in a strict,
-  user-controlled V2 archive with V1 run-history migration;
+  user-controlled single-envelope V2 archive with V1 run-history migration;
+- offer a surprise Blind/Local Challenge self-test without claiming local
+  future-data protection;
 - validate and run scenario-authored drill definitions only with their
   containing scenario, while keeping credit-bearing tracks separately curated.
 

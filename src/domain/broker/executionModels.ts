@@ -64,6 +64,157 @@ export const BROKER_PRESETS = {
 
 export type BrokerPresetName = keyof typeof BROKER_PRESETS;
 
+const BROKER_CONFIG_FINGERPRINT_PREFIX = "broker-config-v1:";
+
+type BrokerConfigFingerprintPayload = {
+  baseCurrency: string;
+  commissionRateBps: number;
+  fixedFee: number;
+  spreadBps: number;
+  slippageModel: SlippageModel;
+  slippageBps: number | null;
+  allowFractional: boolean;
+  allowShort: boolean;
+  maxLeverage: number;
+  maxParticipationRate: number | null;
+  partialFillPolicy: BrokerConfig["partialFillPolicy"] | null;
+  stopFillPolicy: BrokerConfig["stopFillPolicy"] | null;
+  marketHoursEnforced: boolean | null;
+  marginCallPolicy: BrokerConfig["marginCallPolicy"] | null;
+  borrowRateBps: number | null;
+};
+
+function brokerConfigFingerprintPayload(
+  config: BrokerConfig,
+): BrokerConfigFingerprintPayload {
+  return {
+    baseCurrency: config.baseCurrency,
+    commissionRateBps: config.commissionRateBps,
+    fixedFee: config.fixedFee,
+    spreadBps: config.spreadBps,
+    slippageModel: config.slippageModel,
+    slippageBps: config.slippageBps ?? null,
+    allowFractional: config.allowFractional,
+    allowShort: config.allowShort,
+    maxLeverage: config.maxLeverage,
+    maxParticipationRate: config.maxParticipationRate ?? null,
+    partialFillPolicy: config.partialFillPolicy ?? null,
+    stopFillPolicy: config.stopFillPolicy ?? null,
+    marketHoursEnforced: config.marketHoursEnforced ?? null,
+    marginCallPolicy: config.marginCallPolicy ?? null,
+    borrowRateBps: config.borrowRateBps ?? null,
+  };
+}
+
+/**
+ * Canonical, collision-free identity for every execution-setting field. The
+ * full ordered payload is retained instead of a short client-side hash so a
+ * configuration change can never compare equal through a hash collision.
+ */
+export function brokerConfigFingerprint(config: BrokerConfig): string {
+  return `${BROKER_CONFIG_FINGERPRINT_PREFIX}${JSON.stringify(
+    brokerConfigFingerprintPayload(config),
+  )}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function finiteAtLeast(value: unknown, minimum: number): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= minimum;
+}
+
+function optionalFiniteAtLeast(
+  value: unknown,
+  minimum: number,
+): value is number | null {
+  return value === null || finiteAtLeast(value, minimum);
+}
+
+/** Strictly accepts only the canonical v1 representation generated above. */
+export function isBrokerConfigFingerprint(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith(BROKER_CONFIG_FINGERPRINT_PREFIX)
+  ) {
+    return false;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(value.slice(BROKER_CONFIG_FINGERPRINT_PREFIX.length));
+  } catch {
+    return false;
+  }
+  if (!isRecord(payload)) return false;
+  if (
+    typeof payload.baseCurrency !== "string" ||
+    payload.baseCurrency.trim().length === 0 ||
+    !finiteAtLeast(payload.commissionRateBps, 0) ||
+    !finiteAtLeast(payload.fixedFee, 0) ||
+    !finiteAtLeast(payload.spreadBps, 0) ||
+    !["none", "fixed_bps", "volume_based", "volatility_based"].includes(
+      String(payload.slippageModel),
+    ) ||
+    !optionalFiniteAtLeast(payload.slippageBps, 0) ||
+    typeof payload.allowFractional !== "boolean" ||
+    typeof payload.allowShort !== "boolean" ||
+    !finiteAtLeast(payload.maxLeverage, Number.MIN_VALUE) ||
+    !optionalFiniteAtLeast(payload.maxParticipationRate, Number.MIN_VALUE) ||
+    (payload.maxParticipationRate !== null &&
+      Number(payload.maxParticipationRate) > 1) ||
+    ![null, "disabled", "volume_limited"].includes(
+      payload.partialFillPolicy as null | string,
+    ) ||
+    ![null, "trigger_price", "gap_open"].includes(
+      payload.stopFillPolicy as null | string,
+    ) ||
+    (payload.marketHoursEnforced !== null &&
+      typeof payload.marketHoursEnforced !== "boolean") ||
+    ![null, "disabled", "liquidate_on_threshold", "reject_new_orders"].includes(
+      payload.marginCallPolicy as null | string,
+    ) ||
+    !optionalFiniteAtLeast(payload.borrowRateBps, 0)
+  ) {
+    return false;
+  }
+  const config: BrokerConfig = {
+    baseCurrency: payload.baseCurrency,
+    commissionRateBps: payload.commissionRateBps,
+    fixedFee: payload.fixedFee,
+    spreadBps: payload.spreadBps,
+    slippageModel: payload.slippageModel as SlippageModel,
+    slippageBps:
+      payload.slippageBps === null ? undefined : payload.slippageBps,
+    allowFractional: payload.allowFractional,
+    allowShort: payload.allowShort,
+    maxLeverage: payload.maxLeverage,
+    maxParticipationRate:
+      payload.maxParticipationRate === null
+        ? undefined
+        : payload.maxParticipationRate,
+    partialFillPolicy:
+      payload.partialFillPolicy === null
+        ? undefined
+        : (payload.partialFillPolicy as BrokerConfig["partialFillPolicy"]),
+    stopFillPolicy:
+      payload.stopFillPolicy === null
+        ? undefined
+        : (payload.stopFillPolicy as BrokerConfig["stopFillPolicy"]),
+    marketHoursEnforced:
+      payload.marketHoursEnforced === null
+        ? undefined
+        : payload.marketHoursEnforced,
+    marginCallPolicy:
+      payload.marginCallPolicy === null
+        ? undefined
+        : (payload.marginCallPolicy as BrokerConfig["marginCallPolicy"]),
+    borrowRateBps:
+      payload.borrowRateBps === null ? undefined : payload.borrowRateBps,
+  };
+  return brokerConfigFingerprint(config) === value;
+}
+
 export function getBrokerPreset(name: BrokerPresetName): BrokerConfig {
   return { ...BROKER_PRESETS[name] };
 }

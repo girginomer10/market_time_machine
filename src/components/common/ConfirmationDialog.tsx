@@ -6,6 +6,7 @@ type Props = {
   confirmLabel: string;
   onConfirm: () => void;
   onCancel: () => void;
+  busy?: boolean;
 };
 
 export default function ConfirmationDialog({
@@ -14,6 +15,7 @@ export default function ConfirmationDialog({
   confirmLabel,
   onConfirm,
   onCancel,
+  busy = false,
 }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
@@ -25,7 +27,7 @@ export default function ConfirmationDialog({
     function onKeyDown(event: KeyboardEvent): void {
       if (event.key === "Escape") {
         event.preventDefault();
-        onCancel();
+        if (!busy) onCancel();
         return;
       }
       if (event.key !== "Tab" || !dialogRef.current) return;
@@ -49,7 +51,7 @@ export default function ConfirmationDialog({
       document.removeEventListener("keydown", onKeyDown);
       previousFocus?.focus();
     };
-  }, [onCancel]);
+  }, [busy, onCancel]);
 
   return (
     <div className="confirm-overlay">
@@ -59,16 +61,28 @@ export default function ConfirmationDialog({
         aria-modal="true"
         aria-labelledby="confirm-title"
         aria-describedby="confirm-description"
+        aria-busy={busy}
         ref={dialogRef}
       >
         <h2 id="confirm-title">{title}</h2>
         <p id="confirm-description">{description}</p>
         <div className="confirm-actions">
-          <button className="btn" type="button" onClick={onCancel} ref={cancelRef}>
+          <button
+            className="btn"
+            type="button"
+            onClick={onCancel}
+            ref={cancelRef}
+            disabled={busy}
+          >
             Keep session
           </button>
-          <button className="btn danger" type="button" onClick={onConfirm}>
-            {confirmLabel}
+          <button
+            className="btn danger"
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? "Working…" : confirmLabel}
           </button>
         </div>
       </div>

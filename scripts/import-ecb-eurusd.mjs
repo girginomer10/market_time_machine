@@ -1,6 +1,10 @@
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  canonicalZonedIsoTimestamp,
+  contentSha256,
+  writeAtomicOutputFile,
+} from "./scenario-import-utils.mjs";
 
 export const DEFAULT_OUTPUT =
   "src/data/scenarios/eurusd-covid-liquidity-2020/ecb-eurusd.json";
@@ -59,18 +63,31 @@ export function validateDateRange(start, end) {
 
 export function parseEcbCsv(csv, { start, end }) {
   const lines = csv.replace(/^\uFEFF/, "").trim().split(/\r?\n/);
-  const headers = csvRow(lines.shift() ?? "");
+  const headers = csvRow(lines.shift() ?? "").map((header) => header.trim());
+  const keyIndex = headers.indexOf("KEY");
   const dateIndex = headers.indexOf("TIME_PERIOD");
   const valueIndex = headers.indexOf("OBS_VALUE");
-  if (dateIndex < 0 || valueIndex < 0) {
-    throw new Error("ECB response is missing TIME_PERIOD or OBS_VALUE.");
+  if (keyIndex < 0 || dateIndex < 0 || valueIndex < 0) {
+    throw new Error("ECB response is missing KEY, TIME_PERIOD, or OBS_VALUE.");
   }
 
   const seenDates = new Set();
-  const observations = lines.filter(Boolean).map((line, index) => {
+  const observations = lines.filter((line) => line.trim()).map((line, index) => {
     const row = csvRow(line);
-    const date = row[dateIndex];
-    const rawValue = row[valueIndex];
+    if (row.length !== headers.length) {
+      throw new Error(
+        `ECB CSV row ${index + 2} has ${row.length} columns; expected ${headers.length}.`,
+      );
+    }
+    const seriesKey = row[keyIndex].trim();
+    const expectedSeriesKey = `EXR.${SERIES_KEY}`;
+    if (seriesKey !== expectedSeriesKey) {
+      throw new Error(
+        `ECB CSV row ${index + 2} has unexpected series key ${seriesKey}; expected ${expectedSeriesKey}.`,
+      );
+    }
+    const date = row[dateIndex].trim();
+    const rawValue = row[valueIndex].trim();
     const value = Number(rawValue);
     if (!isIsoDate(date) || !Number.isFinite(value) || value <= 0) {
       throw new Error(
@@ -95,6 +112,7 @@ export function parseEcbCsv(csv, { start, end }) {
 }
 
 export function apiUrlFor(start, end) {
+  validateDateRange(start, end);
   return `${API_ROOT}/${SERIES_KEY}?startPeriod=${start}&endPeriod=${end}&format=csvdata`;
 }
 
@@ -102,6 +120,9 @@ export async function fetchEcbCsvText(
   url,
   { fetchImpl = fetch, timeoutMs = DEFAULT_TIMEOUT_MS } = {},
 ) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("timeoutMs must be a positive integer.");
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -114,7 +135,7 @@ export async function fetchEcbCsvText(
     }
     return await response.text();
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
+    if (controller.signal.aborted) {
       throw new Error(`ECB API request timed out after ${timeoutMs} ms.`, {
         cause: error,
       });
@@ -125,15 +146,6 @@ export async function fetchEcbCsvText(
   }
 }
 
-async function exists(path) {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function sourcePayload({ apiUrl, retrievedAt, observations }) {
   return {
     seriesKey: SERIES_KEY,
@@ -141,7 +153,12 @@ export function sourcePayload({ apiUrl, retrievedAt, observations }) {
     apiUrl,
     licenseUrl:
       "https://www.ecb.europa.eu/stats/ecb_statistics/governance_and_quality_framework/html/usage_policy.en.html",
-    retrievedAt,
+    retrievedAt: canonicalZonedIsoTimestamp(retrievedAt, "--retrieved-at"),
+    contentSha256: contentSha256({
+      schema: "ecb-reference-rate-observations-v1",
+      seriesKey: SERIES_KEY,
+      observations,
+    }),
     observationCount: observations.length,
     observations,
   };
@@ -160,31 +177,21 @@ export async function main(
   const end = options.end ?? DEFAULT_END;
   const output = resolve(options.output ?? DEFAULT_OUTPUT);
   const force = options.force === "true";
-  const retrievedAt = options["retrieved-at"] ?? now().toISOString();
+  const retrievedAt = canonicalZonedIsoTimestamp(
+    options["retrieved-at"] ?? now().toISOString(),
+    "--retrieved-at",
+  );
 
   validateDateRange(start, end);
-  if (!Number.isFinite(Date.parse(retrievedAt))) {
-    throw new Error("--retrieved-at must be a valid ISO timestamp.");
-  }
-  if ((await exists(output)) && !force) {
-    throw new Error(
-      `Output already exists: ${output}. Pass --force=true to replace it.`,
-    );
-  }
-
   const apiUrl = apiUrlFor(start, end);
   const csv = await fetchEcbCsvText(apiUrl, { fetchImpl });
   const observations = parseEcbCsv(csv, { start, end });
   const payload = sourcePayload({ apiUrl, retrievedAt, observations });
-  const temporary = `${output}.tmp`;
-  await mkdir(dirname(output), { recursive: true });
-  await writeFile(temporary, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  try {
-    await rename(temporary, output);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
+  await writeAtomicOutputFile(
+    output,
+    `${JSON.stringify(payload, null, 2)}\n`,
+    force,
+  );
   log(`Wrote ${observations.length} ECB observations to ${output}`);
   return { output, observations, payload };
 }

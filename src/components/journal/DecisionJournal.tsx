@@ -1,7 +1,14 @@
-import { useState, type FormEvent } from "react";
-import type { JournalEntry, ReplayStatus } from "../../types";
+import { useEffect, useState, type FormEvent } from "react";
+import {
+  SESSION_TEXT_MAX_LENGTH,
+  type JournalEntry,
+  type ReplayStatus,
+} from "../../types";
+
+const journalDrafts = new Map<string, string>();
 
 type Props = {
+  draftKey?: string;
   entries: JournalEntry[];
   status: ReplayStatus;
   onAdd: (note: string) => void;
@@ -19,10 +26,22 @@ function dateLabel(iso: string): string {
   });
 }
 
-export default function DecisionJournal({ entries, status, onAdd }: Props) {
-  const [draft, setDraft] = useState("");
+export default function DecisionJournal({
+  draftKey,
+  entries,
+  status,
+  onAdd,
+}: Props) {
+  const [draft, setDraft] = useState(() =>
+    draftKey ? (journalDrafts.get(draftKey) ?? "") : "",
+  );
   const [error, setError] = useState<string>();
   const isFinished = status === "finished";
+
+  useEffect(() => {
+    if (!draftKey) return;
+    journalDrafts.set(draftKey, draft);
+  }, [draft, draftKey]);
 
   function submit(event: FormEvent): void {
     event.preventDefault();
@@ -33,6 +52,7 @@ export default function DecisionJournal({ entries, status, onAdd }: Props) {
     }
     onAdd(note);
     setDraft("");
+    if (draftKey) journalDrafts.delete(draftKey);
     setError(undefined);
   }
 
@@ -43,8 +63,9 @@ export default function DecisionJournal({ entries, status, onAdd }: Props) {
         <textarea
           id="journal-note"
           value={draft}
+          maxLength={SESSION_TEXT_MAX_LENGTH}
           onChange={(event) => {
-            setDraft(event.target.value);
+            setDraft(event.target.value.slice(0, SESSION_TEXT_MAX_LENGTH));
             setError(undefined);
           }}
           placeholder="What do you see, what is your thesis, and what would change your mind?"

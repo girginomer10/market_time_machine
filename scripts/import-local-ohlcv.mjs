@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 
-import {
-  access,
-  mkdir,
-  readFile,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import process from "node:process";
+import {
+  assertSafeScenarioOutputDirectory,
+  canonicalZonedIsoTimestamp,
+  sha256DataVersion,
+  writeScenarioOutputFiles,
+} from "./scenario-import-utils.mjs";
 
 const ASSET_CLASSES = new Set([
   "crypto",
@@ -23,6 +22,7 @@ const ASSET_CLASSES = new Set([
 ]);
 const GRANULARITIES = new Set(["1m", "5m", "15m", "1h", "4h", "1d"]);
 const PRICE_ADJUSTMENTS = new Set(["raw", "split_adjusted", "total_return"]);
+const LOCAL_LICENSED_DATA_MARKER = "MTM_LOCAL_LICENSED_DATA";
 
 export async function main(rawArgs = process.argv.slice(2)) {
   const args = parseArgs(rawArgs);
@@ -38,7 +38,9 @@ export async function main(rawArgs = process.argv.slice(2)) {
   const scenariosRoot = resolve(process.cwd(), "src/data/scenarios");
   const defaultOutDir = resolve(scenariosRoot, id);
   const outDir = resolve(process.cwd(), args.out ?? defaultOutDir);
-  assertSafeOutputDirectory(outDir, scenariosRoot);
+  const safeOutDir = await assertSafeScenarioOutputDirectory(outDir, {
+    scenariosRoot,
+  });
   const title = args.title ?? `${symbol} Local OHLCV Replay`;
   const license =
     args.license ??
@@ -55,6 +57,11 @@ export async function main(rawArgs = process.argv.slice(2)) {
     ASSET_CLASSES,
     "assetClass",
   );
+  const tickSize = args.tickSize !== undefined
+    ? positiveOptionNumber(args.tickSize, "tickSize")
+    : assetClass === "fx"
+      ? 0.0001
+      : 0.01;
   const granularity = validateChoice(
     args.granularity ?? "1d",
     GRANULARITIES,
@@ -83,6 +90,22 @@ export async function main(rawArgs = process.argv.slice(2)) {
     time: candle.closeTime,
     value: candle.close,
   }));
+  const dataVersion = localScenarioDataVersion({
+    id,
+    title,
+    symbol,
+    candles,
+    benchmarks,
+    sourceName,
+    license,
+    priceAdjustment,
+    assetClass,
+    tickSize,
+    granularity,
+    currency,
+    timezone,
+    initialCash,
+  });
   const scenarioSource = renderScenario({
     id,
     title,
@@ -96,10 +119,12 @@ export async function main(rawArgs = process.argv.slice(2)) {
     license,
     priceAdjustment,
     assetClass,
+    tickSize,
     granularity,
     currency,
     timezone,
     initialCash,
+    dataVersion,
   });
   const readme = renderReadme({
     title,
@@ -107,9 +132,15 @@ export async function main(rawArgs = process.argv.slice(2)) {
     sourceName,
     rowCount: candles.length,
     license,
+    tickSize,
   });
 
-  await writeOutputFiles(outDir, scenarioSource, readme, args.force === "true");
+  await writeScenarioOutputFiles(
+    safeOutDir,
+    scenarioSource,
+    readme,
+    args.force === "true",
+  );
   console.log(
     `Generated local OHLCV scenario with ${candles.length} candles at ${outDir}`,
   );
@@ -120,7 +151,7 @@ export async function main(rawArgs = process.argv.slice(2)) {
       "Custom output paths may be git-visible. Verify git status and redistribution rights before committing or publishing.",
     );
   }
-  return { outDir, id, candles };
+  return { outDir, id, candles, dataVersion, tickSize };
 }
 
 export function parseArgs(rawArgs) {
@@ -135,7 +166,7 @@ export function parseArgs(rawArgs) {
 }
 
 export function parseCsv(csv) {
-  const lines = csv.trim().split(/\r?\n/);
+  const lines = String(csv).replace(/^\uFEFF/, "").trim().split(/\r?\n/);
   if (lines.length === 0 || !lines[0].trim()) return [];
   const headers = splitCsvLine(lines[0]).map((header) =>
     header.trim().toLowerCase(),
@@ -197,10 +228,15 @@ export function normalizeRecord(record, symbol, sourceName, rowIndex = 0) {
     throw new Error(`OHLCV row ${rowIndex + 1} must be an object.`);
   }
   const openTime = iso(
-    record.openTime ?? record.open_time ?? record.timestamp ?? record.date,
+    record.openTime ??
+      record.opentime ??
+      record.open_time ??
+      record.timestamp ??
+      record.date,
   );
   const closeTime = iso(
     record.closeTime ??
+      record.closetime ??
       record.close_time ??
       record.timestamp ??
       record.date,
@@ -213,7 +249,8 @@ export function normalizeRecord(record, symbol, sourceName, rowIndex = 0) {
   const high = positiveNumber(record.high, "high");
   const low = positiveNumber(record.low, "low");
   const close = positiveNumber(record.close, "close");
-  const adjustedValue = record.adjustedClose ?? record.adjusted_close;
+  const adjustedValue =
+    record.adjustedClose ?? record.adjustedclose ?? record.adjusted_close;
   const adjustedClose =
     adjustedValue === undefined || adjustedValue === ""
       ? close
@@ -275,11 +312,12 @@ export function iso(value, close = false) {
     }
     return `${text}T${close ? "23:59:59.999" : "00:00:00.000"}Z`;
   }
-  const parsed = new Date(text);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new Error(`Invalid OHLCV timestamp: ${text}`);
+  if (!/(?:Z|[+-]\d{2}:\d{2})$/.test(text)) {
+    throw new Error(
+      `OHLCV timestamp must include an explicit Z or numeric UTC offset: ${text}`,
+    );
   }
-  return parsed.toISOString();
+  return canonicalZonedIsoTimestamp(text, "OHLCV timestamp");
 }
 
 export function positiveNumber(value, label) {
@@ -287,11 +325,12 @@ export function positiveNumber(value, label) {
   if (!Number.isFinite(number) || number <= 0) {
     throw new Error(`OHLCV row has invalid ${label}: ${value}`);
   }
-  const rounded = Math.round(number * 1_000_000) / 1_000_000;
-  if (!Number.isFinite(rounded) || rounded <= 0) {
-    throw new Error(`OHLCV row has invalid ${label} after rounding: ${value}`);
+  if (number > Number.MAX_SAFE_INTEGER) {
+    throw new Error(
+      `OHLCV row has invalid ${label} outside the safe numeric range: ${value}`,
+    );
   }
-  return rounded;
+  return number;
 }
 
 function nonNegativeNumber(value, label) {
@@ -299,11 +338,23 @@ function nonNegativeNumber(value, label) {
   if (!Number.isFinite(number) || number < 0) {
     throw new Error(`OHLCV row has invalid ${label}: ${value}`);
   }
-  const rounded = Math.round(number * 1_000_000) / 1_000_000;
-  if (!Number.isFinite(rounded) || rounded < 0) {
-    throw new Error(`OHLCV row has invalid ${label} after rounding: ${value}`);
+  if (number > Number.MAX_SAFE_INTEGER) {
+    throw new Error(
+      `OHLCV row has invalid ${label} outside the safe numeric range: ${value}`,
+    );
   }
-  return rounded;
+  return number;
+}
+
+function positiveOptionNumber(value, label) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error(`${label} must be a positive finite number.`);
+  }
+  if (number > Number.MAX_SAFE_INTEGER) {
+    throw new Error(`${label} must be within the safe numeric range.`);
+  }
+  return number;
 }
 
 export function slug(value) {
@@ -351,54 +402,11 @@ function validateChoice(value, choices, label) {
   return value;
 }
 
-function assertSafeOutputDirectory(outDir, scenariosRoot) {
-  if (
-    containsPath(outDir, scenariosRoot) ||
-    containsPath(outDir, resolve(process.cwd()))
-  ) {
-    throw new Error(`Refusing unsafe output directory: ${outDir}`);
-  }
-}
-
-function containsPath(parent, child) {
-  const path = relative(parent, child);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
-}
-
-async function exists(path) {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function writeOutputFiles(outDir, scenarioSource, readme, force) {
-  await mkdir(outDir, { recursive: true });
-  const indexPath = resolve(outDir, "index.ts");
-  const readmePath = resolve(outDir, "README.md");
-  if (!force && ((await exists(indexPath)) || (await exists(readmePath)))) {
-    throw new Error(
-      `Output already exists at ${outDir}; pass --force=true to replace it.`,
-    );
-  }
-  const suffix = `.tmp-${process.pid}-${Date.now()}`;
-  const indexTemp = `${indexPath}${suffix}`;
-  const readmeTemp = `${readmePath}${suffix}`;
-  try {
-    await Promise.all([
-      writeFile(indexTemp, scenarioSource, "utf8"),
-      writeFile(readmeTemp, readme, "utf8"),
-    ]);
-    await rename(indexTemp, indexPath);
-    await rename(readmeTemp, readmePath);
-  } finally {
-    await Promise.all([
-      rm(indexTemp, { force: true }),
-      rm(readmeTemp, { force: true }),
-    ]);
-  }
+export function localScenarioDataVersion(input) {
+  return sha256DataVersion({
+    schema: "market-time-machine-local-ohlcv-v3",
+    ...input,
+  });
 }
 
 export function renderScenario({
@@ -414,13 +422,16 @@ export function renderScenario({
   license,
   priceAdjustment,
   assetClass,
+  tickSize,
   granularity,
   currency,
   timezone,
   initialCash,
+  dataVersion,
 }) {
   const hasUsableVolume = candles.every((candle) => candle.volume > 0);
-  return `import type {
+  return `/* ${LOCAL_LICENSED_DATA_MARKER}: generated from user-provided market data. */
+import type {
   BenchmarkPoint,
   Candle,
   CorporateAction,
@@ -432,6 +443,7 @@ import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
 import { assembleScenario } from "../../../domain/scenario/loader";
 
 const SYMBOL = ${JSON.stringify(symbol)};
+export const LOCAL_LICENSED_DATA_BOUNDARY = ${JSON.stringify(LOCAL_LICENSED_DATA_MARKER)};
 
 const meta: ScenarioMeta = {
   id: ${JSON.stringify(id)},
@@ -450,7 +462,7 @@ const meta: ScenarioMeta = {
   benchmarkSymbol: SYMBOL,
   license: ${JSON.stringify(license)},
   dataSources: [${JSON.stringify(sourceName)}],
-  dataVersion: "local-${generatedAt.slice(0, 10)}",
+  dataVersion: ${JSON.stringify(dataVersion)},
   sourceManifest: [${JSON.stringify(sourceName)}],
   generatedAt: ${JSON.stringify(generatedAt)},
   priceAdjustment: ${JSON.stringify(priceAdjustment)},
@@ -467,7 +479,7 @@ const instruments: Instrument[] = [
     currency: ${JSON.stringify(currency)},
     timezone: ${JSON.stringify(timezone)},
     allowFractional: true,
-    tickSize: 0.01,
+    tickSize: ${tickSize},
   },
 ];
 
@@ -517,8 +529,10 @@ export function renderReadme({
   sourceName,
   rowCount,
   license,
+  tickSize,
 }) {
-  return `# ${title}
+  return `<!-- ${LOCAL_LICENSED_DATA_MARKER} -->
+# ${title}
 
 Generated at: ${generatedAt}
 
@@ -527,6 +541,8 @@ Source manifest:
 - ${sourceName}
 
 Rows imported: ${rowCount}
+
+Tick size: ${tickSize}
 
 License / terms note:
 

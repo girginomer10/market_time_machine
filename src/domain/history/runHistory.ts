@@ -1,14 +1,40 @@
 import type {
   DrillAssessment,
+  DrillCheckpoint,
+  DrillCheckpointResponse,
+  DrillDefinition,
+  PracticeDrillReportSnapshot,
   ReportPayload,
   ReportScore,
   ScenarioMode,
 } from "../../types";
 import type { BrokerMode } from "../../store/sessionStore";
-import { parseDrillAssessment } from "./practiceLedger";
+import {
+  PRACTICE_LEDGER_FORMAT,
+  MAX_PRACTICE_LEDGER_ENTRIES,
+  PRACTICE_LEDGER_STORAGE_KEY,
+  PRACTICE_LEDGER_VERSION,
+  normalizePracticeLedgerEntries,
+  parseDrillAssessment,
+  parsePracticeLedgerEntry,
+} from "./practiceLedger";
 import { PRACTICE_DRILL_REFLECTION_MAX_LENGTH } from "../../types/reporting";
+import {
+  assessDrill,
+  drillCheckpointScheduleFingerprint,
+  drillRubricFingerprint,
+} from "../practice/drills";
+import { isBrokerConfigFingerprint } from "../broker/executionModels";
+import { canonicalScenarioDataVersion } from "../../data/scenarios/dataVersions";
+import {
+  commitPracticeArchiveEnvelope,
+  inspectPracticeArchiveEnvelope,
+  LEGACY_RUN_HISTORY_STORAGE_KEY,
+  removeLegacyPracticeArchiveKeysBestEffort,
+} from "./practiceArchiveEnvelope";
+import { assertPracticeArchiveIdentityConsistency } from "./practiceArchive";
 
-export const RUN_HISTORY_STORAGE_KEY = "market-time-machine.run-history.v1";
+export const RUN_HISTORY_STORAGE_KEY = LEGACY_RUN_HISTORY_STORAGE_KEY;
 export const MAX_SAVED_RUNS = 12;
 export const MAX_ARCHIVED_REPORT_EQUITY_POINTS = 512;
 export const MAX_ARCHIVED_REPORT_COLLECTION_ITEMS = 2_000;
@@ -20,6 +46,7 @@ const MAX_ARCHIVED_REPORT_RECOMMENDATIONS = 100;
 const MAX_ARCHIVED_REPORT_EVIDENCE_ITEMS = 1_000;
 const MAX_ARCHIVED_REPORT_COUNT = 10_000_000;
 const MAX_ARCHIVED_REPORT_ABSOLUTE_NUMBER = Number.MAX_SAFE_INTEGER;
+const MAX_RETAINED_RUN_DETAIL_ITEMS = 250;
 
 export type CompletedRun = {
   id: string;
@@ -32,6 +59,8 @@ export type CompletedRun = {
   pricePrecision?: number;
   mode: ScenarioMode;
   brokerMode: BrokerMode;
+  /** Exact execution settings; absent only on archives created before V2. */
+  brokerFingerprint?: string;
   sampleData: boolean;
   totalReturn: number;
   benchmarkReturn: number;
@@ -64,11 +93,12 @@ export type RunComparison = {
 
 type HistoryStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-type RecordCompletedRunInput = {
+export type CompletedRunInput = {
   report: ReportPayload;
   runInstanceId?: string;
   mode: ScenarioMode;
   brokerMode: BrokerMode;
+  brokerFingerprint: string;
   currency?: string;
   pricePrecision?: number;
   completedAt?: string;
@@ -349,6 +379,7 @@ function isPracticeDrillSnapshot(value: unknown): boolean {
     ) {
       return false;
     }
+    const checkpointEventIds = checkpoint.eventIds;
     checkpointIds.add(checkpoint.id);
     previousReplayIndex = Number(checkpoint.replayIndex);
     const checkpointTime = Date.parse(checkpoint.replayTime);
@@ -374,7 +405,7 @@ function isPracticeDrillSnapshot(value: unknown): boolean {
       eventIds.add(event.id);
       allEventIds.add(event.id);
     }
-    if (!sameStringMembers(checkpoint.eventIds, [...eventIds])) return false;
+    if (!sameStringMembers(checkpointEventIds, [...eventIds])) return false;
 
     if (candidate.response !== undefined) {
       const response = candidate.response;
@@ -389,7 +420,12 @@ function isPracticeDrillSnapshot(value: unknown): boolean {
         response.status !== "answered" ||
         !["hold", "reduce", "exit", "wait"].includes(String(response.action)) ||
         !isUniqueStringArray(response.eventIds) ||
-        !sameStringMembers(response.eventIds, checkpoint.eventIds) ||
+        !sameStringMembers(response.eventIds, checkpointEventIds) ||
+        (response.linkedEventIds !== undefined &&
+          (!isUniqueStringArray(response.linkedEventIds) ||
+            response.linkedEventIds.some(
+              (eventId) => !checkpointEventIds.includes(eventId),
+            ))) ||
         !isOptionalText(response.reflection) ||
         (checkpointRule.requireReflection === true &&
           (typeof response.reflection !== "string" ||
@@ -456,11 +492,14 @@ function practiceDrillMatchesAssessment(
 
   const eligibleEventIds = new Set<string>();
   const linkedEventIds = new Set<string>();
+  const checkpointSchedule: DrillCheckpoint[] = [];
+  let everyAnsweredResponseHasExplicitLinkage = true;
   let answeredCheckpointCount = 0;
   for (const candidate of checkpoints) {
     if (!isRecord(candidate) || !isRecord(candidate.checkpoint)) return false;
     const checkpoint = candidate.checkpoint;
     if (!Array.isArray(checkpoint.eventIds)) return false;
+    checkpointSchedule.push(checkpoint as unknown as DrillCheckpoint);
     for (const eventId of checkpoint.eventIds) {
       if (typeof eventId !== "string") return false;
       eligibleEventIds.add(eventId);
@@ -470,7 +509,13 @@ function practiceDrillMatchesAssessment(
         return false;
       }
       answeredCheckpointCount += 1;
-      for (const eventId of candidate.response.eventIds) {
+      const responseLinkIds = Array.isArray(candidate.response.linkedEventIds)
+        ? candidate.response.linkedEventIds
+        : candidate.response.eventIds;
+      if (!Array.isArray(candidate.response.linkedEventIds)) {
+        everyAnsweredResponseHasExplicitLinkage = false;
+      }
+      for (const eventId of responseLinkIds) {
         if (typeof eventId !== "string") return false;
         linkedEventIds.add(eventId);
       }
@@ -491,6 +536,15 @@ function practiceDrillMatchesAssessment(
     definition.competencyId === assessment.competencyId &&
     definition.definitionVersion === assessment.definitionVersion &&
     definition.rubricVersion === assessment.rubricVersion &&
+    (assessment.rubricFingerprint === undefined ||
+      assessment.rubricFingerprint ===
+        drillRubricFingerprint({
+          weights: definition.rubric.weights as DrillDefinition["rubric"]["weights"],
+          violationPenalty: Number(definition.rubric.violationPenalty),
+        })) &&
+    (assessment.checkpointScheduleFingerprint === undefined ||
+      assessment.checkpointScheduleFingerprint ===
+        drillCheckpointScheduleFingerprint(checkpointSchedule)) &&
     assessment.components.every(
       (component) =>
         isFiniteNumber(weights[component.id]) &&
@@ -498,11 +552,174 @@ function practiceDrillMatchesAssessment(
     ) &&
     assessment.eligibleCheckpointCount === checkpoints.length &&
     assessment.answeredCheckpointCount === answeredCheckpointCount &&
+    (assessment.eventLinkageEvidenceVersion === 1
+      ? everyAnsweredResponseHasExplicitLinkage
+      : true) &&
     assessment.skippedCheckpointCount === skippedCheckpointIds.size &&
     assessment.eligibleEventCount === eligibleEventIds.size &&
     assessment.linkedEventCount === linkedEventIds.size &&
     assessment.violationCount === violations.length
   );
+}
+
+function sameAssessmentComponent(
+  left: DrillAssessment["components"][number],
+  right: DrillAssessment["components"][number],
+): boolean {
+  return (
+    left.id === right.id &&
+    left.label === right.label &&
+    left.weight === right.weight &&
+    left.status === right.status &&
+    left.score === right.score &&
+    left.evidence === right.evidence
+  );
+}
+
+/**
+ * Modern archives retain enough process evidence to reproduce the assessment.
+ * Compare the complete deterministic result rather than trusting summary
+ * scores copied into the archive.
+ */
+function sameCanonicalAssessment(
+  retained: DrillAssessment,
+  recomputed: DrillAssessment,
+): boolean {
+  return (
+    retained.drillId === recomputed.drillId &&
+    retained.competencyId === recomputed.competencyId &&
+    retained.definitionVersion === recomputed.definitionVersion &&
+    retained.rubricVersion === recomputed.rubricVersion &&
+    retained.rubricFingerprint === recomputed.rubricFingerprint &&
+    (retained.checkpointScheduleFingerprint === undefined ||
+      retained.checkpointScheduleFingerprint ===
+        recomputed.checkpointScheduleFingerprint) &&
+    retained.eventLinkageEvidenceVersion ===
+      recomputed.eventLinkageEvidenceVersion &&
+    retained.status === recomputed.status &&
+    retained.overallScore === recomputed.overallScore &&
+    retained.methodology === recomputed.methodology &&
+    retained.eligibleCheckpointCount ===
+      recomputed.eligibleCheckpointCount &&
+    retained.answeredCheckpointCount ===
+      recomputed.answeredCheckpointCount &&
+    retained.skippedCheckpointCount === recomputed.skippedCheckpointCount &&
+    retained.eligibleEventCount === recomputed.eligibleEventCount &&
+    retained.linkedEventCount === recomputed.linkedEventCount &&
+    retained.violationCount === recomputed.violationCount &&
+    retained.components.length === recomputed.components.length &&
+    retained.components.every((component, index) =>
+      sameAssessmentComponent(component, recomputed.components[index]),
+    )
+  );
+}
+
+function retainedPracticeResponses(
+  snapshot: PracticeDrillReportSnapshot,
+): DrillCheckpointResponse[] {
+  const responses: DrillCheckpointResponse[] = [];
+  for (const entry of snapshot.checkpoints) {
+    if (!entry.response) continue;
+    responses.push({
+      ...entry.response,
+      eventIds: [...entry.response.eventIds],
+      linkedEventIds: entry.response.linkedEventIds
+        ? [...entry.response.linkedEventIds]
+        : undefined,
+      workingOrderIds: entry.response.workingOrderIds
+        ? [...entry.response.workingOrderIds]
+        : undefined,
+    });
+  }
+  const resolvedCheckpointIds = new Set(
+    responses.map((response) => response.checkpointId),
+  );
+  const checkpointById = new Map(
+    snapshot.checkpoints.map((entry) => [entry.checkpoint.id, entry.checkpoint]),
+  );
+  for (const violation of snapshot.violations) {
+    if (
+      violation.code !== "checkpoint_skipped" ||
+      !violation.checkpointId ||
+      resolvedCheckpointIds.has(violation.checkpointId)
+    ) {
+      continue;
+    }
+    const checkpoint = checkpointById.get(violation.checkpointId);
+    if (!checkpoint) continue;
+    responses.push({
+      id: `retained-skip:${violation.id}`,
+      drillId: checkpoint.drillId,
+      definitionVersion: checkpoint.definitionVersion,
+      checkpointId: checkpoint.id,
+      replayTime: checkpoint.replayTime,
+      eventIds: [...checkpoint.eventIds],
+      status: "skipped",
+    });
+    resolvedCheckpointIds.add(checkpoint.id);
+  }
+  return responses;
+}
+
+function retainedPracticeExecution(
+  report: ReportPayload,
+  snapshot: PracticeDrillReportSnapshot,
+): { valid: boolean; positionOpened: boolean } {
+  const fills = report.fills;
+  const totalFills = report.executionQuality?.totalFills;
+  if (!fills || totalFills === undefined) {
+    return { valid: false, positionOpened: false };
+  }
+  if (fills.length > MAX_RETAINED_RUN_DETAIL_ITEMS) {
+    return { valid: false, positionOpened: false };
+  }
+  if (
+    fills.length === MAX_RETAINED_RUN_DETAIL_ITEMS
+      ? totalFills < fills.length
+      : totalFills !== fills.length
+  ) {
+    return { valid: false, positionOpened: false };
+  }
+  return {
+    valid: true,
+    positionOpened: fills.some(
+      (fill) =>
+        fill.symbol === snapshot.definition.primarySymbol &&
+        (fill.reason === "user_order" || fill.reason === "working_order"),
+    ),
+  };
+}
+
+function modernPracticeEvidenceMatchesAssessment(
+  report: ReportPayload,
+  assessment: DrillAssessment,
+  snapshot: PracticeDrillReportSnapshot,
+): boolean {
+  const execution = retainedPracticeExecution(report, snapshot);
+  if (!execution.valid) return false;
+  const { positionOpened } = execution;
+  if (assessment.status === "completed" && !positionOpened) return false;
+
+  const recomputed = assessDrill({
+    definition: snapshot.definition,
+    checkpoints: snapshot.checkpoints.map((entry) => ({
+      ...entry.checkpoint,
+      eventIds: [...entry.checkpoint.eventIds],
+    })),
+    initialPlan: snapshot.initialPlan
+      ? {
+          ...snapshot.initialPlan,
+          linkedEventIds: snapshot.initialPlan.linkedEventIds
+            ? [...snapshot.initialPlan.linkedEventIds]
+            : undefined,
+        }
+      : undefined,
+    responses: retainedPracticeResponses(snapshot),
+    violations: snapshot.violations.map((violation) => ({ ...violation })),
+    positionOpened,
+    replayCompleted: true,
+  });
+  return sameCanonicalAssessment(assessment, recomputed);
 }
 
 const BEHAVIORAL_FLAG_TYPES = new Set([
@@ -955,6 +1172,8 @@ function isBoundedDrillAssessment(value: DrillAssessment): boolean {
     isNonNegativeInteger(value.definitionVersion) &&
     value.definitionVersion > 0 &&
     isBoundedNonEmptyString(value.rubricVersion) &&
+    (value.rubricFingerprint === undefined ||
+      isBoundedNonEmptyString(value.rubricFingerprint)) &&
     isBoundedText(value.methodology) &&
     [
       value.eligibleCheckpointCount,
@@ -1067,8 +1286,62 @@ function isReportPayload(value: unknown): value is ReportPayload {
   );
 }
 
+function executionCountForReport(report: ReportPayload): number {
+  return (
+    report.executionQuality?.totalFills ??
+    report.fills?.length ??
+    report.totalTrades
+  );
+}
+
+function closedTradeCountForReport(report: ReportPayload): number {
+  return report.closedTradeCount ?? report.tradeOutcomes?.length ?? 0;
+}
+
+function journalEntryCountForReport(report: ReportPayload): number {
+  return report.journal?.length ?? 0;
+}
+
+function wrapperJournalCountMatches(
+  retainedCount: number,
+  wrapperCount: number,
+  modern: boolean,
+): boolean {
+  // V1 saved the pre-truncation wrapper count while retaining only the newest
+  // 250 journal rows. Below that cap (and when journal is absent), the source is
+  // complete and must match exactly. Modern wrappers are always report-derived.
+  return !modern && retainedCount === MAX_RETAINED_RUN_DETAIL_ITEMS
+    ? wrapperCount >= retainedCount
+    : wrapperCount === retainedCount;
+}
+
 export function isCompletedRun(value: unknown): value is CompletedRun {
   if (!isRecord(value)) return false;
+  const report = value.report;
+  if (!isReportPayload(report)) return false;
+  const expectedExecutionCount = executionCountForReport(report);
+  const expectedClosedTradeCount = closedTradeCountForReport(report);
+  const expectedJournalEntryCount = journalEntryCountForReport(report);
+  const expectedScoreStatus = report.score?.status ?? "unavailable";
+  const expectedScore = report.score?.overall;
+  const requiresExactWrapperCounts = value.brokerFingerprint !== undefined;
+  const parsedAssessment = report.practiceAssessment
+    ? parseDrillAssessment(report.practiceAssessment)
+    : undefined;
+  const modernPracticeEvidenceMatches =
+    !requiresExactWrapperCounts ||
+    report.practiceDrill === undefined ||
+    (parsedAssessment !== undefined &&
+      modernPracticeEvidenceMatchesAssessment(
+        report,
+        parsedAssessment,
+        report.practiceDrill,
+      ));
+  // Older v1 wrappers could retain broader execution/score summaries than the
+  // bounded report payload retained. Preserve those archives with strict
+  // decision-presence parity; require exact journal counts and exact closed
+  // trade/score values whenever their optional report sources exist. Modern
+  // recordCompletedRun always derives all wrapper fields from the report.
   return (
     isBoundedNonEmptyString(value.id) &&
     (value.runInstanceId === undefined ||
@@ -1086,6 +1359,8 @@ export function isCompletedRun(value: unknown): value is CompletedRun {
         Number(value.pricePrecision) <= 8)) &&
     isScenarioMode(value.mode) &&
     isBrokerMode(value.brokerMode) &&
+    (value.brokerFingerprint === undefined ||
+      isBrokerConfigFingerprint(value.brokerFingerprint)) &&
     typeof value.sampleData === "boolean" &&
     isReportNumber(value.totalReturn) &&
     isReportNumber(value.benchmarkReturn) &&
@@ -1101,16 +1376,38 @@ export function isCompletedRun(value: unknown): value is CompletedRun {
     isNonNegativeInteger(value.journalEntryCount) &&
     (value.journalCoverage === undefined ||
       isBoundedNumber(value.journalCoverage, 0, 1)) &&
-    isReportPayload(value.report) &&
-    (value.report.practiceDrill === undefined ||
-      value.report.practiceDrill.definition.mode === value.mode) &&
-    value.report.scenarioId === value.scenarioId &&
-    value.report.scenarioTitle === value.scenarioTitle &&
-    value.report.metrics.totalReturn === value.totalReturn &&
-    value.report.metrics.benchmarkReturn === value.benchmarkReturn &&
-    value.report.metrics.excessReturn === value.excessReturn &&
-    value.report.metrics.maxDrawdown === value.maxDrawdown &&
-    (value.report.provenance?.isSampleData ?? true) === value.sampleData
+    (requiresExactWrapperCounts
+      ? value.executionCount === expectedExecutionCount
+      : expectedExecutionCount === 0
+        ? value.executionCount === 0
+        : Number(value.executionCount) > 0) &&
+    (requiresExactWrapperCounts ||
+    report.closedTradeCount !== undefined ||
+    report.tradeOutcomes !== undefined
+      ? value.closedTradeCount === expectedClosedTradeCount
+      : true) &&
+    wrapperJournalCountMatches(
+      expectedJournalEntryCount,
+      Number(value.journalEntryCount),
+      requiresExactWrapperCounts,
+    ) &&
+    (report.score === undefined
+      ? value.scoreStatus === "unavailable" && value.score === undefined
+      : value.scoreStatus === expectedScoreStatus &&
+        value.score === expectedScore) &&
+    value.journalCoverage === report.journalQuality?.coverageRate &&
+    modernPracticeEvidenceMatches &&
+    (report.practiceAssessment?.status !== "completed" ||
+      (expectedExecutionCount > 0 && value.executionCount > 0)) &&
+    (report.practiceDrill === undefined ||
+      report.practiceDrill.definition.mode === value.mode) &&
+    report.scenarioId === value.scenarioId &&
+    report.scenarioTitle === value.scenarioTitle &&
+    report.metrics.totalReturn === value.totalReturn &&
+    report.metrics.benchmarkReturn === value.benchmarkReturn &&
+    report.metrics.excessReturn === value.excessReturn &&
+    report.metrics.maxDrawdown === value.maxDrawdown &&
+    (report.provenance?.isSampleData ?? true) === value.sampleData
   );
 }
 
@@ -1127,13 +1424,36 @@ function downsampleReport(report: ReportPayload): ReportPayload {
             index % Math.ceil(points.length / maxEquityPoints) === 0,
         );
 
+  let fills = report.fills?.slice(-MAX_RETAINED_RUN_DETAIL_ITEMS);
+  if (
+    report.fills &&
+    report.fills.length > MAX_RETAINED_RUN_DETAIL_ITEMS &&
+    report.practiceAssessment?.status === "completed" &&
+    report.practiceDrill
+  ) {
+    const retainedPositionFill = report.fills.find(
+      (fill) =>
+        fill.symbol === report.practiceDrill?.definition.primarySymbol &&
+        (fill.reason === "user_order" || fill.reason === "working_order"),
+    );
+    if (
+      retainedPositionFill &&
+      !fills?.some((fill) => fill.id === retainedPositionFill.id)
+    ) {
+      fills = [
+        retainedPositionFill,
+        ...report.fills.slice(-(MAX_RETAINED_RUN_DETAIL_ITEMS - 1)),
+      ];
+    }
+  }
+
   return {
     ...report,
     equityCurve,
-    auditEvents: report.auditEvents?.slice(-250),
-    orders: report.orders?.slice(-250),
-    fills: report.fills?.slice(-250),
-    journal: report.journal?.slice(-250),
+    auditEvents: report.auditEvents?.slice(-MAX_RETAINED_RUN_DETAIL_ITEMS),
+    orders: report.orders?.slice(-MAX_RETAINED_RUN_DETAIL_ITEMS),
+    fills,
+    journal: report.journal?.slice(-MAX_RETAINED_RUN_DETAIL_ITEMS),
     decisionReplay: report.decisionReplay?.map((point) => ({
       ...point,
       auditEvents: point.auditEvents.slice(-20),
@@ -1148,6 +1468,48 @@ function stableHash(value: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
+}
+
+function canonicalArchiveValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalArchiveValue);
+  if (!isRecord(value)) return value;
+  const canonical: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    const child = value[key];
+    if (child !== undefined) canonical[key] = canonicalArchiveValue(child);
+  }
+  return canonical;
+}
+
+function sameReplayEvidence(left: CompletedRun, right: CompletedRun): boolean {
+  return (
+    left.scenarioId === right.scenarioId &&
+    left.mode === right.mode &&
+    left.brokerMode === right.brokerMode &&
+    left.brokerFingerprint === right.brokerFingerprint &&
+    (left.currency === undefined ||
+      right.currency === undefined ||
+      left.currency === right.currency) &&
+    (left.pricePrecision === undefined ||
+      right.pricePrecision === undefined ||
+      left.pricePrecision === right.pricePrecision) &&
+    JSON.stringify(canonicalArchiveValue(left.report)) ===
+      JSON.stringify(canonicalArchiveValue(right.report))
+  );
+}
+
+function completedRunIdentities(run: CompletedRun): string[] {
+  return [...new Set([run.id, run.runInstanceId].filter(Boolean) as string[])];
+}
+
+function completedRunIdentitiesOverlap(
+  left: CompletedRun,
+  right: CompletedRun,
+): boolean {
+  const rightIdentities = new Set(completedRunIdentities(right));
+  return completedRunIdentities(left).some((identity) =>
+    rightIdentities.has(identity),
+  );
 }
 
 function runFingerprint(report: ReportPayload, mode: ScenarioMode): string {
@@ -1173,6 +1535,32 @@ export function loadRunHistory(
 ): CompletedRun[] {
   if (!storage) return [];
   try {
+    const canonicalState = inspectPracticeArchiveEnvelope(storage);
+    if (canonicalState.status === "malformed") return [];
+    if (canonicalState.status === "valid") {
+      const canonical = canonicalState.envelope;
+      const parsedLedger = canonical.ledger.map((entry) =>
+        parsePracticeLedgerEntry(entry, { rejectMalformedAssessment: true }),
+      );
+      if (
+        canonical.runs.length > MAX_SAVED_RUNS ||
+        !canonical.runs.every(isCompletedRun) ||
+        new Set(canonical.runs.map((run) => (run as CompletedRun).id)).size !==
+          canonical.runs.length ||
+        canonical.ledger.length > MAX_PRACTICE_LEDGER_ENTRIES ||
+        parsedLedger.some((entry) => entry === undefined) ||
+        new Set(parsedLedger.map((entry) => entry?.id)).size !==
+          parsedLedger.length
+      ) {
+        return [];
+      }
+      assertPracticeArchiveIdentityConsistency(
+        canonical.runs as CompletedRun[],
+        parsedLedger as NonNullable<(typeof parsedLedger)[number]>[],
+        "Canonical practice archive",
+      );
+      return canonical.runs;
+    }
     const serialized = storage.getItem(RUN_HISTORY_STORAGE_KEY);
     if (!serialized) return [];
     const parsed: unknown = JSON.parse(serialized);
@@ -1183,68 +1571,170 @@ export function loadRunHistory(
   }
 }
 
+function storedLedgerCandidates(storage: HistoryStorage): unknown[] {
+  const canonicalState = inspectPracticeArchiveEnvelope(storage);
+  if (canonicalState.status === "malformed") {
+    throw new Error("Canonical practice archive is malformed.");
+  }
+  if (canonicalState.status === "valid") {
+    const canonical = canonicalState.envelope;
+    if (canonical.ledger.length > MAX_PRACTICE_LEDGER_ENTRIES) {
+      throw new Error("Canonical compact evidence exceeds its storage bound.");
+    }
+    if (
+      canonical.runs.length > MAX_SAVED_RUNS ||
+      !canonical.runs.every(isCompletedRun) ||
+      new Set(canonical.runs.map((run) => (run as CompletedRun).id)).size !==
+        canonical.runs.length
+    ) {
+      throw new Error("Canonical report history is malformed.");
+    }
+    const parsed = canonical.ledger.map((entry) =>
+      parsePracticeLedgerEntry(entry, { rejectMalformedAssessment: true }),
+    );
+    if (
+      parsed.some((entry) => entry === undefined) ||
+      new Set(parsed.map((entry) => entry?.id)).size !== parsed.length
+    ) {
+      throw new Error("Canonical compact evidence is malformed.");
+    }
+    const ledger = parsed as NonNullable<(typeof parsed)[number]>[];
+    assertPracticeArchiveIdentityConsistency(
+      canonical.runs as CompletedRun[],
+      ledger,
+      "Canonical practice archive",
+    );
+    return ledger;
+  }
+  const serialized = storage.getItem(PRACTICE_LEDGER_STORAGE_KEY);
+  if (!serialized) return [];
+  try {
+    const parsed: unknown = JSON.parse(serialized);
+    const entries = isRecord(parsed) &&
+      parsed.format === PRACTICE_LEDGER_FORMAT &&
+      parsed.version === PRACTICE_LEDGER_VERSION &&
+      Array.isArray(parsed.entries)
+      ? parsed.entries
+      : [];
+    return normalizePracticeLedgerEntries(
+      entries.flatMap((entry) => {
+        const sanitized = parsePracticeLedgerEntry(entry);
+        return sanitized ? [sanitized] : [];
+      }),
+    );
+  } catch {
+    return [];
+  }
+}
+
 export function persistRunHistory(
   runs: CompletedRun[],
   storage: HistoryStorage | undefined = browserStorage(),
 ): CompletedRun[] {
   if (!storage) return runs.slice(0, MAX_SAVED_RUNS);
+  const fallback = loadRunHistory(storage);
   let retained = runs.slice(0, MAX_SAVED_RUNS);
+  if (!retained.every(isCompletedRun)) return fallback;
+  let ledger: unknown[];
+  try {
+    ledger = storedLedgerCandidates(storage);
+  } catch {
+    return fallback;
+  }
+  const clearing = retained.length === 0;
+  try {
+    assertPracticeArchiveIdentityConsistency(
+      retained,
+      ledger as NonNullable<ReturnType<typeof parsePracticeLedgerEntry>>[],
+      "Practice archive write",
+    );
+  } catch {
+    return fallback;
+  }
   while (retained.length > 0) {
     try {
-      storage.setItem(RUN_HISTORY_STORAGE_KEY, JSON.stringify(retained));
+      commitPracticeArchiveEnvelope(storage, { runs: retained, ledger });
+      removeLegacyPracticeArchiveKeysBestEffort(storage, [
+        RUN_HISTORY_STORAGE_KEY,
+        PRACTICE_LEDGER_STORAGE_KEY,
+      ]);
       return retained;
     } catch {
       retained = retained.slice(0, -1);
     }
   }
+  if (!clearing) return fallback;
   try {
-    storage.removeItem(RUN_HISTORY_STORAGE_KEY);
+    commitPracticeArchiveEnvelope(storage, { runs: [], ledger });
+    removeLegacyPracticeArchiveKeysBestEffort(storage, [
+      RUN_HISTORY_STORAGE_KEY,
+      PRACTICE_LEDGER_STORAGE_KEY,
+    ]);
+    return [];
   } catch {
-    // Storage may be disabled or full. The completed report remains in memory.
+    return fallback;
   }
-  return [];
 }
 
-export function recordCompletedRun(
-  input: RecordCompletedRunInput,
-  storage: HistoryStorage | undefined = browserStorage(),
-): { run: CompletedRun; history: CompletedRun[]; added: boolean } {
-  const existing = loadRunHistory(storage);
+export function buildCompletedRun(input: CompletedRunInput): CompletedRun {
+  if (!isBrokerConfigFingerprint(input.brokerFingerprint)) {
+    throw new Error("Completed run requires a valid broker configuration identity.");
+  }
+  const archivedReport = downsampleReport(input.report);
   const id =
     input.runInstanceId ??
     `${input.report.scenarioId}-${runFingerprint(input.report, input.mode)}`;
-  const duplicate = existing.find((run) => run.id === id);
-  if (duplicate) return { run: duplicate, history: existing, added: false };
-
-  const run: CompletedRun = {
+  return {
     id,
     runInstanceId: input.runInstanceId,
     completedAt: input.completedAt ?? new Date().toISOString(),
-    scenarioId: input.report.scenarioId,
-    scenarioTitle: input.report.scenarioTitle,
+    scenarioId: archivedReport.scenarioId,
+    scenarioTitle: archivedReport.scenarioTitle,
     currency: input.currency,
     pricePrecision: input.pricePrecision,
     mode: input.mode,
     brokerMode: input.brokerMode,
-    sampleData: input.report.provenance?.isSampleData ?? true,
-    totalReturn: input.report.metrics.totalReturn,
-    benchmarkReturn: input.report.metrics.benchmarkReturn,
-    excessReturn: input.report.metrics.excessReturn,
-    maxDrawdown: input.report.metrics.maxDrawdown,
-    scoreStatus: input.report.score?.status ?? "unavailable",
-    score: input.report.score?.overall,
-    executionCount:
-      input.report.executionQuality?.totalFills ??
-      input.report.fills?.length ??
-      input.report.totalTrades,
-    closedTradeCount:
-      input.report.closedTradeCount ?? input.report.tradeOutcomes?.length ?? 0,
-    journalEntryCount: input.report.journal?.length ?? 0,
-    journalCoverage: input.report.journalQuality?.coverageRate,
-    report: downsampleReport(input.report),
+    brokerFingerprint: input.brokerFingerprint,
+    sampleData: archivedReport.provenance?.isSampleData ?? true,
+    totalReturn: archivedReport.metrics.totalReturn,
+    benchmarkReturn: archivedReport.metrics.benchmarkReturn,
+    excessReturn: archivedReport.metrics.excessReturn,
+    maxDrawdown: archivedReport.metrics.maxDrawdown,
+    scoreStatus: archivedReport.score?.status ?? "unavailable",
+    score: archivedReport.score?.overall,
+    executionCount: executionCountForReport(archivedReport),
+    closedTradeCount: closedTradeCountForReport(archivedReport),
+    journalEntryCount: journalEntryCountForReport(archivedReport),
+    journalCoverage: archivedReport.journalQuality?.coverageRate,
+    report: archivedReport,
   };
+}
+
+export function recordCompletedRun(
+  input: CompletedRunInput,
+  storage: HistoryStorage | undefined = browserStorage(),
+): { run: CompletedRun; history: CompletedRun[]; added: boolean } {
+  const existing = loadRunHistory(storage);
+  const candidate = buildCompletedRun(input);
+  const duplicate = existing.find((run) =>
+    completedRunIdentitiesOverlap(run, candidate),
+  );
+  if (duplicate) {
+    if (!sameReplayEvidence(duplicate, candidate)) {
+      throw new Error(
+        `Completed replay identity "${candidate.id}" conflicts with different retained evidence.`,
+      );
+    }
+    return { run: duplicate, history: existing, added: false };
+  }
+
+  const run = candidate;
   const history = persistRunHistory([run, ...existing], storage);
-  return { run, history, added: history.some((entry) => entry.id === id) };
+  return {
+    run,
+    history,
+    added: history.some((entry) => entry.id === run.id),
+  };
 }
 
 export function removeCompletedRun(
@@ -1260,11 +1750,7 @@ export function removeCompletedRun(
 export function clearRunHistory(
   storage: HistoryStorage | undefined = browserStorage(),
 ): void {
-  try {
-    storage?.removeItem(RUN_HISTORY_STORAGE_KEY);
-  } catch {
-    // Clearing history is best effort when browser storage is unavailable.
-  }
+  if (storage) persistRunHistory([], storage);
 }
 
 export function runHistoryStats(runs: CompletedRun[]): RunHistoryStats {
@@ -1290,7 +1776,26 @@ export function compareRunWithPrevious(
   const currentIndex = history.findIndex((entry) => entry.id === run.id);
   const candidates = currentIndex >= 0 ? history.slice(currentIndex + 1) : history;
   const previous = candidates.find(
-    (entry) => entry.scenarioId === run.scenarioId,
+    (entry) =>
+      entry.scenarioId === run.scenarioId &&
+      canonicalScenarioDataVersion(
+        entry.scenarioId,
+        entry.report.provenance?.dataVersion,
+      ) ===
+        canonicalScenarioDataVersion(
+          run.scenarioId,
+          run.report.provenance?.dataVersion,
+        ) &&
+      entry.report.provenance?.dataFidelity ===
+        run.report.provenance?.dataFidelity &&
+      entry.sampleData === run.sampleData &&
+      entry.mode === run.mode &&
+      entry.brokerMode === run.brokerMode &&
+      entry.brokerFingerprint !== undefined &&
+      run.brokerFingerprint !== undefined &&
+      isBrokerConfigFingerprint(entry.brokerFingerprint) &&
+      isBrokerConfigFingerprint(run.brokerFingerprint) &&
+      entry.brokerFingerprint === run.brokerFingerprint,
   );
   if (!previous) return {};
   return {

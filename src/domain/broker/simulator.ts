@@ -1033,7 +1033,9 @@ function pendingOrderFillPrice(
     order.triggeredAt &&
     candle
   ) {
-    return { fillPrice: candle.open, priceSource: "gap_open" };
+    return broker.stopFillPolicy === "gap_open"
+      ? { fillPrice: candle.open, priceSource: "gap_open" }
+      : { fillPrice: trigger, priceSource: "stop_trigger" };
   }
   if (broker.stopFillPolicy !== "gap_open" || !candle) {
     return { fillPrice: trigger, priceSource: "stop_trigger" };

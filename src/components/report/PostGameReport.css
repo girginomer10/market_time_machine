@@ -1,3 +1,54 @@
+/* Keep the unsaved-run recovery action beside the warning that explains it. */
+.report-card .report-save-warning {
+  align-items: center;
+  background: var(--neg-soft);
+  border: 1px solid color-mix(in srgb, var(--neg) 55%, var(--border));
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin: 12px 18px 0;
+  padding: 12px 14px;
+}
+
+.report-save-warning-content {
+  display: grid;
+  gap: 6px;
+}
+
+.report-save-warning-content span {
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.report-save-warning-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.report-save-warning .btn {
+  justify-self: end;
+}
+
+@media (max-width: 720px) {
+  .report-card .report-save-warning {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .report-save-warning-actions,
+  .report-save-warning .btn {
+    justify-self: stretch;
+  }
+
+  .report-save-warning-actions {
+    display: grid;
+  }
+}
+
 @media print {
   @page {
     margin: 12mm;
@@ -38,6 +89,7 @@
 
   .report-head-actions,
   .report-share-message,
+  .report-save-warning,
   .report-foot {
     display: none !important;
   }

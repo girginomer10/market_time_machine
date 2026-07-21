@@ -8,6 +8,7 @@ import type {
 } from "../../../types";
 import type { BrokerConfig, ScenarioMeta } from "../../../types/scenario";
 import { assembleScenario } from "../../../domain/scenario/loader";
+import { QQQ_RATE_HIKE_2022_DATA_VERSION } from "../dataVersions";
 
 const SYMBOL = "QQQ";
 
@@ -33,6 +34,7 @@ const meta: ScenarioMeta = {
     "Synthetic deterministic sample prices shaped to the publicly documented QQQ/Nasdaq 2022 tightening-cycle path; raw licensed ETF market data is not redistributed.",
     "Official event sources: Federal Reserve FOMC statements, Federal Reserve Chair Powell speech, and U.S. Bureau of Labor Statistics CPI releases.",
   ],
+  dataVersion: QQQ_RATE_HIKE_2022_DATA_VERSION,
   isSampleData: true,
   description:
     "Sample/demo growth-equity scenario for practicing position sizing, rallies within drawdowns, inflation data reactions, and central-bank event risk. Prices are synthetic and should not be used for trading decisions.",
